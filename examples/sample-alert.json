@@ -1,0 +1,74 @@
+{
+  "allowed_mentions": {
+    "parse": []
+  },
+  "embeds": [
+    {
+      "title": "UNVALIDATED RESEARCH \u00b7 EXAMPLEUSDT \u00b7 LONG",
+      "description": "Bybit linear perpetual \u00b7 4H / 1H / 15M \u00b7 UTC session \u00b7 WATCHLIST",
+      "url": "http://127.0.0.1:8000/#signal/SYNTHETIC-FORMAT-ONLY",
+      "color": 5032356,
+      "timestamp": "1970-01-01T00:00:00+00:00",
+      "fields": [
+        {
+          "name": "Quality / probability",
+          "value": "RESEARCH \u00b7 0.0/100 (raw F)\nUncalibrated",
+          "inline": true
+        },
+        {
+          "name": "Setup / regime",
+          "value": "liquidity_sweep\nrange",
+          "inline": true
+        },
+        {
+          "name": "Entry zone / invalidation",
+          "value": "99 \u2013 101\nStop 95",
+          "inline": true
+        },
+        {
+          "name": "Targets",
+          "value": "TP1 115 \u00b7 TP2 120\ndefined plan",
+          "inline": true
+        },
+        {
+          "name": "Reward:risk",
+          "value": "Gross 0.00R \u00b7 net 0.00R",
+          "inline": true
+        },
+        {
+          "name": "Hypothetical risk",
+          "value": "0.25% \u00b7 qty equity not set\nMargin N/A \u00b7 leverage ceiling 3\u00d7",
+          "inline": true
+        },
+        {
+          "name": "Executed flow \u00b7 15M window",
+          "value": "Delta N/A% \u00b7 CVD N/A base\nStack buy/sell N/A/N/A \u00b7 absorption L/S N/A/N/A\nWindow PoC N/A \u00b7 VA N/A \u2013 N/A",
+          "inline": false
+        },
+        {
+          "name": "Structure",
+          "value": "Sweep L/S None/None \u00b7 BOS None \u00b7 CHoCH None\nLiquidity None / None \u00b7 FVG 0 \u00b7 order blocks 0",
+          "inline": false
+        },
+        {
+          "name": "Derivatives",
+          "value": "OI change N/A% \u00b7 funding N/A\nActual liquidation events (bankruptcy notional): Unavailable",
+          "inline": false
+        },
+        {
+          "name": "Cross-market / fundamentals",
+          "value": "BTC/ETH: Unavailable\nBinance unavailable \u00b7 0 source-attributed asset facts",
+          "inline": false
+        },
+        {
+          "name": "Data / why / invalidation",
+          "value": "{}\nSynthetic formatting example; not market data\nIllustrative stop breach",
+          "inline": false
+        }
+      ],
+      "footer": {
+        "text": "SYNTHETIC-FORMAT-ONLY \u00b7 rules-0.1.0 \u00b7 expires 1970-01-01T01:00:00+00:00 \u00b7 alerts only; no execution"
+      }
+    }
+  ]
+}
