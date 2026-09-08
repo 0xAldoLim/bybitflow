@@ -9,6 +9,12 @@ Internal pivots use 2-left/2-right. REST observations in replay become available
 not retroactively at candle start. Manual facts require collection and knowledge times <= asof.
 Future-dated catalysts can be known beforehand, but retrospectively entered facts cannot.
 
+Universe membership is recorded only after all supporting observations arrive. Replay requires
+that historical membership and independently reconstructs the normal-spread estimator from
+timestamped quotes; an absent or stale record abstains. Five-minute time buckets prevent an
+active period from receiving extra weight merely because it produced more updates. A missing
+linked recording segment resets tape/book coverage and invalidates interrupted outcomes.
+
 The live pipeline requires 4H support, a distinct 1H setup, a covered 15M executed-flow window,
 fresh visible book, accepted costs/size and no known blocking event. Current footprint scores
 are heuristic quality components, not statistical independence or probabilities.

@@ -1,11 +1,13 @@
 import asyncio
 import contextlib
+import json
 import logging
 from statistics import median
 
 from .features import candle_features, validate_bars
 from .fundamentals import facts_asof
 from .ingestion import Bybit, candle_records, parse_eligible_metadata
+from .liquidity import SpreadHistory
 from .models import DAY, Signal
 from .notifications import Notifier
 from .orderflow import Book, footprint
@@ -30,6 +32,42 @@ class Scanner:
         self.scan_lock = asyncio.Lock()
         self.status = {"state": "disabled", "at_ms": now_ms(), "eligible": 0, "errors": 0}
 
+    def record_membership(self, evaluated_ms, symbol, eligible, payload):
+        available = now_ms()
+        payload = payload | {"evaluated_ms": evaluated_ms, "available_ms": available}
+        self.store.membership(available, symbol, eligible, payload)
+        self.recorder.offer(
+            "universe/membership", symbol, available, {"eligible": eligible, "details": payload}, available
+        )
+
+    def record_quotes(self, body, receipt):
+        updates = []
+        for ticker in body["result"]["list"]:
+            symbol = ticker["symbol"]
+            history = SpreadHistory(self.store.get("spreads:" + symbol, []))
+            history.add(
+                int(body["time"]),
+                receipt,
+                float(ticker.get("bid1Price") or 0),
+                float(ticker.get("ask1Price") or 0),
+            )
+            updates.append(("spreads:" + symbol, json.dumps(history.export())))
+        with self.store.db:
+            self.store.db.executemany("INSERT OR REPLACE INTO kv VALUES(?,?)", updates)
+        self.store.put(
+            "quote_health",
+            {"at_ms": receipt, "event_ms": int(body["time"]), "symbols": len(updates), "status": "observed"},
+        )
+
+    async def quote_loop(self):
+        while True:
+            try:
+                body = await self.api.get("tickers", category="linear")
+                self.record_quotes(body, now_ms())
+            except Exception as exc:
+                self.store.put("quote_health", {"at_ms": now_ms(), "error_type": type(exc).__name__})
+            await asyncio.sleep(self.settings.quote_sample_seconds)
+
     async def scan_once(self):
         async with self.scan_lock:
             self.status.update(state="scanning", started_ms=now_ms())
@@ -39,12 +77,13 @@ class Scanner:
                 raise ValueError("Local/exchange clock skew exceeds two seconds")
             rows = await self.api.instruments()
             ticker_body = await self.api.get("tickers", category="linear")
+            self.record_quotes(ticker_body, now_ms())
             tickers = {r["symbol"]: r for r in ticker_body["result"]["list"]}
             ranked, new_context, errors = [], {}, 0
             for raw in rows:
                 inst = parse_eligible_metadata(raw, self.settings, asof)
                 if not inst:
-                    self.store.membership(
+                    self.record_membership(
                         asof, raw["symbol"], False, {"reason": "instrument metadata gate", "metadata": raw}
                     )
                     continue
@@ -56,7 +95,9 @@ class Scanner:
                     if spread > self.settings.max_spread_bps:
                         reasons.append("current spread")
                     if reasons:
-                        self.store.membership(asof, inst.symbol, False, {"reasons": reasons, "metadata": raw})
+                        self.record_membership(
+                            asof, inst.symbol, False, {"reasons": reasons, "metadata": raw}
+                        )
                         continue
                     daily = await self.api.candles(inst.symbol, "D", asof, limit=31)
                     validate_bars(daily, asof)
@@ -66,7 +107,7 @@ class Scanner:
                     if turnover < self.settings.min_daily_turnover or any(c.volume <= 0 for c in daily[-30:]):
                         reasons.append("historical daily liquidity gate")
                     if reasons:
-                        self.store.membership(
+                        self.record_membership(
                             asof,
                             inst.symbol,
                             False,
@@ -92,7 +133,9 @@ class Scanner:
                     ):
                         reasons.append("hypothetical order exceeds visible depth")
                     if reasons:
-                        self.store.membership(asof, inst.symbol, False, {"reasons": reasons, "metadata": raw})
+                        self.record_membership(
+                            asof, inst.symbol, False, {"reasons": reasons, "metadata": raw}
+                        )
                         continue
                     # Refresh asof per instrument: a full-universe sweep can take several minutes.
                     evaluated = now_ms()
@@ -135,7 +178,11 @@ class Scanner:
                         "continuous_daily_bars": len(daily),
                         "available_ms": evaluated,
                     }
-                    self.store.membership(evaluated, inst.symbol, True, point)
+                    normal_spread = SpreadHistory(self.store.get("spreads:" + inst.symbol, [])).assess(
+                        now_ms(), self.settings.max_spread_bps, self.settings.spread_min_samples
+                    )
+                    point["normal_spread"] = normal_spread
+                    self.record_membership(evaluated, inst.symbol, normal_spread["eligible"], point)
                     plans = candidates(inst, h4, h1, m15, evaluated)
                     for signal in plans:
                         old = self.store.db.execute(
@@ -152,6 +199,8 @@ class Scanner:
                             "rank_score": round(priority, 2),
                             "turnover_7d": turnover,
                             "spread_bps": spread,
+                            "normal_spread": normal_spread,
+                            "eligible": normal_spread["eligible"],
                             "candidates": len(plans),
                             "asof": evaluated,
                         }
@@ -167,6 +216,7 @@ class Scanner:
                             "h4": f4,
                             "h1": f1,
                             "derivatives": derivatives,
+                            "normal_spread": normal_spread,
                             "fundamentals": facts_asof(self.store, inst.base, evaluated),
                             "asof": evaluated,
                         },
@@ -177,7 +227,7 @@ class Scanner:
                     if not self.recorder.healthy:
                         raise RuntimeError("Recording unavailable; broad scan aborted") from exc
                     errors += 1
-                    self.store.membership(
+                    self.record_membership(
                         now_ms(), inst.symbol, False, {"reason": type(exc).__name__, "metadata": raw}
                     )
                     log.warning(
@@ -195,7 +245,8 @@ class Scanner:
                 state="collecting",
                 at_ms=now_ms(),
                 discovered=len(rows),
-                eligible=len(ranked),
+                eligible=sum(r["eligible"] for r in ranked),
+                provisional=sum(not r["eligible"] for r in ranked),
                 errors=errors,
                 deep_symbols=selected,
             )
@@ -256,7 +307,10 @@ class Scanner:
                 facts = facts_asof(self.store, c["instrument"].base, now)
                 regime = candle_features(c["h4"], now)["regime"]
                 supportive = regime in {"range", "trending up" if s.direction == "LONG" else "trending down"}
-                if not healthy or not supportive or any(f["major_event"] for f in facts):
+                spread_ok = SpreadHistory(self.store.get("spreads:" + s.symbol, [])).assess(
+                    now, self.settings.max_spread_bps, self.settings.spread_min_samples
+                )["eligible"]
+                if not healthy or not supportive or not spread_ok or any(f["major_event"] for f in facts):
                     s.state = "INVALIDATED"
                     s.invalidation = "Required coverage, supportive regime or known-event assumptions lost"
                     self.store.signal(s)
@@ -274,6 +328,11 @@ class Scanner:
             flow = footprint(trades, c["instrument"].tick, s.evidence["m15"]["atr"], window_book)
             flow_ok = confirm(s, flow, c["m15"])
             s.gates = []
+            normal_spread = SpreadHistory(self.store.get("spreads:" + s.symbol, [])).assess(
+                now, self.settings.max_spread_bps, self.settings.spread_min_samples
+            )
+            s.evidence["normal_spread"] = normal_spread
+            s.gates.extend(normal_spread["reasons"])
             if not flow_ok:
                 s.gates.append("executed order flow did not confirm family trigger")
             if end < s.evidence["trigger_bar_end"]:
@@ -357,6 +416,7 @@ class Scanner:
         self.tasks = [asyncio.create_task(self.evaluation_loop())]
         if self.settings.scan_enabled:
             self.tasks.append(asyncio.create_task(self.scan_loop()))
+            self.tasks.append(asyncio.create_task(self.quote_loop()))
 
     async def stop(self):
         for task in self.tasks:

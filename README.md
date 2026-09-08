@@ -30,7 +30,13 @@ discovers every page, checks 30 completed daily bars and seven-day median turnov
 downloads 4H/1H/15M candles and derivatives context for liquid instruments. Stage B subscribes
 to at most eight eligible symbols, including eligible BTC/ETH core symbols.
 
-At least one complete 15-minute execution window after subscription is needed. Reconnects,
+Normal spread requires at least 12 observed five-minute buckets (about an hour of warmup),
+with at least 80% time-bucket coverage over a rolling six-hour window. The median must be
+within five bps and p90 within ten bps. Quotes are polled once per minute; repeated messages
+cannot multiply the evidence. Provisional markets can be recorded while warming up but cannot
+qualify research alerts. The dashboard distinguishes provisional from eligible rows.
+
+At least one complete 15-minute execution window after subscription is also needed. Reconnects,
 rotation, stale books, queue overflow, or unavailable inputs reset or reject confirmation.
 `scan-once` performs discovery and ranking then exits; use `serve` with scanning enabled for
 continuous recording and signal lifecycle monitoring. Run only one writer process per data directory.
@@ -74,7 +80,7 @@ metadata. Archive-only studies cannot qualify an order-flow strategy or a histor
 .venv/bin/bybit-flow download-trades LINKUSDT 2024-01-01
 .venv/bin/bybit-flow aggregate-trades data/archives/LINKUSDT2024-01-01.trades.parquet --minutes 60
 
-# Replay recorded raw envelopes in receipt order; at most 256 segments per invocation.
+# Replay recorded raw envelopes in receipt order, verifying hashes and segment continuity.
 .venv/bin/bybit-flow replay data/segments/<segment>.jsonl.gz
 
 .venv/bin/pytest -q
@@ -84,6 +90,8 @@ metadata. Archive-only studies cannot qualify an order-flow strategy or a histor
 `research` runs a separate OHLCV-only ATR baseline with fixed 60/20/20 chronological partitions,
 development-only ATR sensitivity, next-bar entry, adverse fees/slippage, funding reserve, and
 pessimistic ambiguous-bar handling. It includes a labeled gross price-return benchmark.
+Recording manifests link to their predecessor. Omitted or legacy unchained intermediate
+segments become explicit replay gaps. Files are streamed one at a time to bound open handles.
 `replay` feeds real recorded observations through the same `candidates`, `confirm`, candle
 features, footprint and book algorithms used live. Replay coverage and cost limitations are
 explicit; it is not yet a full-fidelity account simulator. Experiments retain parameters, input

@@ -2,13 +2,14 @@
 
 import gzip
 import hashlib
-import heapq
+import itertools
 import json
 from decimal import Decimal
 
 from .backtest import PaperPosition, performance
 from .features import validate_bars
 from .ingestion import parse_eligible_metadata
+from .liquidity import SpreadHistory
 from .models import Candle, Trade
 from .orderflow import Book, Tape, footprint
 from .risk import evaluate_risk
@@ -35,10 +36,41 @@ def segment_rows(paths):
                 previous = row["receipt_ms"]
                 yield row
 
-    # Limit open file handles by replaying chronologically nonoverlapping segments in batches externally.
-    if len(paths) > 256:
-        raise ValueError("Replay accepts at most 256 segments per invocation; compact research data first")
-    yield from heapq.merge(*(read(p) for p in paths), key=lambda r: r["receipt_ms"])
+    from pathlib import Path
+
+    manifests = []
+    for path in paths:
+        path = Path(path)
+        manifest_path = path.with_name(path.name.removesuffix(".jsonl.gz") + ".manifest.json")
+        if not manifest_path.exists():
+            raise ValueError("Raw segment lacks manifest; verify provenance before replay")
+        manifests.append((json.loads(manifest_path.read_text()), path))
+    manifests.sort(key=lambda item: (item[0].get("min_receipt_ms", item[0]["collected_ms"]), item[0]["id"]))
+    previous, last_receipt = None, -1
+    for manifest, path in manifests:
+        iterator = iter(read(path))
+        first = next(iterator, None)
+        if first is None:
+            continue
+        if previous and manifest.get("previous_segment") != {
+            "id": previous["id"],
+            "sha256": previous["sha256"],
+        }:
+            yield {
+                "source": "control/gap",
+                "symbol": "ALL",
+                "event_ms": first["receipt_ms"],
+                "receipt_ms": first["receipt_ms"],
+                "schema_version": 1,
+                "complete": False,
+                "payload": json.dumps({"reason": "missing or unchained raw recording segment"}),
+            }
+        for row in itertools.chain([first], iterator):
+            if row["receipt_ms"] < last_receipt:
+                raise ValueError("Overlapping or non-monotonic recording segments")
+            last_receipt = row["receipt_ms"]
+            yield row
+        previous = manifest
 
 
 def replay(rows, settings, families=None):
@@ -46,6 +78,7 @@ def replay(rows, settings, families=None):
 
     families = families or FAMILIES
     instruments, candles, books, tapes = {}, {}, {}, {}
+    membership, spreads = {}, {}
     positions, seen = [], set()
     gaps = 0
     last_receipt = -1
@@ -58,6 +91,11 @@ def replay(rows, settings, families=None):
         last_receipt = now
         payload = json.loads(row["payload"]) if isinstance(row["payload"], str) else row["payload"]
         source, symbol = row["source"], row["symbol"]
+        if source == "universe/membership":
+            membership[symbol] = {"known_ms": now, **payload}
+            source = "replay/evaluate"
+        elif source == "features/signal":
+            source = "replay/evaluate"
         if source == "control/gap":
             gaps += 1
             for p in positions:
@@ -68,6 +106,10 @@ def replay(rows, settings, families=None):
             for tape in tapes.values():
                 tape.reset(now)
             continue
+        if source == "control/subscribed":
+            for subscribed in payload["symbols"]:
+                tapes.setdefault(subscribed, Tape(settings.tape_max_trades)).reset(now)
+            continue
         if source == "rest/instruments-info":
             for raw in payload["response"]["result"]["list"]:
                 inst = parse_eligible_metadata(raw, settings, now)
@@ -75,6 +117,12 @@ def replay(rows, settings, families=None):
                     instruments[inst.symbol] = inst
                 else:
                     instruments.pop(raw["symbol"], None)
+        elif source == "rest/tickers":
+            response = payload["response"]
+            for t in response["result"]["list"]:
+                spreads.setdefault(t["symbol"], SpreadHistory()).add(
+                    int(response["time"]), now, float(t.get("bid1Price") or 0), float(t.get("ask1Price") or 0)
+                )
         elif source == "rest/funding/history":
             for f in payload["response"]["result"]["list"]:
                 key = (symbol, int(f["fundingRateTimestamp"]))
@@ -96,8 +144,11 @@ def replay(rows, settings, families=None):
             except ValueError:
                 gaps += 1
                 tapes.setdefault(symbol, Tape()).reset(now)
+                for p in positions:
+                    if p.signal.symbol == symbol and p.exit_ms is None:
+                        p.data_gaps.append("book integrity lost during outcome window")
         elif source.startswith("ws/publicTrade."):
-            tape = tapes.setdefault(symbol, Tape())
+            tape = tapes.setdefault(symbol, Tape(settings.tape_max_trades))
             if not tape.coverage_start:
                 tape.reset(now)
             for t in payload["data"]:
@@ -109,21 +160,26 @@ def replay(rows, settings, families=None):
                         continue
                 except ValueError:
                     gaps += 1
+                    for p in positions:
+                        if p.signal.symbol == symbol and p.exit_ms is None:
+                            p.data_gaps.append("trade ordering lost during outcome window")
                     continue
                 for position in positions:
                     position.on_trade(trade)
-        elif source == "rest/kline":
-            params = payload["params"]
-            interval = params["interval"]
-            width = 86_400_000 if interval == "D" else int(interval) * 60_000
-            bucket = candles.setdefault((symbol, interval), {})
-            for c in payload["response"]["result"]["list"]:
-                bar = Candle(int(c[0]), width, *map(float, c[1:7]))
-                if bar.end <= now:
-                    bucket[bar.start] = bar
-            for old in sorted(bucket)[:-300]:
-                del bucket[old]
-            if interval != "15" or symbol not in instruments or symbol not in tapes or symbol not in books:
+        elif source in {"rest/kline", "replay/evaluate"}:
+            if source == "rest/kline":
+                params = payload["params"]
+                interval = params["interval"]
+                width = 86_400_000 if interval == "D" else int(interval) * 60_000
+                bucket = candles.setdefault((symbol, interval), {})
+                for c in payload["response"]["result"]["list"]:
+                    bar = Candle(int(c[0]), width, *map(float, c[1:7]))
+                    if bar.end <= now:
+                        bucket[bar.start] = bar
+                for old in sorted(bucket)[:-300]:
+                    del bucket[old]
+                continue
+            if symbol not in instruments or symbol not in tapes or symbol not in books:
                 continue
             bars = [
                 sorted(candles.get((symbol, i), {}).values(), key=lambda c: c.start)
@@ -134,15 +190,36 @@ def replay(rows, settings, families=None):
 
             if min(map(len, bars)) < 60 or len(daily) < 30:
                 continue
+            member = membership.get(symbol)
+            if (
+                not member
+                or not member["eligible"]
+                or now - member["known_ms"] > settings.scan_seconds * 1000 + 60_000
+            ):
+                continue
+            if (
+                not spreads.get(symbol)
+                or not spreads[symbol].assess(now, settings.max_spread_bps, settings.spread_min_samples)[
+                    "eligible"
+                ]
+            ):
+                continue
             try:
                 validate_bars(daily[-30:], now)
             except ValueError:
                 continue
             if median(c.turnover for c in daily[-7:]) < settings.min_daily_turnover:
                 continue
+            if any(c.volume <= 0 for c in daily[-30:]) or now - daily[-1].end >= 86_400_000:
+                continue
             book, tape = books[symbol], tapes[symbol]
             end = bars[2][-1].end
             if not book.fresh(now) or not (0 < tape.coverage_start <= end - 900_000) or now - end > 960_000:
+                continue
+            if not (
+                0 <= now - tape.last_receipt <= settings.trade_stale_ms
+                and -1000 <= now - tape.last_event <= settings.trade_stale_ms
+            ):
                 continue
             if book.features(now)["spread_bps"] > settings.max_spread_bps:
                 continue
@@ -153,9 +230,15 @@ def replay(rows, settings, families=None):
             for signal in plans:
                 if signal.id in seen or signal.expires_ms <= now:
                     continue
+                window_book = Book()
+                window_book.valid = book.valid
+                window_book.changes.extend(c for c in book.changes if c[0] <= end)
                 flow = footprint(
-                    tape.window(end - 900_000, end), instruments[symbol].tick, signal.evidence["m15"]["atr"]
-                )  # no retrospective replenishment inference
+                    tape.window(end - 900_000, end),
+                    instruments[symbol].tick,
+                    signal.evidence["m15"]["atr"],
+                    window_book,
+                )
                 if not confirm(signal, flow, bars[2]):
                     continue
                 signal.risk = evaluate_risk(signal, instruments[symbol], settings, book)
@@ -183,7 +266,7 @@ def replay(rows, settings, families=None):
         "qualification": "Uncalibrated; no deployment approval",
         "limitations": [
             "No survivorship-free period before recorded instrument metadata",
-            "Reversal absorption replay not enabled without matched replenishment history",
+            "Missing historical membership/normal-spread coverage abstains; older recordings may not qualify",
             "Missing funding/mark histories preclude full-cost qualification",
             "No claim of profitable strategy or fully realistic account liquidation",
         ],

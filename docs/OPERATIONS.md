@@ -22,7 +22,10 @@ Do not enable verbose HTTP transport logging with real webhook tokens.
 
 `/healthz` reports process/scanner/recorder health, not a guarantee all symbols are fresh.
 `/api/overview` exposes queue occupancy, recording status, latest error and stream health.
-The dashboard distinguishes unavailable feeds from empty eligible lists.
+The dashboard distinguishes unavailable feeds, provisional spread warmup, and eligible markets.
+An independent once-per-minute ticker poll shares the global REST limiter with the broad scanner.
+Only the first observed quote in each five-minute bucket contributes to the six-hour normal-spread
+history. At least 12 valid buckets and 80% time coverage are required; no backdated samples.
 
 Raw and Parquet segments flush at 100 envelopes or roughly one second. The queue is bounded
 by count and a 32MB serialized-payload budget; WebSocket receive buffers and symbol tapes are
@@ -33,7 +36,8 @@ Default local storage budget: 10GB. On budget exhaustion, write failure or queue
 the recording circuit opens, feed coverage is invalidated, and new confirmations stop.
 Restart only after resolving the issue. Segment writes are not an atomic transaction across
 both files and SQLite: a crash may leave an orphan raw/Parquet segment. Treat unmanifested
-files as unverified and inspect them before research. In-memory queued observations can be
+files as unverified and inspect them before research. Manifests link predecessor IDs/hashes;
+an omitted or unchained intermediate file explicitly breaks replay coverage. In-memory queued observations can be
 lost on a hard crash. Clean shutdown stops feeds and drains the bounded queue.
 
 Do not delete active market data automatically. `bybit-flow retention-plan` lists manifested

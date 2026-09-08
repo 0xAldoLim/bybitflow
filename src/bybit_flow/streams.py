@@ -120,6 +120,13 @@ class Streams:
                             if not msg.get("success"):
                                 raise ValueError("Subscription rejected")
                             self.connected = True
+                            self.recorder.offer(
+                                "control/subscribed",
+                                "ALL",
+                                received,
+                                {"symbols": list(self.selected)},
+                                received,
+                            )
                             for tape in self.tapes.values():
                                 tape.reset(received)
                             self.store.put(

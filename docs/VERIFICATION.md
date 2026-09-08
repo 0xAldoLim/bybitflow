@@ -2,6 +2,19 @@
 
 Date: 2026-09-08. This file reports software checks, not strategy performance.
 
+## Follow-up verification
+
+After the initial `cd2f5fe` milestone, the suite expanded to **41 passed** (same two
+third-party deprecation warnings). Additional checks cover normal-spread warmup, no backdating,
+time-bucket deduplication, stale/missing quote coverage, spread-tail rejection, restored history,
+and omitted intermediate segments becoming explicit replay gaps. The scanner integration now
+requires a source-timestamped spread history. Ruff and JavaScript syntax checks also pass.
+The initial Docker/browser checks below remain the baseline; follow-up source changes are
+identified separately rather than presented as a new long-running live-feed validation.
+The follow-up source was additionally mounted read-only into the previously built Python 3.12
+container: authenticated health returned `ok: true`, and the normal-spread calculation passed
+a direct smoke check. This was a source-mounted test, not a rebuilt image or live-market run.
+
 ## Executed successfully
 
 - Python 3.13.12 virtual environment; pinned installed dependencies pass `pip check`.

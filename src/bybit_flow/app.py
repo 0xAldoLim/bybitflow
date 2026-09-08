@@ -132,6 +132,7 @@ def create_app(settings=None):
                 disk_bytes=rec.disk_bytes,
                 streams=store.get("stream_health", {"connected": False}),
                 gap=store.get("recorder_gap"),
+                quotes=store.get("quote_health"),
             ),
             qualification="Uncalibrated · public high-tier alerts locked",
             at_ms=now_ms(),

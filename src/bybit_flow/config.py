@@ -16,6 +16,8 @@ class Settings(BaseSettings):
     min_age_days: int = Field(30, ge=30)
     min_daily_turnover: float = Field(20_000_000, gt=0)
     max_spread_bps: float = Field(5, gt=0, le=50)
+    quote_sample_seconds: int = Field(60, ge=30, le=300)
+    spread_min_samples: int = Field(12, ge=12, le=72)
     hypothetical_notional: float = Field(1000, gt=0)
     equity: float | None = Field(None, gt=0)
     risk_fraction: float = Field(0.0025, gt=0, le=0.01)

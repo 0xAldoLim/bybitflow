@@ -10,12 +10,14 @@ See VERIFICATION.md for the actual execution record.
   pagination, OI and funding pagination, conservative request budget and bounded retries.
 - USDT-default / configurable USDC metadata selection. Non-perpetual, prelisting, nontrading,
   invalid precision, recent listings and known TradFi underlyings excluded.
-- Thirty contiguous daily bars, seven-day median turnover, current spread and actual visible
-  depth gates. Point-in-time membership observations persist from collection onward.
+- Thirty contiguous daily bars, seven-day median turnover, current and time-sampled normal
+  spread, and actual visible depth gates. Point-in-time membership observations persist in
+  both SQLite and raw replay records only once their supporting data is available.
 - Broad ranking and bounded prioritized trade/book/all-liquidation subscriptions. Snapshot/delta
   reset, nonmonotonic/crossed/empty book detection, heartbeat, reconnect, separate timestamps.
 - Bounded event count and byte budget; bounded tapes; compressed raw observations and typed
-  Parquet, segment hashes, manifest metadata, SQLite operational journal and backup command.
+  Parquet, linked segment hashes, omitted-segment gap detection, manifest metadata, SQLite
+  operational journal and backup command.
 - Delayed confirmed pivots, internal/external swing views, structure/BOS/CHoCH flags, equal
   levels, sweep/reclaim, displacement-filtered three-bar FVGs, deterministic last-opposite-candle
   order blocks, dealing-range position, partial/complete prior-period levels and candle VWAP.
@@ -45,7 +47,7 @@ See VERIFICATION.md for the actual execution record.
   comparison; event-level partial/missed fills, funding hooks and mark-margin stress simulator.
 - Recorded-event replay shares features and candidate/confirmation functions, but coverage and
   context are a restricted research subset, not parity with every live gate. Reversal absorption
-  replay abstains without matched historical replenishment; missing funding/mark data limits
+  uses actual historical book additions within the execution window; missing funding/mark data limits
   qualification. No synthetic historical order books are introduced.
 - Weekly-cluster bootstrap and expanding-window stratified empirical probability estimates.
   Sparse strata abstain. These are research utilities, not a deployed calibrated predictive model.
@@ -56,8 +58,8 @@ See VERIFICATION.md for the actual execution record.
 - Empirically validated live strategies, calibrated probabilities, SS/SSS qualification and S alerts.
   These require real independent evidence; no configuration option bypasses the lock.
 - Complete delisted-contract historical metadata, survivorship-free universe before recording,
-  proved continuous-trading start time, and a historical rolling “normal spread” estimator.
-  Current spread is explicitly a current observation, not normal/historical liquidity.
+  and proved continuous-trading start time. Normal spread history starts with actual collection;
+  it is not backfilled from current quotes or candle-derived estimates.
 - Automatic historical depth or all-liquidation archive acquisition with verified completeness;
   automatic exact-gap recovery; exchange-signed trade completeness verification.
 - Full-session/anchored/prior-week trade volume profiles and prior-week PoC across long recordings.

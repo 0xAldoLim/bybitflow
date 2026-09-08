@@ -4,6 +4,7 @@ import math
 import httpx
 
 from bybit_flow.ingestion import Bybit
+from bybit_flow.liquidity import SpreadHistory
 from bybit_flow.scanner import Scanner
 from bybit_flow.storage import Recorder, Store, now_ms
 
@@ -15,6 +16,11 @@ async def test_full_rest_scan_to_ranked_persistent_watchlist(settings, instrumen
     writer = asyncio.create_task(recorder.run())
     scanner = Scanner(settings, store, recorder)
     asof = now_ms()
+    history = SpreadHistory()
+    for i in range(12, 0, -1):
+        known = asof - i * 300_000
+        history.add(known, known, 99.99, 100.01)
+    store.put("spreads:TESTUSDT", history.export())
     instrument_row["launchTime"] = str(asof - 100 * 86_400_000)
     requests = []
 

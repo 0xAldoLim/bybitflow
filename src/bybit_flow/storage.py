@@ -162,17 +162,21 @@ class Recorder:
             rows=len(batch),
             min_event_ms=min(r["event_ms"] for r in batch),
             max_event_ms=max(r["event_ms"] for r in batch),
+            min_receipt_ms=min(r["receipt_ms"] for r in batch),
+            max_receipt_ms=max(r["receipt_ms"] for r in batch),
             collected_ms=now_ms(),
             raw=str(raw),
             parquet=str(normalized),
             sha256=digest,
             completeness="observed segment only; connection coverage tracked separately",
         )
+        manifest["previous_segment"] = self.store.get("last_segment")
         (directory / f"{ident}.manifest.json").write_text(json.dumps(manifest, indent=2))
         with self.store.db:
             self.store.db.execute(
                 "INSERT INTO segments VALUES(?,?,?)", (ident, now_ms(), json.dumps(manifest))
             )
+        self.store.put("last_segment", {"id": ident, "sha256": digest})
         self.disk_bytes += raw.stat().st_size + normalized.stat().st_size
         self.written += len(batch)
 
