@@ -91,6 +91,7 @@ async def main():
                     "signals",
                     "tradingview",
                     "research",
+                    "ml",
                     "journal",
                     "health",
                     "settings",

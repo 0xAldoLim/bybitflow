@@ -24,7 +24,8 @@ CATALOG = {
         for key, definition in {
             "sweep_long": "known sell-side level breached and closed above",
             "sweep_short": "known buy-side level breached and closed below",
-            "choch": "confirmed change of structure character",
+            "choch": "confirmed change of character: up +1, down -1; absent is missing",
+            "bos": "confirmed structure break: up +1, down -1; absent is missing",
         }.items()
     },
     **{
@@ -125,6 +126,8 @@ def snapshot(signal, decision_ms, stage, membership=None):
     values, metadata = {}, {}
     for name, (group, path, definition) in CATALOG.items():
         value = lookup(payload, path)
+        if name in {"bos", "choch"}:
+            value = {"up": 1.0, "down": -1.0}.get(value)
         source = signal.source + (
             ":classified-footprint"
             if signal.source == "tradingview" and group == "orderflow"

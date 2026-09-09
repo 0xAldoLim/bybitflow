@@ -24,6 +24,28 @@ def cycle(settings, store):
     return train(store, path)["id"]
 
 
+def monitor(settings, store):
+    """Resolve paper labels and check drift independently of the weekly fit cadence."""
+    from ..replay import segment_rows
+    from .drift import check
+    from .labels import label_recordings
+
+    paths = sorted((store.root / "segments").glob("*.jsonl.gz"))
+    result = dict(at_ms=now_ms(), status="no-recordings")
+    if paths:
+        labels = label_recordings(store, segment_rows(paths), settings)
+        result.update(status="observed", complete=labels["complete"])
+    ident = store.get("ml_champion")
+    if ident:
+        result["drift"] = check(store, ident)
+        if result["drift"]["status"] == "degraded":
+            from ..notifications import Notifier
+
+            asyncio.run(Notifier(settings, store).send_operational("drift", result["drift"]))
+    store.put("ml_monitor", result)
+    return result
+
+
 def run(arguments, settings, store):
     parser = argparse.ArgumentParser(description="BybitFlow offline ML research, never live execution")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -32,6 +54,11 @@ def run(arguments, settings, store):
     label.add_argument("--stage", choices=("generation", "decision"), default="decision")
     export = sub.add_parser("export")
     export.add_argument("--stage", choices=("generation", "decision"), default="decision")
+    chart = sub.add_parser("chart-label")
+    chart.add_argument("events", type=Path)
+    chart.add_argument("candles", type=Path)
+    chart.add_argument("--symbol", required=True)
+    sub.add_parser("chart-export")
     train = sub.add_parser("train")
     train.add_argument("dataset", type=Path)
     train.add_argument("--model", choices=("both", "logistic", "lightgbm"), default="both")
@@ -56,6 +83,12 @@ def run(arguments, settings, store):
         from .labels import label_recordings
 
         result = label_recordings(store, segment_rows(args.paths), settings, args.stage)
+    elif args.command == "chart-label":
+        from .labels import label_chart
+
+        result = label_chart(store, args.events, args.candles, settings, args.symbol)
+    elif args.command == "chart-export":
+        result = str(FeatureStore(store).export(now_ms(), policy="chart-v1", stage="chart"))
     elif args.command == "export":
         result = str(FeatureStore(store).export(now_ms(), stage=args.stage))
     elif args.command == "train":
@@ -106,6 +139,11 @@ def run(arguments, settings, store):
         with (store.root / "ml-worker.lock").open("a") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             while True:
+                if now_ms() - store.get("ml_monitor", {}).get("at_ms", 0) >= 900_000:
+                    try:
+                        monitor(settings, store)
+                    except (ValueError, OSError) as exc:
+                        store.put("ml_monitor", dict(at_ms=now_ms(), status="abstained", reason=str(exc)))
                 previous = store.get("ml_cycle", {}).get("at_ms", 0)
                 if args.command == "cycle" or now_ms() - previous >= 7 * 86_400_000:
                     try:

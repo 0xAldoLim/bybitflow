@@ -1,5 +1,14 @@
 # Research protocol and definitions
 
+## ML extension, 2026-09-09
+
+The new [ML research guide](ML_RESEARCH.md) supersedes historical statements below that fold
+generation, model artifacts and inference are unimplemented. It defines the current immutable
+candidate schema, first-scored-decision policy, separate calibration, purging/embargo, bounded
+threshold trials, untouched holdout reservation and promotion gates. No actual model is approved.
+The existing strategy/fill/source definitions below remain applicable. Cost-assumed print labels
+do not meet the verified-cost deployment prerequisite.
+
 ## Causal availability
 
 Live and recorded replay use `features.candle_features`, `strategy.candidates`, `strategy.confirm`,

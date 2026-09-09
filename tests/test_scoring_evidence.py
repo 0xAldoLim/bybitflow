@@ -1,6 +1,26 @@
 from bybit_flow.scoring import score
 
 
+def test_reversal_scores_defended_absorption_not_continuation_stack(signal):
+    signal.family = "liquidity_sweep"
+    signal.evidence = {
+        "flow": {
+            "delta_pct": -50,
+            "sell_notional": 1000,
+            "defended_notional": {"LONG": 250},
+            "absorption_long": True,
+            "stacked_buy": 0,
+            "stacked_sell": 4,
+        }
+    }
+    score(signal, True, False)
+    assert signal.evidence["score_components"]["orderflow"]["earned"] == 25
+    signal.evidence["flow"]["defended_notional"] = {}
+    score(signal, True, False)
+    assert signal.evidence["score_components"]["orderflow"]["earned"] == 0
+    assert signal.calibrated_probability is None
+
+
 def test_native_score_can_reach_sss_with_actual_component_observations(signal):
     signal.risk = {"accepted": True, "net_rr": 2.8}
     signal.evidence = {

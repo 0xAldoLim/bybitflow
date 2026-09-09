@@ -11,6 +11,13 @@ from .validation import accepted
 
 
 def apply(signal, settings, store, at_ms=None):
+    # Never retain yesterday's probability/approval while reassessing a plan or disabling ML.
+    if signal.validation_status == "validated":
+        signal.final_tier = "REJECTED" if signal.gates else "RESEARCH"
+        signal.qualification = dict(status="Uncalibrated", probability=None, validated=False)
+    signal.calibrated_probability = signal.probability_uncertainty = None
+    signal.expected_net_r = signal.expected_net_r_uncertainty = None
+    signal.validation_status, signal.model_version = "unvalidated", None
     if not settings.ml_enabled:
         return signal
     now = at_ms or now_ms()
@@ -29,16 +36,29 @@ def apply(signal, settings, store, at_ms=None):
         signal.model_version = model["id"]
         signal.validation_status = "research_challenger"
         reasons = []
-        if model["source"] != signal.source or model["stage"] != "decision":
+        if model["feature_schema_version"] != signal.feature_schema_version:
+            reasons.append("feature schema changed; retraining required")
+        if now < model["created_ms"]:
+            reasons.append("model was not available at this decision timestamp")
+        chart_compatible = (
+            model["stage"] == "chart"
+            and signal.source == "tradingview"
+            and not signal.coverage.get("liquidity_observed")
+        )
+        if model["source"] != signal.source or (model["stage"] != "decision" and not chart_compatible):
             reasons.append("model source/stage does not match this candidate")
+        if signal.version not in model.get("strategy_versions", []):
+            reasons.append("strategy version not covered by this model")
         for key, vocabulary in model["contexts"].items():
             if row["values"].get(key) not in vocabulary:
                 reasons.append("unseen model context: " + key)
         if row["data_coverage"] < model["minimum_coverage"]:
             reasons.append("required training feature coverage lost")
+        if any(row["values"].get(key) is None for key in model.get("required_features", [])):
+            reasons.append("a normally present model feature is missing")
         if now - model["periods"]["holdout"]["end"] > 90 * 86_400_000:
             reasons.append("model evidence older than 90 days")
-        if store.get("ml_degraded", {}).get("model_id") == model["id"]:
+        if registry.is_degraded(model["id"]):
             reasons.append("model degraded")
         if reasons:
             signal.validation_status = "abstained"
@@ -64,7 +84,8 @@ def apply(signal, settings, store, at_ms=None):
             signal.gates.append("research meta-label acceptance threshold not met")
             signal.final_tier = "REJECTED"
         if champion and qualifies and not signal.gates:
-            cohort = model["report"]["cohorts"].get(str(round(min(0.9, int(p * 10) / 10), 1)), {})
+            key = "|".join([signal.family, signal.direction, signal.regime, str(min(9, int(p * 10)))])
+            cohort = model["report"].get("context_cohorts", {}).get(key, {})
             if (
                 cohort.get("n", 0) >= 100
                 and cohort.get("effective_samples", 0) >= 26
@@ -100,7 +121,8 @@ def apply(signal, settings, store, at_ms=None):
 def delivery_eligible(signal, settings, store):
     """Public delivery checks registry approval, not a caller-supplied validated flag."""
     if (
-        signal.validation_status != "validated"
+        not settings.ml_enabled
+        or signal.validation_status != "validated"
         or signal.gates
         or signal.final_tier not in settings.validated_alert_tiers
         or signal.final_tier not in {"SSS", "SS", "S"}

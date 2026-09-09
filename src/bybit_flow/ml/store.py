@@ -66,7 +66,7 @@ class FeatureStore:
             )
         return ident
 
-    def snapshots(self, stage="decision", limit=100_000):
+    def snapshots(self, stage="decision", limit=10_000):
         rows = self.db.execute(
             "SELECT id,payload FROM ml_snapshots WHERE stage=? ORDER BY decision_ms", (stage,)
         )
@@ -91,7 +91,7 @@ class FeatureStore:
                 (snapshot_id, result["policy"], available_ms, text),
             )
 
-    def dataset(self, asof_ms, policy="prints-v1", stage="decision", limit=100_000):
+    def dataset(self, asof_ms, policy="prints-v1", stage="decision", limit=10_000):
         result = []
         for s in self.snapshots(stage, limit):
             row = self.db.execute(

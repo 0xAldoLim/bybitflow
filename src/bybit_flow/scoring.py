@@ -60,16 +60,28 @@ def score(signal, flow_confirmed, derivatives_available, fundamental=None, cross
     cross_fraction = sum(v == supportive for k, v in contexts.items() if k != signal.symbol) / max(
         1, len([k for k in contexts if k != signal.symbol])
     )
-    fractions = {
-        "regime": unit(h4.get("efficiency"), 0.5),
-        "structure": unit(h1.get("atr", 0) * 2 / distance if distance else 0)
-        * int(bool(structure) or signal.family in {"trend_pullback", "breakout_retest"}),
-        "orderflow": min(
+    reversal = signal.family in {"liquidity_sweep", "range_rejection"}
+    if reversal:
+        opposing = flow.get("sell_notional" if sign > 0 else "buy_notional", 0)
+        defended = flow.get("defended_notional", {}).get(signal.direction, 0)
+        flow_strength = min(
+            unit(abs(flow.get("delta_pct", 0)), 50), unit(defended / opposing if opposing else 0, 0.25)
+        )
+        flow_strength *= int(bool(flow.get("absorption_long" if sign > 0 else "absorption_short")))
+    else:
+        flow_strength = min(
             unit(abs(flow.get("delta_pct", 0)), 25),
             unit(flow.get("stacked_buy" if sign > 0 else "stacked_sell", 0), 4),
         )
-        if flow_confirmed
-        else 0,
+    fractions = {
+        "regime": unit(h4.get("efficiency"), 0.5),
+        "structure": unit(h1.get("atr", 0) * 2 / distance if distance else 0)
+        * int(
+            bool(structure)
+            or signal.family in {"trend_pullback", "breakout_retest"}
+            or (signal.family == "range_rejection" and signal.regime == "range")
+        ),
+        "orderflow": flow_strength if flow_confirmed else 0,
         "derivatives": unit(1 - max(0, same_funding) / 0.001)
         if derivatives_available and d.get("oi_change_pct") is not None and d.get("funding_rate") is not None
         else 0,
@@ -89,5 +101,7 @@ def score(signal, flow_confirmed, derivatives_available, fundamental=None, cross
         "reason": "No independently validated deployment model; all high-tier alerts locked",
         "data_cap": "Missing observations earn no points; no weight redistribution",
     }
-    signal.evidence["score_profile"] = "native-evidence-1; fundamentals means sourced diligence coverage"
+    signal.evidence["score_profile"] = (
+        "native-evidence-2; family-specific flow; fundamentals means sourced diligence coverage"
+    )
     return signal

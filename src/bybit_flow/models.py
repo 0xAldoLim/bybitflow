@@ -112,7 +112,7 @@ class Signal(BaseModel):
     expected_net_r_uncertainty: tuple[float, float] | None = None
     validation_status: str = "unvalidated"
     model_version: str | None = None
-    feature_schema_version: str = "candidate-v2"
+    feature_schema_version: str = "candidate-v3"
     data_coverage: float | None = Field(None, ge=0, le=1)
 
     @computed_field

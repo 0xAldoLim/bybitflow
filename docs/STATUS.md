@@ -1,5 +1,29 @@
 # Implemented, experimental, unavailable
 
+## ML extension — current `main`, 2026-09-09
+
+See [ML research](ML_RESEARCH.md) for runnable commands, source audit and precise limitations.
+Added immutable candidate snapshots (including rejects), complete-label-only Parquet exports,
+logistic/LightGBM training, JSON inference parity, separate calibration, purged chronological
+folds, bounded acceptance search, ablations, holdout reservation, model cards, registry gates,
+manual promotion/rollback, drift monitoring, separate weekly worker, protected ML dashboard,
+and model-aware Discord fields. Experimental supervised machinery is implemented; financial
+validation is **not** established. Current labels assume costs, so public validated alerts remain
+unavailable. There is no real model artifact or champion in this installation.
+
+Not implemented: automatic model promotion, automatic strategy-code/SMC-parameter rewriting,
+full fundamental/microstructure feature coverage, candle-only automatic candidate generation, verified
+funding-settlement label import, calibrated expected-R regression deployment, session-level
+attribution, automatic rollback, or incremental replay checkpoints. No feature in this list is
+represented as complete merely because its future interface exists.
+
+Separate saved-TradingView-plus-OHLC ML labeling/training is implemented for unavailable Bybit
+hosts. It includes rejected candidates and remains source-attested chart research, not native
+order-flow validation or a reconstruction of missing taker trades.
+
+Historical milestone descriptions below are retained as history. References to the old hard
+public-alert lock/fixed scoring are superseded by measured rubrics and registry admission.
+
 ## TradingView feature-branch milestone (2026-09-09 UTC)
 
 Implemented and exercised with synthetic/offline tests:

@@ -1,6 +1,6 @@
 # Evidence scores and qualification
 
-`native-evidence-1` retains the original weights. The former fixed fractions capped quality at
+`native-evidence-2` retains the original weights. The former fixed fractions capped quality at
 83. Current contributions change with observations and have direct unit tests, including a
 fully populated synthetic 100-point case. This proves software reachability, not the market
 frequency or effectiveness of high scores.
@@ -9,7 +9,7 @@ frequency or effectiveness of high scores.
 |---|---:|---|
 | Regime | 15 | Confirmed 4H directional efficiency / 0.5, clipped |
 | Structure | 20 | Confirmed family structure, invalidation distance relative to 2 ATR |
-| Executed flow | 25 | Confirmed trigger; weaker of absolute delta /25% and directional stack /4 |
+| Executed flow | 25 | Continuation: delta /25% and directional stack /4; reversal: delta /50% and matched defended/opposing notional /.25, requiring actual absorption |
 | Derivatives | 10 | Actual OI change and funding available; same-direction funding crowding penalty |
 | Execution/risk | 15 | Accepted risk calculation; cost-adjusted planned RR /2.5 |
 | Fundamentals | 10 | Sourced, current coverage of purpose, value accrual, dilution, security, governance |

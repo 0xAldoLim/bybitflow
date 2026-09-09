@@ -1,5 +1,48 @@
 # Verification record
 
+## ML research extension — 2026-09-09 UTC
+
+- Final local Python 3.13 suite: **71 passed** in 13.62 seconds; two existing third-party
+  Starlette/AnyIO deprecation warnings. Ruff, Python compile, JavaScript syntax, `pip check`
+  and `git diff --check` passed. Synthetic numerical tests are not financial evidence.
+- Tests cover frozen rejected-candidate snapshots, availability timestamps, signed BOS/CHoCH,
+  E/F grades, funding deduplication, MFE/MAE, gap/missing-label exclusion, source-separated chart
+  fallback, logistic/LightGBM JSON prediction parity, independent calibration, purged folds,
+  next-cycle unseen holdouts, holdout reuse rejection, model hash checks, refusal of synthetic
+  promotion, drift degradation, stale approval clearing, dashboard auth and webhook secrecy.
+- Complete synthetic path with ML enabled: TradingView setup → first-decision feature snapshot
+  → mocked Discord SSS research card → invalidation update → manual paper journal. Manual
+  outcomes remain excluded from training. Existing authenticated ingress/durable queue tests
+  also pass. **No real webhook was contacted.**
+- `bybit-flow ml status` on the actual local data directory: zero snapshots, labels and models;
+  no champion. SQLite also contains zero market recording segments. No synthetic financial
+  results or fitted test models were inserted into that directory or committed to Git.
+- Final lightweight runtime Docker build:
+  `sha256:fe973d03ae884ed643fe8f9308cb81b3e042213f84ec90be73d46cd70a187176`.
+- Final separate trainer build:
+  `sha256:110eb238dd00ef654b28bd7f5f2c0cae4b5f1361ace3edbfcb484e57d1ba7f42`.
+- `examples/ml_docker_smoke.py` ran against these final images. Isolated non-root/read-only
+  runtime started, returned HTTP 401 without credentials, and authenticated health reported
+  `ok`, recorder readiness, `alerts_only` and a live TradingView queue worker. `/api/ml` had
+  no models. Trainer Python 3.12 imported sklearn 1.9.0 and LightGBM 4.7.0 successfully.
+  The full numerical pytest suite ran on the host, not inside the trainer container.
+- Compose `ml` profile configuration validated. Local Chromium rendered overview and every
+  page including ML Research with no reported page error. Desktop width 1440 / scroll 1425;
+  mobile width 390 / scroll 390. Screenshots remain ignored under `data/ui`.
+- Rechecked real Bybit HTTPS on the host and in the final Docker runtime: hostname certificate
+  mismatch remains. TLS verification was never disabled; DNS/routing were not altered.
+- Temporary smoke containers/tmpfs data and the loopback browser-test server were stopped.
+  Unrelated existing containers were not changed. The reusable built images remain local.
+
+Not verified: real market collection, real-data model training/backtests, financial improvement,
+validated SSS, true TradingView/Pine compilation and alert delivery, real Discord delivery,
+long-running worker/VPS load, or exact funding/mark execution simulation. Exchange and Discord
+credentials are not configured; Bybit connectivity is unavailable. Models trained in the Docker
+image lack Git checkout metadata and remain research artifacts; deployment-quality provenance
+requires training from a clean checkout. See [ML_RESEARCH.md](ML_RESEARCH.md) for remaining
+feature and cost-label limitations. GitHub CI configuration was updated; its remote outcome
+was not inspected as part of these local checks.
+
 ## TradingView feature branch — 2026-09-09 UTC
 
 - Final Python suite: **54 passed**, about 6–7 seconds, with the same two third-party

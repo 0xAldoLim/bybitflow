@@ -8,7 +8,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     ml_enabled: bool = False
     ml_filter_research: bool = False
-    validated_alert_tiers: list[str] = Field(default_factory=lambda: ["SSS"])
+    validated_alert_tiers: list[Literal["SSS", "SS", "S"]] = Field(default_factory=lambda: ["SSS"])
     ops_webhook: SecretStr = SecretStr("")
     model_config = SettingsConfigDict(env_prefix="FLOW_", env_file=".env", extra="ignore")
     data_dir: Path = Path("data")

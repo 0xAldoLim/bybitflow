@@ -528,6 +528,8 @@ class Gateway:
                     signal.final_tier, signal.state = "REJECTED", "PENDING CONFIRMATION"
             from .ml.inference import apply as apply_ml
 
+            if signal.gates:
+                signal.raw_tier = "F"
             apply_ml(signal, self.settings, self.store, now_ms())
             self.store.signal(signal, "TradingView observation evaluated")
             self.store.put("tv_seen:" + signal.id, event.source_ms)

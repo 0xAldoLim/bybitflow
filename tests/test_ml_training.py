@@ -10,7 +10,7 @@ from bybit_flow.ml.models import calibrate, fit, predict, records
 from bybit_flow.ml.registry import Registry
 from bybit_flow.ml.store import canonical
 from bybit_flow.ml.training import train
-from bybit_flow.ml.validation import HOUR, accepted, partitions, walk_forward
+from bybit_flow.ml.validation import HOUR, accepted, next_cycle_partitions, partitions, walk_forward
 from bybit_flow.storage import Store
 
 pytest.importorskip("sklearn")
@@ -67,6 +67,15 @@ def test_purging_and_same_timestamp_grouping(signal):
         assert max(r["label_available_ms"] for r in ca) + 4 * HOUR < te[0]["decision_ms"]
     with pytest.raises(ValueError, match="safety"):
         accepted(rows[0], 0.9, {"leverage": 20})
+
+
+def test_new_cycle_never_reuses_old_holdout(signal):
+    rows = dataset(signal, 500)
+    consumed = rows[350]["label_available_ms"]
+    tr, ca, va, ho = next_cycle_partitions(rows, consumed)
+    assert all(r["decision_ms"] > consumed + 4 * HOUR for r in ho)
+    assert max(r["label_available_ms"] for r in va) + 4 * HOUR < ho[0]["decision_ms"]
+    assert not {r["id"] for r in ho} & {r["id"] for r in tr + ca + va}
 
 
 def test_reproducible_training_registry_holdout_and_no_fake_promotion(settings, signal):

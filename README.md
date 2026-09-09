@@ -13,7 +13,8 @@ See [connectivity diagnosis](docs/CONNECTIVITY_AUDIT.md) for this host's ISP cer
 
 **This is a functional research milestone, not a validated trading system.** No strategy has
 demonstrated an edge. Every candidate is unvalidated; probabilities display **Uncalibrated**.
-Public S/SS/SSS alerts are deliberately locked in code. There is no exchange authentication,
+Public S/SS/SSS alerts require a statistically qualified, manually approved registry artifact;
+none exists. There is no exchange authentication,
 order endpoint, execution module, or order button.
 
 ## Run locally
@@ -47,13 +48,14 @@ At least one complete 15-minute execution window after subscription is also need
 stale books, queue overflow, or unavailable inputs reset or reject confirmation.
 Subscription rotation preserves retained symbols' streams; new symbols warm up independently.
 `scan-once` performs discovery and ranking then exits; use `serve` with scanning enabled for
-continuous recording and signal lifecycle monitoring. Run only one writer process per data directory.
+continuous recording and signal lifecycle monitoring. Run one collector/API and at most one
+separate ML worker per data directory; their small metadata writes share SQLite WAL.
 
 ## Notifications and risk
 
 Set a **separate research-channel** `FLOW_RESEARCH_WEBHOOK` and `FLOW_RESEARCH_ALERTS=true`
 to enable explicitly labeled unvalidated research cards. Default operation sends nothing.
-`FLOW_DISCORD_WEBHOOK` is reserved for a future validated release; configuring it does not
+`FLOW_DISCORD_WEBHOOK` is reserved for approved-model alerts; configuring it does not
 unlock public alerts. No webhook was contacted during development.
 
 ```sh
@@ -125,6 +127,39 @@ read-only root filesystem, bounded memory, and a health check. Log in as `resear
 or deploy a TLS reverse proxy with authentication. Do not publish the port unauthenticated.
 No Redis, Kafka, Kubernetes, paid services, or private exchange keys are required.
 
+## Supervised ML research
+
+The existing deterministic setups now feed an immutable candidate feature store, including
+quality rejects. The optional ML layer trains logistic/LightGBM meta-labels, calibrates on
+separate chronological data, runs purged validation and ablations, reserves an untouched
+holdout, and records JSON-only model artifacts. Quality is never probability × 100.
+
+```sh
+.venv/bin/pip install -r requirements-ml.lock
+# Supply all relevant actual, manifest-verified recording files (shell expands this pattern).
+.venv/bin/bybit-flow ml label data/segments/*.jsonl.gz
+.venv/bin/bybit-flow ml export
+# Use the exact dataset filename printed above; no dataset is bundled or fabricated.
+.venv/bin/bybit-flow ml train data/ml/datasets/<hash>.parquet --model logistic
+.venv/bin/bybit-flow ml status
+```
+
+Set `FLOW_ML_ENABLED=true` to enable shadow inference. Optionally set
+`FLOW_ML_FILTER_RESEARCH=true` to apply the model's non-safety acceptance thresholds to
+research cards. Both default off. Insufficient evidence remains **Uncalibrated**.
+No configuration switch can approve a model. Current `prints-v1` cost-assumed labels alone
+cannot satisfy the verified-cost deployment gate.
+
+```sh
+# Optional separate, single-CPU training/monitoring service; never trains in the API process.
+docker compose --profile ml up --build -d
+docker compose --profile ml exec trainer bybit-flow ml status
+```
+
+The worker checks label/drift status every 15 minutes and attempts a challenger weekly;
+promotion is manual and gated. Open **ML Research** in the authenticated dashboard.
+Read [ML setup, methodology and limitations](docs/ML_RESEARCH.md) before training.
+
 ## Project map
 
 | Module | Responsibility |
@@ -134,6 +169,7 @@ No Redis, Kafka, Kubernetes, paid services, or private exchange keys are require
 | `features`, `strategy`, `scanner` | Causal structure, four distinct experimental families, two-stage scanning |
 | `risk`, `scoring`, `calibration` | Mandatory gates, separate quality score, research uncertainty and abstention |
 | `backtest`, `replay`, `research` | Paper fills, recorded-event replay, baselines and experiment provenance |
+| `ml` | Frozen candidates, print-based labels, offline training, calibration, registry, drift, guarded inference |
 | `fundamentals` | Source-attributed, availability-dated manual asset facts |
 | `notifications`, `app`, `static` | Research Discord cards, protected local API, browser dashboard |
 

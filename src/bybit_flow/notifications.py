@@ -213,6 +213,14 @@ class Notifier:
                 return "blocked: no prior validated delivery or terminal update"
         elif not delivery_eligible(signal, self.settings, self.store):
             return "blocked: no validated deployment model"
+        if not update:
+            recent = self.store.db.execute(
+                "SELECT 1 FROM outbox o JOIN signals s ON s.id=o.signal_id WHERE s.symbol=? "
+                "AND o.updated_ms>? AND o.status IN ('sent','uncertain','sending') LIMIT 1",
+                (signal.symbol, now_ms() - self.settings.cooldown_minutes * 60_000),
+            ).fetchone()
+            if recent:
+                return "cooldown"
         secret = self.settings.discord_webhook.get_secret_value()
         if not secret:
             return "dry-run"

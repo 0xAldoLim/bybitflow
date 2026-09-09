@@ -23,6 +23,8 @@ def promotion_reasons(m):
         reasons.append("SSS requires >=200 selected holdout outcomes and >=78 market-week clusters")
     if not h.get("ev_interval") or h["ev_interval"][0] <= 0:
         reasons.append("conservative cost-adjusted expected value not positive")
+    if h.get("max_drawdown_r", float("inf")) > 20 or h.get("tail_loss_5pct_r", -100) < -1.5:
+        reasons.append("drawdown above 20R or worst-five-percent mean below -1.5R")
     if not report.get("incremental_ev_interval") or report["incremental_ev_interval"][0] <= 0:
         reasons.append("incremental value over frozen deterministic baseline unproven")
     if (
@@ -84,7 +86,7 @@ class Registry:
 
     def champion(self):
         ident = self.store.get("ml_champion")
-        if not ident or self.store.get("ml_degraded", {}).get("model_id") == ident:
+        if not ident or self.is_degraded(ident):
             return None
         model = self.get(ident)
         approved = self.db.execute(
@@ -94,11 +96,20 @@ class Registry:
             return None
         return model
 
+    def is_degraded(self, ident):
+        return bool(
+            self.db.execute(
+                "SELECT 1 FROM ml_history WHERE model_id=? AND action='degraded'", (ident,)
+            ).fetchone()
+        )
+
     def promote(self, ident, reviewer):
         if not reviewer.strip():
             raise ValueError("Named manual approval required")
         m = self.get(ident)
         reasons = promotion_reasons(m)
+        if self.is_degraded(ident):
+            reasons.append("degraded artifacts cannot be reapproved; train a new challenger")
         current = self.champion()
         if current and current["id"] != ident:
             # A challenger cannot be compared against a champion on previously seen outcomes.
@@ -116,6 +127,24 @@ class Registry:
             self.event(ident, "rejected" if reasons else "approved", dict(reviewer=reviewer, reasons=reasons))
         if reasons:
             raise ValueError("; ".join(reasons))
+        import uuid
+
+        directory = self.store.root / "ml" / "models" / ident
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / f"DEPLOYMENT-{uuid.uuid4().hex}.md").write_text(
+            "# Approved research model deployment\n\n"
+            + canonical(
+                dict(
+                    model_id=ident,
+                    reviewer=reviewer,
+                    at_ms=now_ms(),
+                    manifest_sha256=digest(m),
+                    validation_period=m["periods"],
+                    performance=m["report"]["holdout"],
+                    limitations="Historical simulated outcomes; future edge is not guaranteed. Alerts only.",
+                )
+            )
+        )
         self.store.put("ml_previous_champion", self.store.get("ml_champion"))
         self.store.put("ml_champion", ident)
 
@@ -128,7 +157,7 @@ class Registry:
         ident = self.store.get("ml_previous_champion")
         if not ident:
             raise ValueError("No previously approved champion available")
-        if self.store.get("ml_degraded", {}).get("model_id") == ident:
+        if self.is_degraded(ident):
             raise ValueError("Previous champion is degraded; remain abstaining")
         approved = self.db.execute(
             "SELECT 1 FROM ml_history WHERE model_id=? AND action='approved'", (ident,)
@@ -142,7 +171,7 @@ class Registry:
 
     def summary(self):
         models = []
-        for row in self.db.execute("SELECT id FROM ml_models ORDER BY created_ms DESC LIMIT 30"):
+        for row in self.db.execute("SELECT id FROM ml_models ORDER BY created_ms DESC LIMIT 10"):
             m = self.get(row[0])
             models.append(
                 {k: v for k, v in m.items() if k != "model"}
@@ -156,6 +185,7 @@ class Registry:
             champion=self.store.get("ml_champion"),
             models=models,
             drift=self.store.get("ml_degraded"),
+            monitoring=self.store.get("ml_monitor"),
             cycle=self.store.get("ml_cycle"),
             snapshots=self.db.execute("SELECT COUNT(*) FROM ml_snapshots").fetchone()[0],
             labels=self.db.execute("SELECT COUNT(*) FROM ml_labels").fetchone()[0],

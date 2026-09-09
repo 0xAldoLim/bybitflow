@@ -62,6 +62,35 @@ def walk_forward(rows, folds=3, embargo_ms=4 * HOUR):
         yield train, calibration, test
 
 
+def next_cycle_partitions(rows, previous_holdout_end, embargo_ms=4 * HOUR):
+    """A past holdout may become past training data; the new final holdout must be unseen."""
+    if previous_holdout_end is None:
+        return partitions(rows, embargo_ms)
+    rows = sorted(rows, key=lambda r: r["decision_ms"])
+    holdout = [r for r in rows if r["decision_ms"] > previous_holdout_end + embargo_ms]
+    if not holdout:
+        raise ValueError("Holdout period already consumed; new unseen outcomes required")
+    first = holdout[0]["decision_ms"]
+    development = [
+        r for r in rows if max(r["label_available_ms"], r["label"]["exit_ms"]) + embargo_ms < first
+    ]
+    times = sorted({r["decision_ms"] for r in development})
+    if len(times) < 20:
+        raise ValueError("Insufficient development history for next cycle")
+    a, b = times[int(len(times) * 0.625)], times[int(len(times) * 0.8125)]
+    groups = []
+    for lo, hi in zip((times[0], a, b), (a, b, first), strict=True):
+        groups.append(
+            [
+                r
+                for r in development
+                if lo <= r["decision_ms"] < hi
+                and max(r["label_available_ms"], r["label"]["exit_ms"]) + embargo_ms < hi
+            ]
+        )
+    return [*groups, holdout]
+
+
 def cluster_interval(rows, values, alpha=0.05, seed=7, replicates=1000):
     groups = defaultdict(list)
     for row, value in zip(rows, values, strict=True):
@@ -73,10 +102,12 @@ def cluster_interval(rows, values, alpha=0.05, seed=7, replicates=1000):
     sums = np.array([sum(g) for g in groups.values()])
     sizes = np.array([len(g) for g in groups.values()])
     rng = np.random.default_rng(seed)
+    # At least 20 draws in each adjusted tail; bounded batches avoid a large bootstrap matrix.
+    replicates = max(replicates, int(40 / alpha))
     estimates = []
-    for _ in range(replicates):
-        index = rng.integers(0, count, count)
-        estimates.append(float(sums[index].sum() / sizes[index].sum()))
+    for start in range(0, replicates, 250):
+        index = rng.integers(0, count, (min(250, replicates - start), count))
+        estimates.extend((sums[index].sum(axis=1) / sizes[index].sum(axis=1)).tolist())
     return np.quantile(estimates, [alpha / 2, 1 - alpha / 2]).tolist(), count
 
 

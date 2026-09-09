@@ -56,6 +56,30 @@ def test_counterfactual_rejected_fill_and_gap_exclusion(settings, signal):
     store.close()
 
 
+def test_chart_fallback_keeps_rejected_candidate_without_fake_trades(settings, tmp_path):
+    from test_tradingview import NOW, payload
+
+    from bybit_flow.ml.labels import label_chart
+
+    event = payload()
+    event["observation"].update(footprint_source="unavailable", buy_volume=None, sell_volume=None)
+    events, candles = tmp_path / "events.jsonl", tmp_path / "bars.csv"
+    events.write_text(json.dumps(event) + "\n")
+    candles.write_text(
+        "time,open,high,low,close\n"
+        + "".join(f"{NOW - 1000 + i * 900000},100,116,99,110\n" for i in range(100))
+    )
+    store = Store(settings.data_dir)
+    result = label_chart(store, events, candles, settings, "TESTUSDT")
+    assert result["candidates"] == result["complete"] == 1
+    rows = FeatureStore(store).dataset(NOW + 100_000_000, policy="chart-v1", stage="chart")
+    assert rows[0]["signal"]["gates"]
+    assert rows[0]["values"]["buy_base"] is None
+    assert rows[0]["label"]["data_kind"] == "source-attested-TV-OHLC"
+    assert not rows[0]["label"]["costs_verified"]
+    store.close()
+
+
 def test_no_model_and_no_flag_can_unlock_public(settings, signal):
     store = Store(settings.data_dir)
     cfg = settings.model_copy(update={"ml_enabled": True, "sss_research": True})
@@ -69,6 +93,16 @@ def test_no_model_and_no_flag_can_unlock_public(settings, signal):
     assert not delivery_eligible(signal, cfg, store)
     store.put("ml_champion", "untrusted")
     assert not delivery_eligible(signal, cfg, store)
+    store.close()
+
+
+def test_disabling_ml_clears_stale_approval(settings, signal):
+    store = Store(settings.data_dir)
+    signal.validation_status, signal.final_tier = "validated", "SSS"
+    signal.calibrated_probability, signal.expected_net_r = 0.9, 1.0
+    apply(signal, settings, store)
+    assert signal.validation_status == "unvalidated" and signal.final_tier == "RESEARCH"
+    assert signal.calibrated_probability is None and signal.expected_net_r is None
     store.close()
 
 
@@ -102,4 +136,64 @@ async def test_ops_dedup_and_public_rejection(settings, signal):
     assert await notifier.send_operational("drift", result) == "already-attempted"
     assert "reason" not in calls[0]["embeds"][0]["description"]
     assert calls[0]["allowed_mentions"] == {"parse": []}
+    store.close()
+
+
+@pytest.mark.asyncio
+async def test_tv_to_ml_snapshot_discord_invalidation_and_journal(settings, instrument, monkeypatch):
+    from test_tradingview import NOW, observed, payload
+
+    from bybit_flow.tradingview import Gateway, TVEvent
+
+    clock = [NOW]
+    monkeypatch.setattr("bybit_flow.tradingview.now_ms", lambda: clock[0])
+    store = Store(settings.data_dir)
+    cfg = settings.model_copy(
+        update={
+            "ml_enabled": True,
+            "sss_research": True,
+            "tv_symbols": ["TESTUSDT"],
+            "research_webhook": SecretStr("https://discord.com/api/webhooks/MOCK/TEST"),
+        }
+    )
+    store.put("tv_liquidity:TESTUSDT", observed(instrument).model_dump(mode="json"))
+    cards = []
+
+    def transport(request):
+        cards.append(json.loads(request.content))
+        return httpx.Response(200, json={"id": "mock-card"})
+
+    gateway = Gateway(cfg, store, httpx.MockTransport(transport))
+    event = TVEvent.model_validate(payload())
+    assert await gateway.process(event) == "sent"
+    snapshot = next(FeatureStore(store).snapshots())
+    assert snapshot["values"]["tv_buy_volume"] == 700
+    assert snapshot["values"]["buy_base"] is None
+    assert "SSS RESEARCH" in cards[0]["embeds"][0]["title"]
+    clock[0] += 30_000
+    invalidation = event.model_copy(
+        update={
+            "event": "invalidate",
+            "event_id": "synthetic-invalid-ML",
+            "observation": None,
+            "source_ms": clock[0],
+            "price": 94,
+        }
+    )
+    assert await gateway.process(invalidation) == "INVALIDATED"
+    assert len(cards) == 2
+    clock[0] += 900_000
+    outcome = event.model_copy(
+        update={
+            "event": "outcome",
+            "event_id": "synthetic-outcome-ML",
+            "observation": None,
+            "source_ms": clock[0],
+            "bar_close_ms": event.bar_close_ms + 900_000,
+            "outcome_net_r": -1.0,
+        }
+    )
+    await gateway.process(outcome)
+    assert len(store.rows("journal")) == 1
+    assert FeatureStore(store).dataset(clock[0]) == []  # Manual outcome never becomes verified ML label.
     store.close()

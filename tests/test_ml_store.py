@@ -47,6 +47,9 @@ def test_unavailable_future_and_source_distinction(signal):
     assert s["values"]["book_spread_bps"] is None
     with pytest.raises(ValueError):
         snapshot(signal, 999, "decision")
+    signal.evidence["h1"] = {"bos": "up", "choch": "down", "asof": 1000}
+    encoded = snapshot(signal, 2000, "decision")
+    assert encoded["values"]["bos"] == 1 and encoded["values"]["choch"] == -1
 
 
 def test_excursions_funding_dedup_and_grades(signal):

@@ -12,6 +12,51 @@ from ..models import Signal, Trade
 from .store import FeatureStore, digest
 
 
+def label_chart(store, events_path, candles_path, settings, symbol):
+    """Separate source-attested TV + OHLC labels; never promoted as native execution data."""
+    import hashlib
+
+    from ..tv_research import family_replay, read_candles, read_events
+
+    if events_path.stat().st_size > 64_000_000 or candles_path.stat().st_size > 64_000_000:
+        raise ValueError("Chart files exceed the 64 MB per-input research budget")
+    events, bars = read_events(events_path), read_candles(candles_path)
+    if len(events) > 10_000 or len(bars) > 250_000:
+        raise ValueError("Chart research input exceeds bounded worker capacity")
+    report = family_replay(events, bars, settings, symbol, include_rejected=True)
+    fs = FeatureStore(store)
+    snapshots = {}
+    for row in report["candidate_snapshots"]:
+        signal = Signal.model_validate(row["signal"])
+        snapshots[signal.id] = fs.capture(signal, row["decision_ms"], "chart")
+    inputs = {
+        "events": hashlib.sha256(events_path.read_bytes()).hexdigest(),
+        "candles": hashlib.sha256(candles_path.read_bytes()).hexdigest(),
+    }
+    for outcome in report["outcomes"]:
+        label = outcome | dict(
+            policy="chart-v1",
+            data_kind="source-attested-TV-OHLC",
+            costs_verified=False,
+            classification="win" if outcome["net_r"] > 0 else "loss" if outcome["net_r"] < 0 else "breakeven",
+            input_hashes=inputs,
+            quantity=1.0,
+            fee_bps=settings.taker_fee_bps,
+            slippage_bps=settings.slippage_bps,
+            funding_reserve_bps=settings.funding_reserve_bps,
+            excursion_definition="OHLC extremes through exit bar: bounds, not an observed intrabar path",
+            limitation="No native prints/depth, partial fills or verified settlements; never full-flow validation",
+        )
+        fs.label(snapshots[outcome["signal_id"]], label, outcome["exit_ms"])
+    return dict(
+        candidates=len(snapshots),
+        complete=len(report["outcomes"]),
+        policy="chart-v1",
+        stage="chart",
+        rejections=report["rejections"],
+    )
+
+
 def label_recordings(store, rows, settings, stage="decision", max_active=2000):
     fs = FeatureStore(store)
     pending = iter(fs.snapshots(stage))

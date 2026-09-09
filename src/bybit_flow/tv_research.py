@@ -41,22 +41,26 @@ def read_events(path):
         return [TVEvent.model_validate_json(line) for line in stream if line.strip()]
 
 
-def family_replay(events, bars, settings, symbol):
+def family_replay(events, bars, settings, symbol, include_rejected=False):
     validate_bars(bars, bars[-1].end)
     starts = [c.start for c in bars]
     seen, occupied, outcomes, rejected = set(), {}, [], []
+    frozen = []
     research = settings.model_copy(update={"tv_proxy_research": True, "sss_research": False, "equity": None})
     for event in sorted(events, key=lambda e: e.source_ms):
         if event.event != "setup" or event.native_symbol != symbol or event.internal_id in seen:
             continue
         seen.add(event.internal_id)
         signal = evaluate(event, research, at_ms=event.source_ms)
+        if include_rejected:
+            frozen.append(dict(signal=signal.model_dump(mode="json"), decision_ms=event.source_ms))
         if signal.gates:
             rejected.append({"signal_id": signal.id, "reasons": signal.gates})
-            continue
+            if not include_rejected:
+                continue
         # Separate experimental books per family/direction; no overlapping labels within a book.
         key = (signal.family, signal.direction)
-        if event.source_ms <= occupied.get(key, 0):
+        if not include_rejected and event.source_ms <= occupied.get(key, 0):
             continue
         i = bisect_left(starts, event.source_ms)
         if i + 15 >= len(bars):
@@ -101,6 +105,19 @@ def family_replay(events, bars, settings, symbol):
                 net_r=(sign * (exit_price - entry) - costs) / distance,
                 complete=True,
                 reason=reason,
+                simulated_entry=entry,
+                planned_entry=signal.entry,
+                stop=signal.stop,
+                target=signal.tp1,
+                costs_per_base=costs,
+                mfe_r=max(
+                    0.0,
+                    max(sign * ((c.high if sign > 0 else c.low) - entry) / distance for c in bars[i : j + 1]),
+                ),
+                mae_r=min(
+                    0.0,
+                    min(sign * ((c.low if sign > 0 else c.high) - entry) / distance for c in bars[i : j + 1]),
+                ),
             )
         )
     span = bars[-1].end - bars[0].start
@@ -122,6 +139,7 @@ def family_replay(events, bars, settings, symbol):
     return {
         "mode": "recorded TradingView observations + actual 15M OHLC",
         "outcomes": outcomes,
+        "candidate_snapshots": frozen,
         "rejections": rejected,
         "families": groups,
         "predictions": predictions,
