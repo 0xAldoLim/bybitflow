@@ -40,6 +40,8 @@ def main():
     backup.add_argument("target", type=Path)
     sub.add_parser("retention-plan")
     sub.add_parser("sample-alert")
+    ml = sub.add_parser("ml", help="Offline supervised research; use ml --help")
+    ml.add_argument("arguments", nargs=argparse.REMAINDER)
     args = parser.parse_args()
     settings = Settings()
     from .observability import configure_logging
@@ -54,7 +56,11 @@ def main():
         return
     store = Store(settings.data_dir)
     try:
-        if args.command == "backup":
+        if args.command == "ml":
+            from .ml.cli import run
+
+            run(args.arguments, settings, store)
+        elif args.command == "backup":
             store.backup(args.target)
             print(args.target)
         elif args.command == "retention-plan":

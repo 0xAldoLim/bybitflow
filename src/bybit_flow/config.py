@@ -6,6 +6,10 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
+    ml_enabled: bool = False
+    ml_filter_research: bool = False
+    validated_alert_tiers: list[str] = Field(default_factory=lambda: ["SSS"])
+    ops_webhook: SecretStr = SecretStr("")
     model_config = SettingsConfigDict(env_prefix="FLOW_", env_file=".env", extra="ignore")
     data_dir: Path = Path("data")
     scan_enabled: bool = False
@@ -62,5 +66,6 @@ class Settings(BaseSettings):
 
     def public(self):
         return self.model_dump(
-            mode="json", exclude={"research_webhook", "discord_webhook", "admin_token", "tv_token"}
+            mode="json",
+            exclude={"research_webhook", "discord_webhook", "admin_token", "tv_token", "ops_webhook"},
         )

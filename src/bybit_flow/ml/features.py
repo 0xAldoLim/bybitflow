@@ -81,6 +81,33 @@ CATALOG = {
 }
 CONTEXT = ("family", "direction", "regime", "source", "liquidity_bucket", "score_profile")
 
+# Source-specific fields; TV classified volumes never populate native buy_base/sell_base.
+for _key in (
+    "regime_slope_atr",
+    "regime_efficiency",
+    "atr",
+    "buy_volume",
+    "sell_volume",
+    "level",
+    "setup_low",
+    "setup_high",
+    "setup_close",
+    "bos_level",
+    "fvg_low",
+    "fvg_high",
+    "turnover_median_7d",
+    "continuous_days",
+):
+    CATALOG["tv_" + _key] = (
+        "orderflow"
+        if _key in {"buy_volume", "sell_volume"}
+        else "smc"
+        if _key in {"level", "setup_low", "setup_high", "setup_close", "bos_level", "fvg_low", "fvg_high"}
+        else "regime",
+        "evidence.observations." + _key,
+        "TradingView source-attested Observation." + _key + "; see Pine tv-1 definition",
+    )
+
 
 def lookup(value, path):
     for part in path.split("."):
@@ -150,6 +177,16 @@ def snapshot(signal, decision_ms, stage, membership=None):
         values[key] = getattr(signal, key, None)
     values["liquidity_bucket"] = "observed" if membership and membership["eligible"] else "unknown"
     values["score_profile"] = signal.evidence.get("score_profile", "unscored")
+    for key in CONTEXT:
+        metadata[key] = dict(
+            group="context",
+            source=signal.source + ":frozen-plan",
+            source_ms=decision_ms,
+            available_ms=decision_ms,
+            definition="candidate context: " + key,
+            version=SCHEMA_VERSION,
+            missing=values[key] is None,
+        )
     return dict(
         signal_id=signal.id,
         decision_ms=decision_ms,
@@ -161,5 +198,6 @@ def snapshot(signal, decision_ms, stage, membership=None):
         feature_metadata=metadata,
         membership=membership,
         universe_scope="recorded-membership" if membership else "restricted-universe",
-        data_coverage=sum(v is not None for k, v in values.items() if k not in CONTEXT) / len(metadata),
+        data_coverage=sum(v is not None for k, v in values.items() if k not in CONTEXT)
+        / (len(metadata) - len(CONTEXT)),
     )

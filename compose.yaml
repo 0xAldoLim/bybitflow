@@ -26,5 +26,28 @@ services:
       interval: 30s
       timeout: 8s
       retries: 3
+  trainer:
+    profiles: [ml]
+    build:
+      context: .
+      target: trainer
+    init: true
+    restart: unless-stopped
+    command: [bybit-flow, ml, worker]
+    environment:
+      FLOW_DATA_DIR: /app/data
+      OMP_NUM_THREADS: "1"
+      OPENBLAS_NUM_THREADS: "1"
+    env_file:
+      - path: .env
+        required: false
+    volumes:
+      - research-data:/app/data
+    read_only: true
+    tmpfs: [/tmp:size=256m]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 2g
+    cpus: 1
 volumes:
   research-data:

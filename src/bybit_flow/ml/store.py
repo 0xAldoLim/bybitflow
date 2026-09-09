@@ -34,7 +34,12 @@ def migrate(db):
       id INTEGER PRIMARY KEY, at_ms INTEGER NOT NULL, model_id TEXT, action TEXT, payload TEXT);
     CREATE TABLE IF NOT EXISTS ml_holdouts(
       start_ms INTEGER NOT NULL, end_ms INTEGER NOT NULL, experiment_id TEXT PRIMARY KEY);
+    CREATE TABLE IF NOT EXISTS ml_predictions(
+      snapshot_id TEXT NOT NULL, model_id TEXT NOT NULL, at_ms INTEGER NOT NULL,
+      probability REAL NOT NULL, accepted INTEGER NOT NULL,
+      PRIMARY KEY(snapshot_id,model_id));
     INSERT OR IGNORE INTO schema_version VALUES(3);
+    INSERT OR IGNORE INTO schema_version VALUES(4);
     """)
     db.commit()
 

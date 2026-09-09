@@ -36,12 +36,25 @@ async function render(){
   document.querySelectorAll('nav a').forEach(a=>a.classList.toggle('active',a.hash==='#'+page));
   const titles={overview:'Market overview',watchlist:'Market scanner',signals:'Signal journal',research:'Research & experiments',journal:'Paper journal',health:'Data health',settings:'Desk settings',signal:'Signal detail',market:'Market detail'};
   titles.tradingview='TradingView gateway';
+  titles.ml='ML Research';
   $('#title').textContent=titles[page]||'Market overview'; let body='';
   if(page==='overview'){
    const metrics=[['ELIGIBLE MARKETS',data.scanner.eligible||0,'Dynamic liquidity-filtered universe'],['ACTIVE SETUPS',data.signals.filter(s=>!['EXPIRED','INVALIDATED','RESOLVED'].includes(s.state)).length,'Independent experimental families'],['RECORDED EVENTS',number(data.health.records_written),'This collector process'],['CALIBRATION','Pending','No claimed predictive probability']];
    body=`<div class="metrics">${metrics.map(m=>`<div class="metric"><label>${m[0]}</label><b>${m[1]}</b><small>${m[2]}</small></div>`).join('')}</div>`+panel('Priority watchlist',watchTable(data.watchlist.slice(0,8)),'RESEARCH RANK ≠ PROBABILITY')+panel('Recent setups',signalTable(data.signals.slice(0,8)),'4H → 1H → 15M');
   } else if(page==='watchlist') body=panel('Eligible markets',`<input id="filter" aria-label="Filter symbols" placeholder="Filter symbol…"><div id="watch-table">${watchTable(data.watchlist)}</div>`,'All paginated eligible contracts');
   else if(page==='signals')body=panel('Lifecycle journal',signalTable(data.signals),'No signal represents a user execution');
+  else if(page==='ml'){
+    const ml=await api('ml'), latest=ml.models[0];
+    body=panel('Champion and collection',json({champion:ml.champion||'None — no validated model',snapshots:ml.snapshots,labels:ml.labels,cycle:ml.cycle,drift:ml.drift}));
+    body+=panel('Model comparison',ml.models.length?table(['Model','Holdout N / clusters','Net R / interval','Brier','Approval blockers'],ml.models.map(m=>[escape(m.id.slice(0,12)),`${m.report.holdout.n} / ${m.report.holdout.effective_samples}`,`${number(m.report.holdout.net_expectancy_r)} / ${escape(m.report.holdout.ev_interval)}`,number(m.report.all_holdout.brier,4),escape(m.promotion_reasons.join('; '))])):empty('No trained models','Collect real candidate snapshots and resolved cost-aware labels, then run bybit-flow ml export and ml train. No synthetic test performance is shown.'));
+    if(latest){
+      body+=panel('Holdout reliability',table(['Probability bin','Count','Predicted','Observed'],latest.report.all_holdout.reliability.map(r=>[number(r.lower,1),r.count,number(r.predicted,3),number(r.observed,3)])),'OUT OF SAMPLE — NOT PROOF OF EDGE');
+      body+=panel('Feature importance',table(['Feature','Magnitude'],Object.entries(latest.importance).sort((a,b)=>Math.abs(b[1])-Math.abs(a[1])).slice(0,15).map(([k,v])=>[escape(k),number(v,4)])),'ASSOCIATION, NOT CAUSATION');
+      body+=panel('Family / direction / regime / symbol / tier',json(latest.report.breakdown));
+      body+=panel('Thresholds and validation trials',json({thresholds:latest.thresholds,trials:latest.report.experiments,walk_forward:latest.report.walk_forward}),'VALIDATION-TUNED, NOT HOLDOUT-TUNED');
+    }
+    body+=panel('Promotion / rollback history',json(ml.history));
+  }
   else if(page==='health')body=panel('Collection health',json(data.health))+panel('Scanner status',json(data.scanner));
   else if(page==='tradingview'){const tv=await api('tradingview');body=panel('Ingress and qualification',json({enabled:tv.enabled,sss_research:tv.sss_research,qualification:tv.qualification}))+panel('Durable event inbox',table(['Event','Received UTC','State','Result'],tv.queue.map(r=>[escape(r.event_id),utc(r.received_ms),escape(r.status),escape(r.result)])))+panel('How to connect','<p>Follow docs/TRADINGVIEW_SETUP.md for TradingView Premium, domain/HTTPS and Discord. Classified chart volume is not exchange taker-side data. Missing liquidity blocks strict SSS; opt-in proxy research is unsized and capped below SSS.</p>');}
   else if(page==='settings')body=panel('Configuration',json(await api('settings')))+panel('Manual portfolio snapshot',`<p class="muted">All crypto positions share one conservative correlation group. Snapshot expires after 24 hours.</p><textarea id="portfolio" aria-label="Portfolio JSON">${escape(JSON.stringify((await api('portfolio'))||{positions:[],daily_loss_fraction:0,weekly_loss_fraction:0},null,2))}</textarea><button id="save-portfolio">Save manual snapshot</button><p id="saved"></p>`);

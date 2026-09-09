@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, computed_field
 
 D = Decimal
 DAY = 86_400_000
@@ -106,3 +106,21 @@ class Signal(BaseModel):
     risk: dict = Field(default_factory=dict)
     gates: list[str] = Field(default_factory=list)
     coverage: dict = Field(default_factory=dict)
+    calibrated_probability: float | None = Field(None, ge=0, le=1)
+    probability_uncertainty: tuple[float, float] | None = None
+    expected_net_r: float | None = None
+    expected_net_r_uncertainty: tuple[float, float] | None = None
+    validation_status: str = "unvalidated"
+    model_version: str | None = None
+    feature_schema_version: str = "candidate-v2"
+    data_coverage: float | None = Field(None, ge=0, le=1)
+
+    @computed_field
+    @property
+    def raw_quality_score(self) -> float:
+        return self.quality
+
+    @computed_field
+    @property
+    def rejection_reasons(self) -> list[str]:
+        return self.gates

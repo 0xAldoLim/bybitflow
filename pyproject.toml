@@ -15,6 +15,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8.3,<10", "pytest-asyncio>=0.25,<2", "ruff>=0.11,<1"]
+ml = ["scikit-learn==1.9.0", "lightgbm==4.7.0", "scipy==1.18.1"]
 
 [project.scripts]
 bybit-flow = "bybit_flow.cli:main"

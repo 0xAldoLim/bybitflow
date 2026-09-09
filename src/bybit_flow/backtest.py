@@ -79,7 +79,7 @@ class PaperPosition:
                 self.exit_reason = "stop"
             elif self.sign * (price - self.signal.tp1) >= 0:
                 self.exit_reason = "tp1"
-            elif t >= ready + self.horizon_ms:
+            elif t >= self.signal.created_ms + self.horizon_ms:
                 self.exit_reason = "time_stop"
         if self.exit_reason:
             q = min(self.remaining, float(trade.size) * self.participation)

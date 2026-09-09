@@ -305,7 +305,7 @@ def evaluate(event, settings, liquidity=None, portfolio=None, at_ms=None):
     s.quality = round(sum(components.values()), 2)
     if proxy:
         s.quality = min(84, s.quality)  # Never use turnover to unlock high-conviction tiers.
-    s.raw_tier = tier(s.quality)
+    s.raw_tier = "F" if gates else tier(s.quality)
     s.final_tier = (
         "REJECTED"
         if gates
@@ -526,6 +526,9 @@ class Gateway:
                 if not native["available"] or direction * delta < 10:
                     signal.gates.append("required native executed delta missing or contradictory")
                     signal.final_tier, signal.state = "REJECTED", "PENDING CONFIRMATION"
+            from .ml.inference import apply as apply_ml
+
+            apply_ml(signal, self.settings, self.store, now_ms())
             self.store.signal(signal, "TradingView observation evaluated")
             self.store.put("tv_seen:" + signal.id, event.source_ms)
             if not signal.gates:

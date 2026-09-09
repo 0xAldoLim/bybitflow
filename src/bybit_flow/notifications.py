@@ -28,9 +28,23 @@ def embed(signal, dashboard_url):
 
     field(
         "Quality / probability",
-        f"{s.final_tier} · {s.quality:.1f}/100 (raw {s.raw_tier})\nUncalibrated",
+        f"{s.final_tier} · {s.quality:.1f}/100 (raw {s.raw_tier})\n"
+        + (
+            f"p {s.calibrated_probability:.1%} · cohort interval {s.probability_uncertainty}"
+            if s.validation_status == "validated" and s.calibrated_probability is not None
+            else "Uncalibrated"
+        ),
         True,
     )
+    if s.model_version:
+        field(
+            "ML evidence",
+            f"{s.model_version[:12]} · {s.validation_status}\n"
+            f"Net EV {s.expected_net_r if s.expected_net_r is not None else 'Unavailable'}R · "
+            f"interval {s.expected_net_r_uncertainty or 'Unavailable'}\n"
+            f"n {s.qualification.get('samples', 'N/A')} · clusters {s.qualification.get('effective_samples', 'N/A')}\n"
+            f"{s.evidence.get('ml', {}).get('explanation', 'No qualified model evidence')}",
+        )
     field("Setup / regime", f"{s.family}\n{s.regime}", True)
     field("Entry zone / invalidation", f"{s.zone[0]:g} – {s.zone[1]:g}\nStop {s.stop:g}", True)
     field(
@@ -90,7 +104,7 @@ def embed(signal, dashboard_url):
         "allowed_mentions": {"parse": []},
         "embeds": [
             {
-                "title": f"{s.final_tier if s.final_tier.startswith('SSS RESEARCH') else 'UNVALIDATED RESEARCH'} · {s.symbol} · {s.direction}",
+                "title": f"{s.final_tier if s.final_tier.startswith('SSS RESEARCH') or s.validation_status == 'validated' else 'UNVALIDATED RESEARCH'} · {s.symbol} · {s.direction}",
                 "description": f"Bybit linear perpetual · source {s.source} · 4H / 1H / 15M · UTC · {s.state}",
                 "url": f"{dashboard_url.rstrip('/')}/#signal/{s.id}",
                 "color": 0x4CC9A4 if s.direction == "LONG" else 0xEF7F86,
@@ -109,6 +123,8 @@ class Notifier:
         self.settings, self.store, self.transport = settings, store, transport
 
     async def send_research(self, signal, update=False):
+        if signal.validation_status == "validated":
+            return await self.send_public(signal, update)
         if not (
             self.settings.research_alerts
             or (self.settings.sss_research and signal.final_tier.startswith("SSS RESEARCH"))
@@ -186,6 +202,37 @@ class Notifier:
             )
         return status
 
-    async def send_public(self, signal):
-        # A future reviewed model release must implement this boundary; a config toggle cannot unlock it.
-        return "blocked: no validated deployment model"
+    async def send_public(self, signal, update=False):
+        from .ml.inference import delivery_eligible
+
+        if update:
+            sent = self.store.db.execute(
+                "SELECT 1 FROM outbox WHERE key=? AND status='sent'", (f"validated:{signal.id}:initial",)
+            ).fetchone()
+            if not sent or signal.state not in {"EXPIRED", "INVALIDATED", "RESOLVED"}:
+                return "blocked: no prior validated delivery or terminal update"
+        elif not delivery_eligible(signal, self.settings, self.store):
+            return "blocked: no validated deployment model"
+        secret = self.settings.discord_webhook.get_secret_value()
+        if not secret:
+            return "dry-run"
+        key = f"validated:{signal.id}:{signal.state if update else 'initial'}"
+        return await self.deliver(key, signal.id, embed(signal, self.settings.dashboard_url), secret)
+
+    async def send_operational(self, topic, details):
+        secret = self.settings.ops_webhook.get_secret_value()
+        if not secret:
+            return "disabled"
+        # Fixed summaries avoid accidentally forwarding arbitrary exception strings or secrets.
+        safe = {k: details[k] for k in ("status", "model_id", "n", "minimum") if k in details}
+        payload = {
+            "allowed_mentions": {"parse": []},
+            "embeds": [
+                {
+                    "title": "ML OPERATIONS · " + topic,
+                    "description": json.dumps(safe)[:1500],
+                    "footer": {"text": "Research only; no risk changes"},
+                }
+            ],
+        }
+        return await self.deliver(f"ml-ops:{topic}:{now_ms() // 86_400_000}", None, payload, secret)

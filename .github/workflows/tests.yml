@@ -14,7 +14,7 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
           cache: pip
-      - run: pip install -r requirements-dev.lock && pip install --no-deps -e .
+      - run: pip install -r requirements-dev.lock -r requirements-ml.lock && pip install --no-deps -e .
       - run: ruff check src tests examples
       - run: pytest -q
       - run: python examples/offline_research.py

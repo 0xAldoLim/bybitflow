@@ -122,6 +122,12 @@ def create_app(settings=None):
     async def index():
         return FileResponse(STATIC / "index.html")
 
+    @app.get("/api/ml")
+    async def ml_research(request: Request):
+        from .ml.registry import Registry
+
+        return Registry(request.app.state.store).summary()
+
     @app.post("/webhooks/tradingview")
     async def tradingview(request: Request):
         if request.app.state.gateway_task.done():

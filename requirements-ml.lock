@@ -1,0 +1,7 @@
+-r requirements.lock
+scikit-learn==1.9.0
+lightgbm==4.7.0
+scipy==1.18.1
+joblib==1.5.3
+threadpoolctl==3.6.0
+narwhals==2.26.0

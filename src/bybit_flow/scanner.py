@@ -425,6 +425,9 @@ class Scanner:
                 },
             )
             score(s, flow_ok, rate is not None)
+            from .ml.inference import apply as apply_ml
+
+            apply_ml(s, self.settings, self.store, now_ms())
             self.recorder.offer(
                 "features/signal",
                 s.symbol,
