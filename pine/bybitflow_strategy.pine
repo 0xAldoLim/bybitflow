@@ -1,0 +1,189 @@
+//@version=6
+strategy("BybitFlow TV research v1 — SIMULATION ONLY", overlay=true, max_bars_back=1000, pyramiding=0, commission_type=strategy.commission.percent, commission_value=0.055, slippage=2, process_orders_on_close=false, calc_on_every_tick=false)
+// Premium/Ultimate required. No exchange order connection. Standard 15-minute candles only.
+// HTF expressions are offset by one bar BEFORE lookahead_on. Pivots are used only after confirmation.
+ticks = input.int(100, "Footprint ticks per row (symbol-specific)", minval=1)
+imbalance = input.float(300, "Diagonal imbalance percent", minval=200)
+familyChoice = input.string("Both", "Family", options=["Both", "Reversal", "Continuation"])
+sendAlerts = input.bool(true, "Send research/lifecycle alert() events")
+feeBps = input.float(5.5, "Paper fee per side bps", minval=0)
+slipBps = input.float(2, "Paper slippage per side bps", minval=0)
+fundingBps = input.float(3, "Paper 4H funding reserve bps", minval=0)
+if timeframe.period != "15" or not chart.is_standard
+    runtime.error("Use standard 15-minute Bybit perpetual candles")
+
+regime() =>
+    a = ta.atr(14)
+    ma = ta.ema(close, 20)
+    travel = math.sum(math.abs(ta.change(close)), 20)
+    efficiency = travel > 0 ? math.abs(close - close[20]) / travel : 0
+    [(ma[1] - ma[6]) / a[1], efficiency[1]]
+
+setup() =>
+    ph = ta.pivothigh(high, 3, 3)
+    pl = ta.pivotlow(low, 3, 3)
+    lastHigh = ta.valuewhen(not na(ph), ph, 0)
+    lastLow = ta.valuewhen(not na(pl), pl, 0)
+    [time_close[1], high[1], low[1], close[1], close[2], lastHigh[2], lastLow[2], ta.atr(14)[1]]
+
+[slope4, eff4] = request.security(syminfo.tickerid, "240", regime(), lookahead=barmerge.lookahead_on)
+[setupTime, sh, sl, sc, priorClose, extHigh, extLow, atr1] = request.security(syminfo.tickerid, "60", setup(), lookahead=barmerge.lookahead_on)
+// Quote turnover is an approximation from daily chart base volume * close, NEVER depth/spread.
+[turnover7, dailyBars] = request.security(syminfo.tickerid, "D", [ta.median(volume * close, 7)[1], bar_index[1]], lookahead=barmerge.lookahead_on)
+internalHigh = ta.pivothigh(high, 2, 2)
+internalLow = ta.pivotlow(low, 2, 2)
+bosHigh = ta.valuewhen(not na(internalHigh), internalHigh, 0)
+bosLow = ta.valuewhen(not na(internalLow), internalLow, 0)
+// At the execution bar use the previously available level, never backdate a pivot to its wick.
+breakUp = close > bosHigh[1] and close[1] <= bosHigh[1]
+breakDown = close < bosLow[1] and close[1] >= bosLow[1]
+var int structureDirection = 0
+chochUp = breakUp and structureDirection == -1
+chochDown = breakDown and structureDirection == 1
+if barstate.isconfirmed
+    structureDirection := breakUp ? 1 : breakDown ? -1 : structureDirection
+atr15 = ta.atr(14)
+fvgUp = low > high[2] and math.abs(close[1] - open[1]) >= .7 * atr15[1]
+fvgDown = high < low[2] and math.abs(close[1] - open[1]) >= .7 * atr15[1]
+
+footprint fp = request.footprint(ticks, 70, imbalance)
+bool available = not na(fp)
+float buy = available ? fp.buy_volume() : na
+float sell = available ? fp.sell_volume() : na
+float delta = available ? fp.delta() : na
+float deltaPct = available and buy + sell > 0 ? 100 * delta / (buy + sell) : na
+float poc = na
+float vah = na
+float val = na
+int stackBuy = 0
+int stackSell = 0
+if available
+    volume_row p = fp.poc()
+    poc := (p.up_price() + p.down_price()) / 2
+    vah := fp.vah().up_price()
+    val := fp.val().down_price()
+    array<volume_row> rows = fp.rows()
+    int runBuy = 0
+    int runSell = 0
+    // Minimum opposing volume prevents near-zero denominators from creating conviction.
+    float floorVol = fp.total_volume() / math.max(1, array.size(rows)) * .1
+    if array.size(rows) >= 3
+        for i = 0 to array.size(rows) - 1
+            volume_row r = array.get(rows, i)
+            bool bi = false
+            bool si = false
+            if i > 0
+                bi := r.has_buy_imbalance() and array.get(rows, i - 1).sell_volume() >= floorVol
+            if i < array.size(rows) - 1
+                si := r.has_sell_imbalance() and array.get(rows, i + 1).buy_volume() >= floorVol
+            runBuy := bi ? runBuy + 1 : 0
+            runSell := si ? runSell + 1 : 0
+            stackBuy := math.max(stackBuy, runBuy)
+            stackSell := math.max(stackSell, runSell)
+var float cvd = 0
+if timeframe.change("D")
+    cvd := 0
+if barstate.isconfirmed
+    cvd := available ? nz(cvd) + delta : na
+
+longSweep = sl < extLow and sc > extLow
+shortSweep = sh > extHigh and sc < extHigh
+longContinuation = priorClose > extHigh and sl <= extHigh and sc > extHigh
+shortContinuation = priorClose < extLow and sh >= extLow and sc < extLow
+longRegime = slope4 > 0 and eff4 >= .2
+shortRegime = slope4 < 0 and eff4 >= .2
+longReversal = familyChoice != "Continuation" and longSweep
+shortReversal = familyChoice != "Continuation" and shortSweep
+longCont = familyChoice != "Reversal" and longContinuation
+shortCont = familyChoice != "Reversal" and shortContinuation
+longTrigger = longRegime and breakUp and (longReversal or longCont)
+shortTrigger = shortRegime and breakDown and (shortReversal or shortCont)
+trappedBuyers = available[1] and deltaPct[1] >= 20 and high[1] > bosLow[1] and close < bosLow[1]
+trappedSellers = available[1] and deltaPct[1] <= -20 and low[1] < bosHigh[1] and close > bosHigh[1]
+
+num(float x) =>
+    na(x) ? "null" : str.tostring(x, "#.########")
+var string activeId = ""
+var string lastEmittedId = ""
+var int activeSide = 0
+var float activeEntry = na
+var float activeStop = na
+var float activeTarget = na
+var int activeStart = na
+var bool invalidated = false
+var bool openedThisBar = false
+openedThisBar := false
+
+envelope(string kind, string id, string extra) =>
+    '{"schema_version":1,"strategy_version":"tv-1","event_id":"' + id + '-' + kind + '-' + str.tostring(time_close) + '","signal_id":"' + id + '","symbol":"' + syminfo.tickerid + '","event":"' + kind + '","source_ms":' + str.tostring(timenow) + ',"bar_close_ms":' + str.tostring(time_close) + ',"timeframe":"15","price":' + num(close) + extra + '}'
+
+if barstate.isconfirmed
+    if activeId != "" and time_close > activeStart
+        bool stopped = activeSide == 1 ? low <= activeStop : high >= activeStop
+        bool targeted = activeSide == 1 ? high >= activeTarget : low <= activeTarget
+        bool timed = time_close - activeStart >= 4 * 60 * 60 * 1000
+        if stopped and not invalidated
+            if sendAlerts
+                alert(envelope("invalidate", activeId, ""), alert.freq_all)
+            invalidated := true
+        if stopped or targeted or timed
+            // OHLC ambiguity: stop-first. Gap stops fill at worse open; all outcomes illustrative.
+            float exitPrice = stopped ? (activeSide == 1 ? math.min(open, activeStop) : math.max(open, activeStop)) : targeted ? activeTarget : close
+            float costs = activeEntry * (2 * feeBps + 2 * slipBps + fundingBps) / 10000
+            float netR = (activeSide * (exitPrice - activeEntry) - costs) / math.abs(activeEntry - activeStop)
+            if sendAlerts
+                alert(envelope("outcome", activeId, ',"outcome_net_r":' + num(netR)), alert.freq_all)
+            activeId := ""
+        else if sendAlerts
+            alert(envelope("heartbeat", activeId, ""), alert.freq_all)
+    if activeId == "" and (longTrigger or shortTrigger) and time_close < setupTime + 60 * 60 * 1000
+        activeSide := longTrigger ? 1 : -1
+        bool reversal = activeSide == 1 ? longReversal : shortReversal
+        string family = reversal ? "tv_sweep_reclaim" : "tv_continuation"
+        float level = activeSide == 1 ? (reversal ? extLow : extHigh) : (reversal ? extHigh : extLow)
+        float bos = activeSide == 1 ? bosHigh[1] : bosLow[1]
+        activeEntry := close
+        activeStop := math.round_to_mintick(activeSide == 1 ? sl - .15 * atr1 : sh + .15 * atr1)
+        float risk = math.abs(activeEntry - activeStop)
+        activeTarget := math.round_to_mintick(activeEntry + activeSide * 3 * risk)
+        activeStart := time_close
+        invalidated := false
+        activeId := syminfo.ticker + '-' + family + '-' + str.tostring(setupTime) + '-' + (activeSide == 1 ? "LONG" : "SHORT")
+        string obs = ',"observation":{"direction":"' + (activeSide == 1 ? "LONG" : "SHORT") + '","family":"' + family + '","setup_ms":' + str.tostring(setupTime)
+        obs += ',"entry":' + num(activeEntry) + ',"stop":' + num(activeStop) + ',"tp1":' + num(activeTarget) + ',"tp2":' + num(math.round_to_mintick(activeEntry + activeSide * 4 * risk))
+        obs += ',"atr":' + num(atr1) + ',"regime_slope_atr":' + num(slope4) + ',"regime_efficiency":' + num(eff4)
+        obs += ',"level":' + num(level) + ',"setup_low":' + num(sl) + ',"setup_high":' + num(sh) + ',"setup_close":' + num(sc) + ',"prior_close":' + num(priorClose) + ',"bos_level":' + num(bos)
+        obs += ',"fvg_low":' + num(fvgUp ? high[2] : fvgDown ? high : na) + ',"fvg_high":' + num(fvgUp ? low : fvgDown ? low[2] : na)
+        obs += ',"buy_volume":' + num(buy) + ',"sell_volume":' + num(sell) + ',"stacked_buy":' + str.tostring(stackBuy) + ',"stacked_sell":' + str.tostring(stackSell)
+        obs += ',"poc":' + num(poc) + ',"val":' + num(val) + ',"vah":' + num(vah) + ',"cvd":' + num(cvd)
+        obs += ',"prior_buy_volume":' + num(buy[1]) + ',"prior_sell_volume":' + num(sell[1]) + ',"prior_high":' + num(high[1]) + ',"prior_low":' + num(low[1])
+        obs += ',"turnover_median_7d":' + num(turnover7) + ',"continuous_days":' + str.tostring(dailyBars) + ',"footprint_source":"' + (available ? "tradingview_intrabar_classification" : "unavailable") + '"}'
+        if sendAlerts and activeId != lastEmittedId
+            alert(envelope("setup", activeId, obs), alert.freq_all)
+        openedThisBar := activeId != lastEmittedId
+        if openedThisBar
+            lastEmittedId := activeId
+        else
+            activeId := ""
+
+plot(poc, "15M footprint PoC", color=color.orange, style=plot.style_circles)
+plot(vah, "15M value area high", color=color.new(color.teal, 60))
+plot(val, "15M value area low", color=color.new(color.teal, 60))
+plot(activeId != "" ? activeStop : na, "Structure invalidation", color=color.red, style=plot.style_linebr)
+plot(deltaPct, "Classified delta %", display=display.data_window)
+plot(cvd, "Classified CVD since UTC session/gap", display=display.data_window)
+plot(stackBuy, "Stacked buy", display=display.data_window)
+plot(stackSell, "Stacked sell", display=display.data_window)
+plotshape(chochUp, "CHoCH up", shape.triangleup, location.belowbar, color=color.teal, size=size.tiny)
+plotshape(chochDown, "CHoCH down", shape.triangledown, location.abovebar, color=color.red, size=size.tiny)
+plotshape(trappedBuyers, "Potential trapped buyers", shape.xcross, location.abovebar, color=color.orange, size=size.tiny)
+plotshape(trappedSellers, "Potential trapped sellers", shape.xcross, location.belowbar, color=color.aqua, size=size.tiny)
+bgcolor(not available ? color.new(color.gray, 90) : na, title="Footprint unavailable — no execution confirmation")
+
+// Strategy Tester broker emulator only. These are NOT exchange orders.
+// Tester entries fill next bar, unlike the indicator's explicit close-entry paper approximation.
+if openedThisBar and available and (activeSide == 1 ? deltaPct >= 10 and stackBuy >= 3 : deltaPct <= -10 and stackSell >= 3)
+    strategy.entry("paper", activeSide == 1 ? strategy.long : strategy.short)
+    strategy.exit("plan", "paper", stop=activeStop, limit=activeTarget)
+if strategy.position_size != 0 and time_close - activeStart >= 4 * 60 * 60 * 1000
+    strategy.close("paper", comment="4H time stop")

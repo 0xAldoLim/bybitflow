@@ -1,5 +1,44 @@
 # Implemented, experimental, unavailable
 
+## TradingView feature-branch milestone (2026-09-09 UTC)
+
+Implemented and exercised with synthetic/offline tests:
+
+- Authenticated, bounded TradingView ingress; source time, symbol, schema, price and ID validation;
+  durable SQLite v2 queue, deduplication/conflict rejection, restart recovery and queue expiry.
+- Source-isolated lifecycle processing, mock Discord initial/invalidation cards, paper outcomes,
+  heartbeat loss and setup expiry. The existing exchange scanner cannot process TV signals.
+- Measured native seven-factor scoring replaces fixed fractions. Source-attributed fundamental
+  diligence coverage and fresh cross-market observations can earn points. Quality is not probability.
+- Separate, named TV score: regime 20, structure 25, classified footprint 30, risk 15, observed
+  liquidity 10. Correlated structure features and trapped-participant heuristics do not add votes.
+- Opt-in strict `SSS RESEARCH · UNCALIBRATED`; no validated label or predictive percentage.
+- Opt-in TradingView turnover-proxy research: independent of Bybit connectivity, unsized, capped
+  at 84, missing spread/depth clearly stated. Proxy data never unlocks strict SSS.
+- Historical TV observation/actual-OHLC replay for reversal and continuation, separately by side,
+  cost assumptions, fixed chronological partitions, embargo and sparse calibration abstention.
+- Gateway status dashboard and domain/HTTPS/TradingView/Discord setup documentation.
+- One-shot TradingView connection-test script and isolated non-trade notification workflow.
+- Rebuilt Docker startup/auth smoke, Caddy/Compose config validation and desktop/mobile browser
+  checks passed. Final suite: 54 tests. See VERIFICATION.md for exact scope and remaining checks.
+
+Code added or changed but requiring further external/operational verification:
+
+- Pine v6 indicator and simulation-only strategy use official footprint APIs, closed HTF offsets,
+  confirmed pivots, sweep/reclaim, break/CHoCH, displacement FVG, per-bar PoC/VA, stacks and CVD.
+  **No TradingView compiler/account was available.** Provider history revisions remain possible.
+- Closed-bar candle caching, pending-setup refresh lane and incremental subscription rotation.
+  Retained symbol state is preserved in unit tests; full live rotation/load is not tested here.
+- Optional fresh Bybit observations can augment TV cards; required native confirmation fails closed.
+  This host and Docker resolve Bybit to a Telkomsel filtering certificate; no bypass was attempted.
+
+Still pending: actual TradingView compilation and real alert receipt; real Discord message
+delivery; public DNS/ACME deployment; real historical datasets/studies. No paid account, domain,
+VPS or Discord webhook was supplied. The synthetic delivery test does not satisfy real delivery.
+Full-session/prior-week footprint profiles and exchange-native absorption cannot be inferred from
+TradingView's per-bar classified volume. All lower historical milestone limitations below remain
+unless explicitly superseded here. See TRADINGVIEW_SETUP.md and CONNECTIVITY_AUDIT.md.
+
 This release is a runnable first milestone with subsequent research components. “Implemented”
 means code exists and the listed behavior is locally exercised, not a validated financial edge.
 See VERIFICATION.md for the actual execution record.

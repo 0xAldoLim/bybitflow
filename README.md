@@ -4,6 +4,13 @@ A self-hosted, alerts-only crypto perpetual research desk. Public Bybit V5 data 
 liquidity scanner and a small, prioritized trade/book collector. FastAPI serves a restrained,
 dark dashboard; SQLite, compressed raw JSONL and normalized Parquet preserve observations.
 
+**TradingView-first milestone:** authenticated durable webhook ingress, optional Bybit confirmation,
+Discord research cards, invalidation/expiration and paper outcomes. Start with the complete
+[TradingView Premium, domain/HTTPS and Discord setup guide](docs/TRADINGVIEW_SETUP.md).
+It includes a Bybit-independent proxy research mode and opt-in **SSS RESEARCH · UNCALIBRATED**
+with stricter observed-liquidity gates. Neither is a validated SSS prediction.
+See [connectivity diagnosis](docs/CONNECTIVITY_AUDIT.md) for this host's ISP certificate mismatch.
+
 **This is a functional research milestone, not a validated trading system.** No strategy has
 demonstrated an edge. Every candidate is unvalidated; probabilities display **Uncalibrated**.
 Public S/SS/SSS alerts are deliberately locked in code. There is no exchange authentication,
@@ -37,7 +44,8 @@ cannot multiply the evidence. Provisional markets can be recorded while warming 
 qualify research alerts. The dashboard distinguishes provisional from eligible rows.
 
 At least one complete 15-minute execution window after subscription is also needed. Reconnects,
-rotation, stale books, queue overflow, or unavailable inputs reset or reject confirmation.
+stale books, queue overflow, or unavailable inputs reset or reject confirmation.
+Subscription rotation preserves retained symbols' streams; new symbols warm up independently.
 `scan-once` performs discovery and ranking then exits; use `serve` with scanning enabled for
 continuous recording and signal lifecycle monitoring. Run only one writer process per data directory.
 
@@ -53,6 +61,8 @@ unlock public alerts. No webhook was contacted during development.
 ```
 
 This prints a synthetic formatting example using `EXAMPLEUSDT`, never a market recommendation.
+TradingView scripts add potential trapped-buyer/seller failed-auction heuristics. These are
+context, not claims to observe actual positions, and do not add duplicate score credit.
 Discord delivery uses durable deduplication and at-most-once attempts. Ambiguous timeouts and
 rate-limited attempts need manual reconciliation; exactly-once delivery cannot be guaranteed
 by a webhook without an atomic idempotency facility. See [operations](docs/OPERATIONS.md).

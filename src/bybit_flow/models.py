@@ -86,6 +86,9 @@ class Signal(BaseModel):
     version: str = "rules-0.1.0"
     created_ms: int
     expires_ms: int
+    source: Literal["bybit", "tradingview"] = "bybit"
+    trigger_expires_ms: int | None = None
+    holding_deadline_ms: int | None = None
     state: State = "WATCHLIST"
     regime: str
     entry: float

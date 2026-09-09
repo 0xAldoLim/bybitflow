@@ -1,5 +1,43 @@
 # Verification record
 
+## TradingView feature branch — 2026-09-09 UTC
+
+- Final Python suite: **54 passed**, about 6–7 seconds, with the same two third-party
+  Starlette/AnyIO deprecation warnings. Ruff, format check, JS syntax and `pip check` pass.
+- Synthetic end-to-end HTTP test: dedicated authentication → durable SQLite inbox → recomputed
+  structure/flow/liquidity/risk gates → mock Discord SSS research card → invalidation update →
+  paper journal. Duplicate/conflicting IDs, stale queue recovery, missing footprint/depth, proxy
+  caps, mirrored shorts, component sensitivity and heartbeat loss are covered.
+- Native score test reaches 100 only with all synthetic component observations; probability stays
+  null. Removing fundamental/cross-market observations removes the corresponding points.
+- Separate connection-test event produces only a **CONNECTION TEST · NOT A TRADE** mock card;
+  it cannot create a signal or paper outcome. Nothing was sent to a real Discord webhook.
+- Reversal/continuation historical replay tests use explicitly synthetic observations and candles;
+  costs reduce results and missing footprint is never reconstructed. These are software tests,
+  not historical performance evidence or calibration approval.
+- Incremental subscription rotation retains unchanged tape/book objects; closed-candle caching
+  refreshes on timeframe boundaries. Live exchange rotation and broad-market load remain untested.
+- Chromium rendering passed at desktop 1440 (scroll width 1425) and mobile 390 (scroll width 390),
+  including watchlist, signals, **TradingView gateway**, research, journal, health and settings.
+  An earlier startup attempt timed out; a longer readiness window and retry passed.
+- Updated Docker image built from Python 3.12-slim:
+  `sha256:68f987c6565d1a23633a447838f1f65b194d7a1a80b36d879163740dc15575b6`.
+  Initial dependency download timed out; verified downloads with longer timeout/build cache
+  succeeded. A connection interruption required resuming the cached build.
+- Docker smoke: read-only filesystem, disposable tmpfs data, loopback port, UID/GID 10001;
+  unauthenticated dashboard 401, authenticated health 200, TV worker alive, independent ingress
+  auth 401, authenticated malformed event 422, configuration secrets omitted. Idle memory about
+  64 MiB; this is **not** a loaded scanner benchmark.
+- Caddy configuration validated; combined Compose configuration validated with synthetic values.
+  Caddy image pinned to the tested manifest digest. No real DNS/ACME certificate was provisioned.
+- Host and Docker Bybit TLS diagnosis identified a Telkomsel hostname/expired-certificate response;
+  verification was not disabled. Details: CONNECTIVITY_AUDIT.md.
+
+Not performed: Pine compilation in TradingView, live TradingView alert receipt, real Discord
+delivery, public domain deployment, actual historical family studies, native-flow collection
+on this blocked connection or calibrated probability validation. No account credentials/domain/
+Discord webhook were supplied. Those are explicitly pending review/deployment checks.
+
 Date: 2026-09-08. This file reports software checks, not strategy performance.
 
 ## Follow-up verification

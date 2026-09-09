@@ -35,7 +35,7 @@ async def main():
         )
         try:
             async with httpx.AsyncClient() as http:
-                for _ in range(50):
+                for _ in range(300):
                     try:
                         tabs = (await http.get("http://127.0.0.1:9223/json")).json()
                         if tabs:
@@ -86,7 +86,15 @@ async def main():
                     shot = await call("Page.captureScreenshot", {"format": "png"})
                     (directory / f"{label}.png").write_bytes(base64.b64decode(shot["data"]))
                     print(label, layout)
-                for route in ("watchlist", "signals", "research", "journal", "health", "settings"):
+                for route in (
+                    "watchlist",
+                    "signals",
+                    "tradingview",
+                    "research",
+                    "journal",
+                    "health",
+                    "settings",
+                ):
                     await call("Runtime.evaluate", {"expression": f"location.hash='{route}'"})
                     await asyncio.sleep(0.3)
                     result = (

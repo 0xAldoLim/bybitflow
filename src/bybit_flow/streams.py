@@ -23,11 +23,50 @@ class Streams:
         self.connected = False
         self.task = None
         self.last_message = 0
+        self.ws = None
+        self.subscription_changes = {}
+
+    def topics(self, symbols):
+        return [
+            topic
+            for s in symbols
+            for topic in (
+                f"publicTrade.{s}",
+                f"orderbook.{self.settings.book_depth}.{s}",
+                f"allLiquidation.{s}",
+            )
+        ]
 
     async def select(self, symbols):
         symbols = tuple(sorted(set(symbols)))
         if symbols == self.selected:
             return
+        if self.ws and self.connected:
+            added, removed = set(symbols) - set(self.selected), set(self.selected) - set(symbols)
+            for s in added:
+                self.books[s] = Book()
+                self.tapes[s] = Tape(self.settings.tape_max_trades)
+                self.liquidations[s] = deque(maxlen=10000)
+            self.selected = symbols
+            for s in removed:
+                self.books.pop(s, None)
+                self.tapes.pop(s, None)
+                self.liquidations.pop(s, None)
+            try:
+                if removed:
+                    await self.ws.send(json.dumps({"op": "unsubscribe", "args": self.topics(removed)}))
+                if added:
+                    request_id = str(now_ms())
+                    self.subscription_changes[request_id] = list(added)
+                    await self.ws.send(
+                        json.dumps({"op": "subscribe", "req_id": request_id, "args": self.topics(added)})
+                    )
+                self.recorder.offer(
+                    "control/rotation", "ALL", now_ms(), {"added": sorted(added), "removed": sorted(removed)}
+                )
+                return
+            except Exception:
+                self.invalidate("subscription rotation failed")
         await self.stop()
         self.selected = symbols
         self.books = {s: Book() for s in symbols}
@@ -99,6 +138,8 @@ class Streams:
                     open_timeout=20,
                     ping_interval=None,
                 ) as ws:
+                    self.ws = ws
+                    self.subscription_changes.clear()
                     args = [
                         topic
                         for s in self.selected
@@ -120,15 +161,18 @@ class Streams:
                             if not msg.get("success"):
                                 raise ValueError("Subscription rejected")
                             self.connected = True
+                            added = self.subscription_changes.pop(msg.get("req_id"), None)
+                            confirmed_symbols = added if added is not None else list(self.selected)
                             self.recorder.offer(
                                 "control/subscribed",
                                 "ALL",
                                 received,
-                                {"symbols": list(self.selected)},
+                                {"symbols": confirmed_symbols},
                                 received,
                             )
-                            for tape in self.tapes.values():
-                                tape.reset(received)
+                            for symbol in confirmed_symbols:
+                                if symbol in self.tapes:
+                                    self.tapes[symbol].reset(received)
                             self.store.put(
                                 "stream_health",
                                 {"connected": True, "at_ms": received, "symbols": list(self.selected)},
@@ -145,6 +189,7 @@ class Streams:
                 await asyncio.sleep(delay + random.random())
                 delay = min(60, delay * 2)
             finally:
+                self.ws = None
                 if heartbeat:
                     heartbeat.cancel()
                     with contextlib.suppress(asyncio.CancelledError):

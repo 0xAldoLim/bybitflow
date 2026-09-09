@@ -28,9 +28,51 @@ class Scanner:
         self.streams = Streams(settings, store, recorder)
         self.notifier = Notifier(settings, store)
         self.context = {}
+        self.candle_cache = {}
         self.tasks = []
         self.scan_lock = asyncio.Lock()
         self.status = {"state": "disabled", "at_ms": now_ms(), "eligible": 0, "errors": 0}
+
+    async def cached_candles(self, symbol, interval, asof, limit):
+        duration = {"D": DAY, "240": 14_400_000, "60": 3_600_000, "15": 900_000}[interval]
+        key, boundary = (symbol, interval), asof // duration
+        cached = self.candle_cache.get(key)
+        if cached and cached[0] == boundary:
+            return cached[1]
+        bars = await self.api.candles(symbol, interval, asof, limit=limit)
+        validate_bars(bars, asof)
+        self.candle_cache[key] = (boundary, bars)
+        return bars
+
+    def pending_symbols(self):
+        return list(
+            dict.fromkeys(
+                r[0]
+                for r in self.store.db.execute(
+                    "SELECT symbol FROM signals WHERE state NOT IN ('INVALIDATED','EXPIRED','RESOLVED') "
+                    "AND json_extract(payload,'$.source') IS NOT 'tradingview' AND "
+                    "json_extract(payload,'$.expires_ms')>? ORDER BY created_ms",
+                    (now_ms(),),
+                )
+            )
+        )
+
+    async def refresh_pending(self):
+        # Fast lane: a broad-universe sweep must not age pending setups silently.
+        while True:
+            for symbol in self.pending_symbols():
+                c = self.context.get(symbol)
+                if not c:
+                    continue
+                try:
+                    now = now_ms()
+                    h4 = await self.cached_candles(symbol, "240", now, 160)
+                    h1 = await self.cached_candles(symbol, "60", now, 200)
+                    m15 = await self.cached_candles(symbol, "15", now, 120)
+                    self.context[symbol] = c | {"h4": h4, "h1": h1, "m15": m15, "asof": now}
+                except Exception:
+                    self.context.pop(symbol, None)
+            await asyncio.sleep(30)
 
     def record_membership(self, evaluated_ms, symbol, eligible, payload):
         available = now_ms()
@@ -44,6 +86,12 @@ class Scanner:
         updates = []
         for ticker in body["result"]["list"]:
             symbol = ticker["symbol"]
+            if symbol in self.context:
+                d = self.context[symbol]["derivatives"]
+                d.update(
+                    funding_rate=float(ticker["fundingRate"]) if ticker.get("fundingRate") else None,
+                    ticker_observed_ms=int(body["time"]),
+                )
             history = SpreadHistory(self.store.get("spreads:" + symbol, []))
             history.add(
                 int(body["time"]),
@@ -99,8 +147,8 @@ class Scanner:
                             asof, inst.symbol, False, {"reasons": reasons, "metadata": raw}
                         )
                         continue
-                    daily = await self.api.candles(inst.symbol, "D", asof, limit=31)
-                    validate_bars(daily, asof)
+                    daily = await self.cached_candles(inst.symbol, "D", now_ms(), 31)
+                    validate_bars(daily, now_ms())
                     if len(daily) < 30 or asof - daily[-1].end >= DAY:
                         reasons.append("30 contiguous completed trading days not verified")
                     turnover = median(c.turnover for c in daily[-7:]) if len(daily) >= 7 else 0
@@ -139,9 +187,9 @@ class Scanner:
                         continue
                     # Refresh asof per instrument: a full-universe sweep can take several minutes.
                     evaluated = now_ms()
-                    h4 = await self.api.candles(inst.symbol, "240", evaluated, limit=160)
-                    h1 = await self.api.candles(inst.symbol, "60", evaluated, limit=200)
-                    m15 = await self.api.candles(inst.symbol, "15", evaluated, limit=120)
+                    h4 = await self.cached_candles(inst.symbol, "240", evaluated, 160)
+                    h1 = await self.cached_candles(inst.symbol, "60", evaluated, 200)
+                    m15 = await self.cached_candles(inst.symbol, "15", evaluated, 120)
                     f4, f1 = candle_features(h4, evaluated), candle_features(h1, evaluated)
                     if evaluated - m15[-1].end > 960_000 or evaluated - h1[-1].end > 3_660_000:
                         raise ValueError("Stale closed candles")
@@ -208,6 +256,7 @@ class Scanner:
                     new_context[inst.symbol] = dict(
                         instrument=inst, h4=h4, h1=h1, m15=m15, derivatives=derivatives, asof=evaluated
                     )
+                    self.context[inst.symbol] = new_context[inst.symbol]
                     self.store.put(
                         "market:" + inst.symbol,
                         {
@@ -234,10 +283,12 @@ class Scanner:
                         "symbol_scan_failed", extra={"symbol": inst.symbol, "error_type": type(exc).__name__}
                     )
             ranked.sort(key=lambda x: x["rank_score"], reverse=True)
-            self.context = new_context
+            self.context = {s: c for s, c in self.context.items() if now_ms() - c["asof"] <= 960_000}
+            self.candle_cache = {k: v for k, v in self.candle_cache.items() if k[0] in tickers}
             self.store.put("watchlist", ranked)
             core = [s for s in self.settings.core_watchlist if s in new_context]
-            selected = (core + [r["symbol"] for r in ranked if r["symbol"] not in core])[
+            pinned = self.pending_symbols()
+            selected = list(dict.fromkeys(pinned + core + [r["symbol"] for r in ranked]))[
                 : self.settings.deep_symbols
             ]
             await self.streams.select(selected)
@@ -257,6 +308,8 @@ class Scanner:
         now = now_ms()
         for payload in self.store.signals(2000):
             s = Signal.model_validate(payload)
+            if s.source != "bybit":
+                continue  # TradingView has its own source freshness and lifecycle worker.
             if s.state in TERMINAL:
                 continue
             was_alerted = s.state == "ALERTED"
@@ -335,6 +388,8 @@ class Scanner:
             s.gates.extend(normal_spread["reasons"])
             if not flow_ok:
                 s.gates.append("executed order flow did not confirm family trigger")
+            if now - end > 900_000:
+                s.gates.append("15-minute execution trigger expired")
             if end < s.evidence["trigger_bar_end"]:
                 s.gates.append("execution confirmation predates setup")
             if mid is None or not s.zone[0] <= mid <= s.zone[1]:
@@ -364,6 +419,8 @@ class Scanner:
                 fundamentals=facts,
                 cross_market={
                     x: self.store.get("market:" + x, {}).get("h4", {}).get("regime", "unavailable")
+                    if now - self.store.get("market:" + x, {}).get("asof", 0) < 960_000
+                    else "unavailable"
                     for x in ("BTCUSDT", "ETHUSDT")
                 },
             )
@@ -417,6 +474,7 @@ class Scanner:
         if self.settings.scan_enabled:
             self.tasks.append(asyncio.create_task(self.scan_loop()))
             self.tasks.append(asyncio.create_task(self.quote_loop()))
+            self.tasks.append(asyncio.create_task(self.refresh_pending()))
 
     async def stop(self):
         for task in self.tasks:

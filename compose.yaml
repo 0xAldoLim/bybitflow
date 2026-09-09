@@ -5,7 +5,9 @@ services:
     restart: unless-stopped
     ports:
       - "127.0.0.1:8000:8000"
-    env_file: .env
+    env_file:
+      - path: .env
+        required: false
     environment:
       FLOW_DATA_DIR: /app/data
       FLOW_ADMIN_TOKEN: ${FLOW_ADMIN_TOKEN:?Set a long random dashboard password in .env}

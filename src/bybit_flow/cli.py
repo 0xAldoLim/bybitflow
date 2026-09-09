@@ -31,6 +31,11 @@ def main():
     replay.add_argument("paths", nargs="+", type=Path)
     research = sub.add_parser("research")
     research.add_argument("candles", type=Path)
+    tv = sub.add_parser("tv-research")
+    tv.add_argument("events", type=Path)
+    tv.add_argument("candles", type=Path)
+    tv.add_argument("--symbol", required=True)
+    sub.add_parser("tv-export")
     backup = sub.add_parser("backup")
     backup.add_argument("target", type=Path)
     sub.add_parser("retention-plan")
@@ -62,6 +67,21 @@ def main():
                         "segments": plan,
                     },
                     indent=2,
+                )
+            )
+        elif args.command == "tv-export":
+            for row in store.db.execute("SELECT payload FROM tv_inbox ORDER BY received_ms,rowid"):
+                print(row[0])
+        elif args.command == "tv-research":
+            from .research import save_experiment
+            from .tv_research import family_replay, read_candles, read_events
+
+            result = family_replay(
+                read_events(args.events), read_candles(args.candles), settings, args.symbol
+            )
+            print(
+                save_experiment(
+                    store, "TV family replay", settings.public(), result, [args.events, args.candles]
                 )
             )
         elif args.command == "sample-alert":

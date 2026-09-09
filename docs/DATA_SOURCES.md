@@ -8,6 +8,19 @@ measured by the downloader and retained manifest, not inferred from the existenc
 
 ## Public REST
 
+TradingView sources and host/Docker diagnosis were additionally audited on 2026-09-09 UTC.
+See [connectivity evidence](CONNECTIVITY_AUDIT.md) and [account setup](TRADINGVIEW_SETUP.md).
+The [official Pine footprint API](https://www.tradingview.com/pine-script-docs/concepts/other-timeframes-and-data/#requestfootprint)
+uses intrabar price-based buy/sell classification, returns `na` when unavailable, permits one
+footprint request per script and requires Premium/Ultimate. It is not exchange taker-side tape.
+`ticks_per_row` is a positive simple integer; VA defaults to 70 and imbalance to 300 percent.
+[Footprint/volume-row methods](https://www.tradingview.com/pine-script-docs/language/type-system/#footprints)
+provide per-bar volumes, rows, delta, PoC, value-area bounds and diagonal imbalance flags.
+Our scripts neither backfill actual liquidation/depth records from these values nor claim
+full-session/prior-week profile coverage. Provider history revisions remain an explicit limit.
+
+## Bybit REST details
+
 Fixed HTTPS origin `https://api.bybit.com`. No authenticated methods. All calls use GET.
 
 | Endpoint | Use and audited limitations |

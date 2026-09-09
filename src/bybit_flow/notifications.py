@@ -16,7 +16,15 @@ def embed(signal, dashboard_url):
     fields = []
 
     def field(name, value, inline=False):
-        fields.append({"name": name, "value": str(value)[:850] or "Unavailable", "inline": inline})
+        remaining = 5000 - sum(len(f["name"]) + len(f["value"]) for f in fields) - len(name)
+        if remaining > 0:
+            fields.append(
+                {
+                    "name": name,
+                    "value": (str(value) or "Unavailable")[: min(850, remaining)],
+                    "inline": inline,
+                }
+            )
 
     field(
         "Quality / probability",
@@ -36,7 +44,7 @@ def embed(signal, dashboard_url):
         True,
     )
     field(
-        "Executed flow · 15M window",
+        "TradingView classified volume · 15M" if s.source == "tradingview" else "Executed flow · 15M window",
         f"Delta {f.get('delta_pct', 'N/A')}% · CVD {f.get('cvd', 'N/A')} base\n"
         f"Stack buy/sell {f.get('stacked_buy', 'N/A')}/{f.get('stacked_sell', 'N/A')} · "
         f"absorption L/S {f.get('absorption_long', 'N/A')}/{f.get('absorption_short', 'N/A')}\n"
@@ -60,14 +68,30 @@ def embed(signal, dashboard_url):
         f"Binance unavailable · {len(s.evidence.get('fundamentals', []))} source-attributed asset facts",
     )
     field("Data / why / invalidation", f"{s.coverage}\n{s.reason}\n{s.invalidation}")
+    if s.source == "tradingview":
+        field(
+            "Potential trapped participants · heuristic",
+            s.evidence.get("trapped_participants", "Unavailable"),
+        )
+        field("Research limitations", s.risk.get("warning", "Uncalibrated; no profitability claim"))
+        native = s.evidence.get("optional_native", {})
+        if native.get("available"):
+            nf, nd = native.get("flow", {}), native.get("derivatives", {})
+            field(
+                "Optional actual Bybit evidence",
+                f"Executed delta {nf.get('delta_pct')}% · CVD {nf.get('cvd')}\n"
+                f"Absorption L/S {nf.get('absorption_long')}/{nf.get('absorption_short')}\n"
+                f"OI change {nd.get('oi_change_pct', 'N/A')}% · funding {nd.get('funding_rate', 'N/A')}\n"
+                f"Actual liquidation events: {len(native.get('liquidations', []))}",
+            )
     if s.gates:
         field("Rejections", "; ".join(s.gates))
     return {
         "allowed_mentions": {"parse": []},
         "embeds": [
             {
-                "title": f"UNVALIDATED RESEARCH · {s.symbol} · {s.direction}",
-                "description": f"Bybit linear perpetual · 4H / 1H / 15M · UTC session · {s.state}",
+                "title": f"{s.final_tier if s.final_tier.startswith('SSS RESEARCH') else 'UNVALIDATED RESEARCH'} · {s.symbol} · {s.direction}",
+                "description": f"Bybit linear perpetual · source {s.source} · 4H / 1H / 15M · UTC · {s.state}",
                 "url": f"{dashboard_url.rstrip('/')}/#signal/{s.id}",
                 "color": 0x4CC9A4 if s.direction == "LONG" else 0xEF7F86,
                 "timestamp": iso(s.created_ms),
@@ -85,7 +109,10 @@ class Notifier:
         self.settings, self.store, self.transport = settings, store, transport
 
     async def send_research(self, signal, update=False):
-        if not self.settings.research_alerts:
+        if not (
+            self.settings.research_alerts
+            or (self.settings.sss_research and signal.final_tier.startswith("SSS RESEARCH"))
+        ):
             return "disabled"
         secret = self.settings.research_webhook.get_secret_value()
         if not secret:
@@ -106,10 +133,37 @@ class Notifier:
             if recent:
                 return "cooldown"
         payload = embed(signal, self.settings.dashboard_url)
+        return await self.deliver(key, signal.id, payload, secret)
+
+    async def send_connection_test(self, event_id, source_ms):
+        if not self.settings.research_alerts:
+            return "disabled"
+        secret = self.settings.research_webhook.get_secret_value()
+        if not secret:
+            return "dry-run"
+        payload = {
+            "allowed_mentions": {"parse": []},
+            "embeds": [
+                {
+                    "title": "CONNECTION TEST · NOT A TRADE",
+                    "description": "Authenticated TradingView gateway test. No setup, price recommendation, probability or execution.",
+                    "timestamp": iso(source_ms),
+                    "footer": {"text": event_id},
+                }
+            ],
+        }
+        return await self.deliver("connection-test:" + event_id, None, payload, secret)
+
+    async def deliver(self, key, signal_id, payload, secret):
+        u = urlparse(secret)
+        if u.scheme != "https" or u.hostname != "discord.com" or not u.path.startswith("/api/webhooks/"):
+            raise ValueError("Expected official Discord HTTPS webhook")
+        if self.store.db.execute("SELECT 1 FROM outbox WHERE key=?", (key,)).fetchone():
+            return "already-attempted"
         with self.store.db:
             self.store.db.execute(
                 "INSERT INTO outbox VALUES(?,?,?,?,?,?)",
-                (key, signal.id, "sending", json.dumps(payload), None, now_ms()),
+                (key, signal_id, "sending", json.dumps(payload), None, now_ms()),
             )
         # Discord has no atomic idempotency key. An ambiguous network failure is NOT retried:
         # reconcile it manually; at-most-once attempts prevent duplicate signal cards.

@@ -110,6 +110,16 @@ def replay(rows, settings, families=None):
             for subscribed in payload["symbols"]:
                 tapes.setdefault(subscribed, Tape(settings.tape_max_trades)).reset(now)
             continue
+        if source == "control/rotation":
+            for removed in payload["removed"]:
+                if removed in books:
+                    books[removed].reset()
+                if removed in tapes:
+                    tapes[removed].reset(now)
+                for position in positions:
+                    if position.signal.symbol == removed and position.exit_ms is None:
+                        position.data_gaps.append("subscription removed during outcome window")
+            continue
         if source == "rest/instruments-info":
             for raw in payload["response"]["result"]["list"]:
                 inst = parse_eligible_metadata(raw, settings, now)

@@ -42,6 +42,11 @@ class Store:
         CREATE TABLE IF NOT EXISTS segments(id TEXT PRIMARY KEY, at_ms INTEGER, payload TEXT);
         CREATE TABLE IF NOT EXISTS outbox(key TEXT PRIMARY KEY, signal_id TEXT, status TEXT,
             payload TEXT, message_id TEXT, updated_ms INTEGER);
+        CREATE TABLE IF NOT EXISTS tv_inbox(event_id TEXT PRIMARY KEY, digest TEXT NOT NULL,
+            received_ms INTEGER NOT NULL, payload TEXT NOT NULL, status TEXT NOT NULL,
+            result TEXT);
+        CREATE INDEX IF NOT EXISTS tv_pending ON tv_inbox(status,received_ms);
+        INSERT OR IGNORE INTO schema_version VALUES(2);
         """)
         self.db.commit()
 
