@@ -49,6 +49,9 @@ class Store:
         INSERT OR IGNORE INTO schema_version VALUES(2);
         """)
         self.db.commit()
+        from .ml.store import migrate
+
+        migrate(self.db)
 
     def put(self, key, value):
         with self.db:
@@ -59,6 +62,13 @@ class Store:
         return json.loads(r[0]) if r else default
 
     def signal(self, signal, reason="evaluation"):
+        from .ml.store import FeatureStore
+
+        # Capture before lifecycle overwrites; both accepted and rejected decisions survive.
+        features = FeatureStore(self)
+        features.capture(signal, max(now_ms(), signal.created_ms), "generation")
+        if signal.evidence.get("score_components"):
+            features.capture(signal, max(now_ms(), signal.created_ms), "decision")
         old = self.db.execute("SELECT state FROM signals WHERE id=?", (signal.id,)).fetchone()
         with self.db:
             self.db.execute(

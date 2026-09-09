@@ -25,6 +25,13 @@ class PaperPosition:
     exit_ms: int | None = None
     fills: list = field(default_factory=list)
     data_gaps: list = field(default_factory=list)
+    mfe_r: float = 0
+    mae_r: float = 0
+    funding_timestamps: set = field(default_factory=set)
+
+    def __post_init__(self):
+        if self.requested_qty <= 0 or not 0 < self.horizon_ms <= 14_400_000:
+            raise ValueError("Positive quantity and at most four-hour paper horizon required")
 
     @property
     def sign(self):
@@ -45,6 +52,11 @@ class PaperPosition:
         ready = self.signal.created_ms + self.latency_ms
         if t < ready:
             return
+        if self.quantity:
+            distance = abs(self.signal.entry - self.signal.stop)
+            excursion = self.sign * (price - self.entry) / distance if distance else 0
+            self.mfe_r = max(self.mfe_r, excursion)
+            self.mae_r = min(self.mae_r, excursion)
         can_enter = t <= min(ready + self.fill_window_ms, self.signal.expires_ms) and self.exit_reason is None
         if (
             can_enter
@@ -81,8 +93,14 @@ class PaperPosition:
                 self.exit_ms = t
 
     def on_funding(self, timestamp, rate, mark):
-        if self.quantity and self.remaining and timestamp >= self.fills[0]["at_ms"]:
+        if (
+            self.quantity
+            and self.remaining
+            and timestamp >= self.fills[0]["at_ms"]
+            and timestamp not in self.funding_timestamps
+        ):
             self.funding += self.sign * self.remaining * mark * rate
+            self.funding_timestamps.add(timestamp)
 
     def on_mark(self, timestamp, mark, leverage=3, maintenance=0.01):
         if self.remaining and self.sign * (mark - self.entry) / self.entry <= -(1 / leverage - maintenance):
@@ -103,6 +121,16 @@ class PaperPosition:
             direction=self.signal.direction,
             regime=self.signal.regime,
             entry_ms=self.signal.created_ms,
+            actual_entry_ms=self.fills[0]["at_ms"] if self.quantity else None,
+            planned_entry=self.signal.entry,
+            simulated_entry=self.entry if self.quantity else None,
+            stop=self.signal.stop,
+            target=self.signal.tp1,
+            mfe_r=self.mfe_r,
+            mae_r=self.mae_r,
+            classification=("win" if net > 1e-10 else "loss" if net < -1e-10 else "breakeven")
+            if net is not None
+            else "incomplete",
             exit_ms=self.exit_ms,
             cluster=self.signal.created_ms // 604_800_000,
             quantity=self.quantity,

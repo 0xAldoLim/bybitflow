@@ -20,6 +20,7 @@ def tier(score):
             (65, "B"),
             (50, "C"),
             (35, "D"),
+            (20, "E"),
             (0, "F"),
         )
         if score >= cutoff
