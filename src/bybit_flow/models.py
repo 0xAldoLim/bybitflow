@@ -33,6 +33,9 @@ class Trade:
     side: str
     price: Decimal
     size: Decimal
+    exchange: str = "bybit"
+    exchange_symbol: str | None = None
+    aggressor_side_quality: str = "exchange_reported"
 
     def __post_init__(self):
         if self.side not in {"Buy", "Sell"} or self.price <= 0 or self.size <= 0:
@@ -40,6 +43,12 @@ class Trade:
 
 
 class Instrument(BaseModel):
+    exchange: str = "bybit"
+    exchange_symbol: str | None = None
+    quote: str = "USDT"
+    contract_multiplier: Decimal = Decimal("1")
+    quantity_unit: str = "base"
+    contract_type: str = "linear_perpetual"
     symbol: str
     base: str
     settle: str
@@ -86,7 +95,7 @@ class Signal(BaseModel):
     version: str = "rules-0.1.0"
     created_ms: int
     expires_ms: int
-    source: Literal["bybit", "tradingview"] = "bybit"
+    source: Literal["bybit", "binance", "okx", "tradingview"] = "bybit"
     trigger_expires_ms: int | None = None
     holding_deadline_ms: int | None = None
     state: State = "WATCHLIST"

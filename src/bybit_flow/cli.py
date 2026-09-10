@@ -17,6 +17,11 @@ def main():
     serve.add_argument("--host", default="127.0.0.1")
     serve.add_argument("--port", type=int, default=8000)
     sub.add_parser("scan-once")
+    doctor = sub.add_parser("doctor", help="Public connectivity and local operational diagnostics")
+    doctor.add_argument("--json", action="store_true")
+    market = sub.add_parser("test-market", help="Genuine public REST and trade WebSocket smoke test")
+    market.add_argument("--exchange", choices=["binance", "bybit", "okx"])
+    sub.add_parser("test-discord", help="Send a connection test, never a trade signal")
     candles = sub.add_parser("download-candles")
     candles.add_argument("symbol")
     candles.add_argument("--interval", choices=["15", "60", "240", "D"], default="60")
@@ -56,7 +61,9 @@ def main():
         return
     store = Store(settings.data_dir)
     try:
-        if args.command == "ml":
+        if args.command in {"doctor", "test-market", "test-discord"}:
+            asyncio.run(diagnostic_command(args, settings, store))
+        elif args.command == "ml":
             from .ml.cli import run
 
             run(args.arguments, settings, store)
@@ -139,6 +146,29 @@ def main():
             asyncio.run(network_command(args, settings, store))
     finally:
         store.close()
+
+
+async def diagnostic_command(args, settings, store):
+    from .diagnostics import discord_test, doctor, human_report
+    from .exchanges import VENUES, market_probe
+
+    if args.command == "doctor":
+        report = await doctor(settings, store)
+        print(json.dumps(report, indent=2) if args.json else human_report(report))
+    elif args.command == "test-discord":
+        print(json.dumps(await discord_test(settings, store), indent=2))
+    else:
+        names = (
+            (args.exchange,)
+            if args.exchange
+            else (VENUES if settings.market_source == "auto" else (settings.market_source,))
+        )
+        reports = await asyncio.gather(*(market_probe(n, settings) for n in names))
+        for report in reports:
+            store.put("probe:" + report["exchange"], report)
+        print(json.dumps(reports, indent=2))
+        if not any(r["status"] == "HEALTHY" for r in reports):
+            raise SystemExit(1)
 
 
 async def network_command(args, settings, store):

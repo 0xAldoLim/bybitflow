@@ -6,6 +6,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
+    market_source: Literal["auto", "binance", "bybit", "okx"] = "auto"
     ml_enabled: bool = False
     ml_filter_research: bool = False
     validated_alert_tiers: list[Literal["SSS", "SS", "S"]] = Field(default_factory=lambda: ["SSS"])
