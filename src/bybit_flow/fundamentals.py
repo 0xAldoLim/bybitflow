@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field, HttpUrl, model_validator
 
 
 class Fact(BaseModel):
-    asset: str = Field(min_length=1, max_length=30, pattern=r"^[A-Z0-9]+$")
+    asset: str = Field(min_length=1, max_length=30, pattern=r"^[A-Z0-9]+(?:_[A-Z0-9]+)*$")
     category: str = Field(max_length=80)
     definition: str = Field(min_length=10, max_length=1000)
     value: str = Field(max_length=2000)

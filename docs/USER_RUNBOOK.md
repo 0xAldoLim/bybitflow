@@ -14,6 +14,16 @@ Keep collection running through spread and execution warmup. Missing reviewed
 asset facts still cap quality below the SSS research threshold. Do not add filler
 facts or lower gates to force an alert.
 
+For research alerts across SSS, SS, S, A, B, C and D, explicitly enable
+`FLOW_RESEARCH_ALERTS=true` in private `.env` and recreate the services.
+This broader mode has no minimum quality score but still requires a confirmed,
+eligible setup passing every mandatory gate. Missing asset facts reduce score;
+they do not by themselves block every lower-grade research alert. Validated
+public alerts and ML deployment remain separately gated.
+
+Reviewed asset identifiers may include underscore-separated components, such as
+`FIGR_HELOC`. This preserves source identity; it does not add a tradable instrument.
+
 If ML reports non-monotonic recording receipt time, preserve the original segment
 and manifest. Clock synchronization cannot repair past bytes. Any audited quarantine
 must retain the original hashes and expose the missing-chain gap during replay;

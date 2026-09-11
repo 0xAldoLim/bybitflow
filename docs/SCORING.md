@@ -1,5 +1,14 @@
 # Evidence scores and qualification
 
+Research grades span the full 0–100 range: SSS >=95, SS >=90, S >=85,
+A >=75, B >=65, C >=50, D >=0. D includes the former E/F score bands;
+numeric component weights and mandatory rejection gates are unchanged.
+With `FLOW_RESEARCH_ALERTS=true`, confirmed setups across all grades can send
+uncalibrated research cards. `FLOW_SSS_RESEARCH=true` alone remains the narrower
+SSS-only opt-in. These grades are evidence scores, not win probabilities.
+Discord cards show the grade, entry zone, stop, TP1 and TP2. Lower-grade cards
+remain subject to confirmation, freshness, risk, cooldown and deduplication.
+
 `native-evidence-2` retains the original weights. The former fixed fractions capped quality at
 83. Current contributions change with observations and have direct unit tests, including a
 fully populated synthetic 100-point case. This proves software reachability, not the market

@@ -1,5 +1,35 @@
 # Verification record
 
+## Broad research grades — 2026-09-11
+
+The operator explicitly requested SSS–D alerts across 100–0 instead of SSS-only
+delivery. Numeric scoring weights and mandatory gates were preserved. D now
+covers scores below 50, replacing the previous E/F bands. Research Discord titles
+include grade and UNCALIBRATED; entry, stop and both targets remain present.
+Private configuration enables broader research delivery. Compound fact symbols
+such as FIGR_HELOC retain their original spelling in both API and form validation.
+
+The isolated suite passed 108 tests with two dependency deprecation warnings.
+Boundary tests covered every grade, A/D mock delivery, price-plan fields and the
+continuing validated-public block. A compound-symbol test checked acceptance and
+rejection of malformed identifiers. These mocked notifications are not proof of
+a genuine live strategy signal or future profitability.
+
+Both images rebuilt and started. Authenticated health returned 200; settings
+confirmed research_alerts=true, sss_research=true, ml_enabled=false and
+ml_filter_research=false. Fresh OKX BTC book/trade events and increasing recording
+were observed. Ruff lint/format, JavaScript syntax and Python compilation passed.
+The local fact API stored/read back 48 entries across CoinGecko's numbered top 10:
+BTC, ETH, USDT, BNB, XRP, USDC, SOL, TRX, FIGR_HELOC and ZEC. This includes nine
+assets with five category observations, two supported FIGR_HELOC categories and
+one explicit unresolved-evidence entry, which adds no qualifying category points.
+Original BTC/ETH entries were retained; no research datasets or facts entered Git.
+
+The separate ML monitor again reported non-monotonic receipt time in later
+recordings; 28 snapshots and zero labels/models were observed. This remains an
+ML processing limitation, not an alert-grade threshold. No successful learning,
+validated probability or genuine research-card delivery is claimed by this update.
+
 ## Windows operator deployment — 2026-09-11 UTC
 
 ### Follow-up recovery verification

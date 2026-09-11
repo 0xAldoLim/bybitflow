@@ -63,6 +63,23 @@ def test_pit_membership_and_facts(settings):
     store.close()
 
 
+def test_asset_fact_preserves_compound_market_symbol():
+    fact = Fact(
+        asset="FIGR_HELOC",
+        category="economic_purpose",
+        definition="Source-reviewed token identity",
+        value="Fixture only",
+        source="https://example.org/fact",
+        known_ms=100,
+        effective_ms=100,
+        expires_ms=200,
+    )
+    assert fact.asset == "FIGR_HELOC"
+    for invalid in ("../BTC", "<BTC>", "_BTC", "BTC__ETH"):
+        with pytest.raises(ValueError):
+            Fact(**(fact.model_dump() | {"asset": invalid}))
+
+
 async def test_discord_deduplicates_and_omits_mentions(settings, signal):
     from pydantic import SecretStr
 

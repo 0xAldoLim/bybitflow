@@ -13,6 +13,13 @@ def iso(ms):
 
 def embed(signal, dashboard_url):
     s, f, d, r = signal, signal.evidence.get("flow", {}), signal.evidence.get("derivatives", {}), signal.risk
+    from .scoring import tier
+
+    title_tier = (
+        s.final_tier
+        if s.final_tier.startswith("SSS RESEARCH") or s.validation_status == "validated"
+        else f"{tier(s.quality)} RESEARCH · UNCALIBRATED"
+    )
     fields = []
 
     def field(name, value, inline=False):
@@ -117,7 +124,7 @@ def embed(signal, dashboard_url):
         "allowed_mentions": {"parse": []},
         "embeds": [
             {
-                "title": f"{s.final_tier if s.final_tier.startswith('SSS RESEARCH') or s.validation_status == 'validated' else 'UNVALIDATED RESEARCH'} · {s.symbol} · {s.direction}",
+                "title": f"{title_tier} · {s.symbol} · {s.direction}",
                 "description": f"Linear perpetual · source {s.source} · 4H / 1H / 15M · UTC · {s.state}",
                 "url": f"{dashboard_url.rstrip('/')}/#signal/{s.id}",
                 "color": 0x4CC9A4 if s.direction == "LONG" else 0xEF7F86,
