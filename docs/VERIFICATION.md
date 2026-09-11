@@ -1,6 +1,6 @@
 # Verification record
 
-## Exchange-native milestone — 2026-09-10 UTC
+## Exchange-native milestone — 2026-09-10–11 UTC
 
 This section supersedes the TV-first runtime descriptions below. It reports executed
 software checks and real external observations separately; no financial performance is
@@ -49,7 +49,8 @@ inferred from either.
 
 ### Real external connectivity and historical data
 
-- Host and final Docker live Binance/Bybit REST+trade WS probes did **not** establish
+- Host and final Docker live Binance/Bybit REST+trade WS probes (including the final
+  September 11 UTC Docker rerun) did **not** establish
   connectivity. REST reported certificate/connect errors (Bybit also timed out in Docker);
   Binance/Bybit WS reported certificate-verification errors.
 - OKX REST failed; its normalized trade probe could not acquire required contract metadata.
