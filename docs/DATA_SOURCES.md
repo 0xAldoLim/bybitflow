@@ -1,5 +1,17 @@
 # Source and schema audit
 
+## Current native sources — 2026-09-10
+
+Start with [USER_RUNBOOK.md](USER_RUNBOOK.md); venue schemas and endpoints are audited in
+[MULTI_EXCHANGE.md](MULTI_EXCHANGE.md). TradingView sections below are optional legacy only.
+Binance aggregate archives use
+`https://data.binance.vision/data/futures/um/daily/aggTrades/{symbol}/{symbol}-aggTrades-{date}.zip`
+plus `.CHECKSUM`. SHA-256, bounded ZIP contents, CSV schema, UTC millisecond dates and
+monotonic execution IDs/times are verified before base-unit Parquet conversion. Provider
+corrections are possible; retain hashes and collection dates. See the
+[official archive definitions](https://github.com/binance/binance-public-data).
+Archives supply no historical DOM, liquidations or point-in-time instrument membership.
+
 Audit date: 2026-09-08. Official pages inspected via web browsing. Direct CLI attempts to
 `api.bybit.com` and `public.bybit.com` encountered TLS certificate hostname mismatches in
 the development environment; verification was NOT disabled. No successful live acquisition

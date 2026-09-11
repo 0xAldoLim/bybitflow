@@ -1,5 +1,15 @@
 # Research protocol and definitions
 
+## Native-source update — 2026-09-10
+
+[SELF_HOSTED_ORDERFLOW.md](SELF_HOSTED_ORDERFLOW.md) contains current native definitions
+and limits; [USER_RUNBOOK.md](USER_RUNBOOK.md) lists actual promotion gates. Raw score ≥95
+can produce opt-in SSS RESEARCH only after all gates. It is not a calibrated probability.
+The implemented champion gate requires 78 weekly clusters even with lower-grade alerts;
+older 52-cluster SS discussion below does not override that stricter policy. Source-separated
+frozen-candidate labels support native recordings; full strategy replay remains Bybit-only.
+Multi-venue observations earn zero predictive score credit without OOS evidence.
+
 ## ML extension, 2026-09-09
 
 The new [ML research guide](ML_RESEARCH.md) supersedes historical statements below that fold
@@ -84,7 +94,8 @@ future reviewed deployment artifact, not claims that sample counts alone prove r
 - SMC/order-flow/derivatives/fundamental ablations on the same timestamps/universe and cost
   assumptions. Missing actual features prevent that ablation, not candle proxies.
 - SSS additionally requires raw quality >=95, all core coverage, no single-regime dependence,
-  and independent review. The current scoring/coverage cap cannot reach it.
+  and independent review. Raw quality may reach it with complete evidence; validated
+  qualification remains separate and has not been established.
 
 Implemented tools: clustered descriptive statistics, expanding-window score-bin estimation,
 Brier evaluation, fixed 60/20/20 OHLCV partitions and development-only ATR sensitivity. Full

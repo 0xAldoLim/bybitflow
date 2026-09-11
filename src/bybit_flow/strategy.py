@@ -97,6 +97,12 @@ def candidates(instrument, h4, h1, m15, asof, families=FAMILIES):
                     },
                 )
             )
+    for signal in plans:
+        signal.source = instrument.exchange
+        signal.evidence["source_exchange"] = instrument.exchange
+        signal.evidence["exchange_symbol"] = instrument.exchange_symbol or instrument.symbol
+        if instrument.exchange != "bybit":
+            signal.id = hashlib.sha256((instrument.exchange + ":" + signal.id).encode()).hexdigest()[:24]
     return plans
 
 

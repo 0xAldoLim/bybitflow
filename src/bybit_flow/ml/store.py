@@ -57,7 +57,12 @@ class FeatureStore:
         ).fetchone()
         if old:
             return old[0]
-        row = snapshot(signal, at_ms, stage, self.store.membership_asof(signal.symbol, at_ms))
+        membership = self.store.membership_asof(signal.symbol, at_ms)
+        if membership:
+            details = json.loads(membership["payload"])
+            if details.get("exchange", "bybit") != signal.source:
+                membership = None  # Another venue's current liquidity is not this candidate's history.
+        row = snapshot(signal, at_ms, stage, membership)
         ident = digest(row)
         with self.db:
             self.db.execute(
@@ -107,8 +112,19 @@ class FeatureStore:
             result.append({**s, "label": label, "label_available_ms": row[0]})
         return result
 
-    def export(self, asof_ms, policy="prints-v1", stage="decision"):
+    def export(self, asof_ms, policy="prints-v1", stage="decision", source=None):
+        from . import SCHEMA_VERSION
+
         rows = self.dataset(asof_ms, policy, stage)
+        rows = [
+            r
+            for r in rows
+            if r["schema_version"] == SCHEMA_VERSION and (source is None or r["source"] == source)
+        ]
+        if len({r["source"] for r in rows}) > 1:
+            raise ValueError(
+                "Multiple source methodologies: export with --source; never pool venues silently"
+            )
         if not rows:
             raise ValueError("No complete resolved candidate labels; nothing fabricated")
         ident = digest(rows)

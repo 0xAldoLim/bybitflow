@@ -365,7 +365,12 @@ class Gateway:
 
         scanner, now = self.scanner, now_ms()
         missing = {"available": False, "reason": "Bybit collector unavailable or incomplete"}
-        if not scanner or not scanner.recorder.healthy or not scanner.streams.connected:
+        if (
+            not scanner
+            or getattr(scanner, "exchange", "bybit") != "bybit"
+            or not scanner.recorder.healthy
+            or not scanner.streams.connected
+        ):
             return None, missing
         c = scanner.context.get(event.native_symbol)
         book = scanner.streams.books.get(event.native_symbol)

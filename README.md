@@ -1,177 +1,100 @@
-# Bybit Flow
+# BybitFlow
 
-A self-hosted, alerts-only crypto perpetual research desk. Public Bybit V5 data feeds a broad
-liquidity scanner and a small, prioritized trade/book collector. FastAPI serves a restrained,
-dark dashboard; SQLite, compressed raw JSONL and normalized Parquet preserve observations.
+Self-hosted, public-data crypto perpetual research and Discord alerts. No TradingView,
+Pine Script, GoCharting, domain, exchange keys or live order execution is required.
 
-**TradingView-first milestone:** authenticated durable webhook ingress, optional Bybit confirmation,
-Discord research cards, invalidation/expiration and paper outcomes. Start with the complete
-[TradingView Premium, domain/HTTPS and Discord setup guide](docs/TRADINGVIEW_SETUP.md).
-It includes a Bybit-independent proxy research mode and opt-in **SSS RESEARCH · UNCALIBRATED**
-with stricter observed-liquidity gates. Neither is a validated SSS prediction.
-See [connectivity diagnosis](docs/CONNECTIVITY_AUDIT.md) for this host's ISP certificate mismatch.
-
-**This is a functional research milestone, not a validated trading system.** No strategy has
-demonstrated an edge. Every candidate is unvalidated; probabilities display **Uncalibrated**.
-Public S/SS/SSS alerts require a statistically qualified, manually approved registry artifact;
-none exists. There is no exchange authentication,
-order endpoint, execution module, or order button.
-
-## Run locally
-
-Python 3.12+:
+**Start here: [USER_RUNBOOK.md](docs/USER_RUNBOOK.md)** — exact Windows 11 and Ubuntu/VPS
+setup, Discord, environment settings, health checks, warmup, ML, maintenance and recovery.
 
 ```sh
-git clone git@github.com:0xAldoLim/bybitflow.git
+git clone https://github.com/0xAldoLim/bybitflow.git
 cd bybitflow
+git switch main
+git pull --ff-only origin main
+# Windows PowerShell: Copy-Item .env.example .env
+cp .env.example .env
+# Edit .env: set a random FLOW_ADMIN_TOKEN and your local FLOW_RESEARCH_WEBHOOK.
+# Opt-in SSS research: FLOW_SSS_RESEARCH=true; no probability or proven edge.
+docker compose up -d --build
+docker compose exec desk bybit-flow doctor
+docker compose exec desk bybit-flow test-market
+docker compose exec desk bybit-flow test-discord
+```
+
+Open http://127.0.0.1:8000; username `research`, password `FLOW_ADMIN_TOKEN`.
+Keep webhook/password values out of chat and Git. No real webhook is bundled.
+
+## What runs
+
+Public exchange data → venue normalization/recording → closed 4H/1H/15M features →
+four deterministic setup families → native footprint confirmation → risk gates →
+separate quality/ML qualification → Discord → lifecycle and counterfactual paper labels.
+
+`FLOW_MARKET_SOURCE=auto` tests Binance, Bybit and OKX in that order and keeps a
+healthy primary. Fixed `binance`, `bybit` and `okx` modes are available. `multi`
+adds independent core-symbol collectors; price/spread dispersion and aligned delta
+comparison are informational, with zero unvalidated score credit. Source changes
+reset continuity. TLS verification is always enabled.
+
+Existing SMC, risk, replay, recorder and ML modules are preserved. Missing history or
+stale books block dependent signals. An empty dashboard or hours/days without signals
+can be correct. Trade-side footprint is never fabricated from candle direction.
+
+## Research, not proven performance
+
+`SSS RESEARCH · UNCALIBRATED` requires raw quality ≥95 plus every mandatory gate.
+It is explicitly opt-in. Quality is not probability. A raw 98 is not a 98% win rate.
+Validated grades require a qualifying approved artifact; none has been established.
+Current paper labels use assumed costs and cannot alone satisfy the verified-cost
+promotion requirement. No financial results, fills or probabilities are fabricated.
+
+Optional training runs separately:
+
+```sh
+docker compose --profile ml up -d --build
+docker compose exec desk bybit-flow ml status
+```
+
+The worker resolves recorded candidates every 15 minutes and attempts a challenger
+weekly when data permits. Training uses logistic/LightGBM, independent calibration,
+purged chronological folds, bounded threshold trials and an untouched holdout.
+See the runbook before enabling inference or considering manual model approval.
+
+## Documentation and verification
+
+- [Operator runbook](docs/USER_RUNBOOK.md)
+- [Architecture, algorithms and actual limitations](docs/SELF_HOSTED_ORDERFLOW.md)
+- [Venue schemas, official references and source modes](docs/MULTI_EXCHANGE.md)
+- [Current implementation status](docs/STATUS.md)
+- [Executed verification, separate from live compatibility](docs/VERIFICATION.md)
+- [ML research and promotion protocol](docs/ML_RESEARCH.md)
+- [Research definitions](docs/RESEARCH.md) and [source audit](docs/DATA_SOURCES.md)
+
+This development network has failed verified TLS connections to exchange endpoints.
+Synthetic payload tests do not prove live compatibility. Real Discord delivery
+requires your locally configured webhook and confirmation in your channel.
+
+## Optional legacy chart integration
+
+Preserved TV gateway, chart-research commands and Pine files are **not on the required
+runtime path**. Do not buy a subscription or domain to run this application.
+[Legacy integration documentation](docs/TRADINGVIEW_SETUP.md) applies only if you
+deliberately enable that separate integration. Its classified footprint is not native tape.
+
+## Local Python development
+
+Python 3.12+; Docker is the recommended cross-platform operator path.
+
+```sh
 python -m venv .venv
 .venv/bin/pip install -r requirements-dev.lock
 .venv/bin/pip install --no-deps -e .
-cp .env.example .env
+.venv/bin/pip install -r requirements-ml.lock
+.venv/bin/pytest -q
+.venv/bin/ruff check src tests examples
 .venv/bin/bybit-flow serve
 ```
 
-Open http://127.0.0.1:8000. The initial empty dashboard is intentional: no prices or research
-results are fabricated. Set `FLOW_SCAN_ENABLED=true` in `.env` and restart to collect public
-market data. A full-universe scan can take minutes at the conservative request budget. It
-discovers every page, checks 30 completed daily bars and seven-day median turnover, then
-downloads 4H/1H/15M candles and derivatives context for liquid instruments. Stage B subscribes
-to at most eight eligible symbols, including eligible BTC/ETH core symbols.
-
-Normal spread requires at least 12 observed five-minute buckets (about an hour of warmup),
-with at least 80% time-bucket coverage over a rolling six-hour window. The median must be
-within five bps and p90 within ten bps. Quotes are polled once per minute; repeated messages
-cannot multiply the evidence. Provisional markets can be recorded while warming up but cannot
-qualify research alerts. The dashboard distinguishes provisional from eligible rows.
-
-At least one complete 15-minute execution window after subscription is also needed. Reconnects,
-stale books, queue overflow, or unavailable inputs reset or reject confirmation.
-Subscription rotation preserves retained symbols' streams; new symbols warm up independently.
-`scan-once` performs discovery and ranking then exits; use `serve` with scanning enabled for
-continuous recording and signal lifecycle monitoring. Run one collector/API and at most one
-separate ML worker per data directory; their small metadata writes share SQLite WAL.
-
-## Notifications and risk
-
-Set a **separate research-channel** `FLOW_RESEARCH_WEBHOOK` and `FLOW_RESEARCH_ALERTS=true`
-to enable explicitly labeled unvalidated research cards. Default operation sends nothing.
-`FLOW_DISCORD_WEBHOOK` is reserved for approved-model alerts; configuring it does not
-unlock public alerts. No webhook was contacted during development.
-
-```sh
-.venv/bin/bybit-flow sample-alert
-```
-
-This prints a synthetic formatting example using `EXAMPLEUSDT`, never a market recommendation.
-TradingView scripts add potential trapped-buyer/seller failed-auction heuristics. These are
-context, not claims to observe actual positions, and do not add duplicate score credit.
-Discord delivery uses durable deduplication and at-most-once attempts. Ambiguous timeouts and
-rate-limited attempts need manual reconciliation; exactly-once delivery cannot be guaranteed
-by a webhook without an atomic idempotency facility. See [operations](docs/OPERATIONS.md).
-
-Sizing uses stop distance plus estimated costs. Defaults: 0.25% account risk, 1.5% daily loss
-limit, 4% weekly loss limit, 0.75% combined correlated risk, 3× illustrative leverage ceiling,
-2R minimum net planned reward:risk. Fees are **assumptions**, initially 5.5 bps per side,
-2 bps slippage per side, and a conservative funding reserve. Set actual fee assumptions in
-configuration. An optional `FLOW_EQUITY` enables rounded quantity and margin calculations;
-then a fresh manual portfolio snapshot is required in Settings. Stops and estimated losses
-are not guaranteed; the margin stress check is not an exact Bybit liquidation calculation.
-
-## Reproducible research
-
-Commands use actual public data when reachable. Current metadata never becomes historical
-metadata. Archive-only studies cannot qualify an order-flow strategy or a historical universe.
-
-```sh
-# Historical candles, paginated backwards and excluding open candles.
-.venv/bin/bybit-flow download-candles BTCUSDT --interval 60 --days 180
-# Use the exact file printed by the downloader.
-.venv/bin/bybit-flow research data/BTCUSDT-60-<timestamp>.parquet
-
-# Actual official daily trades; no order book is manufactured from these.
-.venv/bin/bybit-flow download-trades LINKUSDT 2024-01-01
-.venv/bin/bybit-flow aggregate-trades data/archives/LINKUSDT2024-01-01.trades.parquet --minutes 60
-
-# Replay recorded raw envelopes in receipt order, verifying hashes and segment continuity.
-.venv/bin/bybit-flow replay data/segments/<segment>.jsonl.gz
-
-.venv/bin/pytest -q
-.venv/bin/ruff check src tests
-```
-
-`research` runs a separate OHLCV-only ATR baseline with fixed 60/20/20 chronological partitions,
-development-only ATR sensitivity, next-bar entry, adverse fees/slippage, funding reserve, and
-pessimistic ambiguous-bar handling. It includes a labeled gross price-return benchmark.
-Recording manifests link to their predecessor. Omitted or legacy unchained intermediate
-segments become explicit replay gaps. Files are streamed one at a time to bound open handles.
-`replay` feeds real recorded observations through the same `candidates`, `confirm`, candle
-features, footprint and book algorithms used live. Replay coverage and cost limitations are
-explicit; it is not yet a full-fidelity account simulator. Experiments retain parameters, input
-SHA-256 hashes, code hash, commit, outcome definitions, and results in immutable JSON files.
-
-The test fixtures are synthetic software-verification data, not historical trading evidence.
-See [verification](docs/VERIFICATION.md) for what was actually run and
-[research protocol](docs/RESEARCH.md) for qualification requirements and limitations.
-
-## Docker and VPS
-
-```sh
-# First set FLOW_ADMIN_TOKEN to a long random password in .env.
-docker compose up --build -d
-docker compose logs --tail 100
-```
-
-Compose binds only `127.0.0.1:8000`, uses a non-root container, a persistent named volume,
-read-only root filesystem, bounded memory, and a health check. Log in as `research` with
-`FLOW_ADMIN_TOKEN`. Use an SSH tunnel from a VPS (`ssh -L 8000:127.0.0.1:8000 your-vps`),
-or deploy a TLS reverse proxy with authentication. Do not publish the port unauthenticated.
-No Redis, Kafka, Kubernetes, paid services, or private exchange keys are required.
-
-## Supervised ML research
-
-The existing deterministic setups now feed an immutable candidate feature store, including
-quality rejects. The optional ML layer trains logistic/LightGBM meta-labels, calibrates on
-separate chronological data, runs purged validation and ablations, reserves an untouched
-holdout, and records JSON-only model artifacts. Quality is never probability × 100.
-
-```sh
-.venv/bin/pip install -r requirements-ml.lock
-# Supply all relevant actual, manifest-verified recording files (shell expands this pattern).
-.venv/bin/bybit-flow ml label data/segments/*.jsonl.gz
-.venv/bin/bybit-flow ml export
-# Use the exact dataset filename printed above; no dataset is bundled or fabricated.
-.venv/bin/bybit-flow ml train data/ml/datasets/<hash>.parquet --model logistic
-.venv/bin/bybit-flow ml status
-```
-
-Set `FLOW_ML_ENABLED=true` to enable shadow inference. Optionally set
-`FLOW_ML_FILTER_RESEARCH=true` to apply the model's non-safety acceptance thresholds to
-research cards. Both default off. Insufficient evidence remains **Uncalibrated**.
-No configuration switch can approve a model. Current `prints-v1` cost-assumed labels alone
-cannot satisfy the verified-cost deployment gate.
-
-```sh
-# Optional separate, single-CPU training/monitoring service; never trains in the API process.
-docker compose --profile ml up --build -d
-docker compose --profile ml exec trainer bybit-flow ml status
-```
-
-The worker checks label/drift status every 15 minutes and attempts a challenger weekly;
-promotion is manual and gated. Open **ML Research** in the authenticated dashboard.
-Read [ML setup, methodology and limitations](docs/ML_RESEARCH.md) before training.
-
-## Project map
-
-| Module | Responsibility |
-|---|---|
-| `ingestion`, `history`, `normalization` | Allowlisted public REST, historical downloads, precision-preserving rows |
-| `streams`, `orderflow`, `storage` | Prioritized WebSockets, reconstructed books, executed tape, durable segments |
-| `features`, `strategy`, `scanner` | Causal structure, four distinct experimental families, two-stage scanning |
-| `risk`, `scoring`, `calibration` | Mandatory gates, separate quality score, research uncertainty and abstention |
-| `backtest`, `replay`, `research` | Paper fills, recorded-event replay, baselines and experiment provenance |
-| `ml` | Frozen candidates, print-based labels, offline training, calibration, registry, drift, guarded inference |
-| `fundamentals` | Source-attributed, availability-dated manual asset facts |
-| `notifications`, `app`, `static` | Research Discord cards, protected local API, browser dashboard |
-
-Read [data-source audit](docs/DATA_SOURCES.md), [feature status](docs/STATUS.md), and
-[operations/deployment](docs/OPERATIONS.md) before interpreting results.
+On native Windows use the executables under `.venv/Scripts/`.
+Production updates stay on `main`, using fast-forward pulls only. Datasets, recordings,
+model artifacts and failed experiments stay in the persistent data volume, outside Git.

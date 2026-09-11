@@ -46,6 +46,16 @@ depth and contract sizing: capped at 84, never strict SSS. Default notification 
 Validated public SSS remains locked in `Notifier.send_public`; there is no model artifact that
 unlocks it. A score is never assigned to `probability`.
 
-Native strategies retain experimental research labels. The native score change does not silently
-enable a new delivery tier. Ablations, regime stability and empirical probability calibration
-require real, independent historical data; none is manufactured by the score tests.
+Native strategies now support the same explicit `FLOW_SSS_RESEARCH=true` opt-in: raw ≥95,
+all structure/flow/liquidity/freshness/entry/risk gates, no rejections, and an accepted risk
+calculation. The result is `SSS RESEARCH · UNCALIBRATED`, not a validated probability.
+Missing fundamentals still earn zero; a default installation without verified facts may
+never reach 95. Cross-market means fresh same-venue BTC/ETH regimes, not multi-venue
+agreement. Experimental multi-venue comparisons earn **zero** predictive credit.
+
+The ML layer is separate from this measured rubric: it can explain/rank/filter research
+candidates, but cannot replace hard gates or convert probability to quality. Registry
+approval and live cohort evidence are required for validated labels; current assumed-cost
+labels cannot pass approval. See USER_RUNBOOK.md for the actual requirements. Ablations,
+regime stability and empirical probability calibration require real independent data;
+none is manufactured by software tests.

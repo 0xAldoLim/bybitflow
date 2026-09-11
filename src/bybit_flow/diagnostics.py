@@ -31,7 +31,7 @@ async def doctor(settings, store, network=True):
     except OSError:
         checks["storage"] = {"status": "FAIL"}
     source = settings.market_source
-    names = VENUES if source == "auto" else (source,)
+    names = VENUES if source in {"auto", "multi"} else (source,)
     if network:
         reports = await asyncio.gather(*(market_probe(n, settings) for n in names))
         for report in reports:
@@ -41,6 +41,10 @@ async def doctor(settings, store, network=True):
         for name in names:
             checks[name] = store.get("probe:" + name, {"status": "NOT_TESTED"})
     checks["scanner"] = store.get("scanner", {"state": "NOT_OBSERVED"})
+    runtime = store.get("runtime_health", {})
+    checks["runtime"] = runtime | {
+        "status": "FRESH" if 0 <= now_ms() - runtime.get("at_ms", 0) <= 90_000 else "NOT_OBSERVED_OR_STALE"
+    }
     checks["stream"] = store.get("stream_health", {"status": "NOT_OBSERVED"})
     checks["recorder"] = {
         "segments": store.db.execute("SELECT count(*) FROM segments").fetchone()[0],

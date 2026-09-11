@@ -20,7 +20,8 @@ def cycle(settings, store):
     if not paths:
         raise ValueError("No verified real recording segments; weekly training abstains")
     label_recordings(store, segment_rows(paths), settings)
-    path = FeatureStore(store).export(now_ms())
+    source = store.get("runtime_health", {}).get("source")
+    path = FeatureStore(store).export(now_ms(), source=source)
     return train(store, path)["id"]
 
 
@@ -54,6 +55,7 @@ def run(arguments, settings, store):
     label.add_argument("--stage", choices=("generation", "decision"), default="decision")
     export = sub.add_parser("export")
     export.add_argument("--stage", choices=("generation", "decision"), default="decision")
+    export.add_argument("--source", choices=("binance", "bybit", "okx", "tradingview"))
     chart = sub.add_parser("chart-label")
     chart.add_argument("events", type=Path)
     chart.add_argument("candles", type=Path)
@@ -90,7 +92,7 @@ def run(arguments, settings, store):
     elif args.command == "chart-export":
         result = str(FeatureStore(store).export(now_ms(), policy="chart-v1", stage="chart"))
     elif args.command == "export":
-        result = str(FeatureStore(store).export(now_ms(), stage=args.stage))
+        result = str(FeatureStore(store).export(now_ms(), stage=args.stage, source=args.source))
     elif args.command == "train":
         from .training import train
 
@@ -134,10 +136,20 @@ def run(arguments, settings, store):
         result = registry.summary()
     elif args.command in {"cycle", "worker"}:
         # Separate-process advisory lock prevents duplicate trainers and holdout races.
-        import fcntl
+        import os
 
-        with (store.root / "ml-worker.lock").open("a") as lock:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        with (store.root / "ml-worker.lock").open("a+") as lock:
+            if os.name == "nt":
+                import msvcrt
+
+                lock.write("0")
+                lock.flush()
+                lock.seek(0)
+                msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             while True:
                 if now_ms() - store.get("ml_monitor", {}).get("at_ms", 0) >= 900_000:
                     try:

@@ -74,14 +74,27 @@ def embed(signal, dashboard_url):
     field(
         "Derivatives",
         f"OI change {d.get('oi_change_pct', 'N/A')}% · funding {d.get('funding_rate', 'N/A')}\n"
-        f"Actual liquidation events (bankruptcy notional): {d.get('liquidations', 'Unavailable')}",
+        f"Liquidations: {d.get('liquidations') if d.get('liquidations') is not None else 'Unavailable'}\n"
+        f"{d.get('liquidation_feed', 'Venue semantics in details')}",
+    )
+    cross = s.evidence.get("cross_exchange", {})
+    cross_summary = (
+        f"Venues {', '.join(cross.get('exchanges', []))} · delta agreement {cross.get('delta_agreement')} · "
+        f"dislocation {cross.get('price_dislocation_bps')} bps (informational, zero predictive weight)"
+        if cross.get("available")
+        else "Cross-venue evidence unavailable"
     )
     field(
         "Cross-market / fundamentals",
         f"BTC/ETH: {s.evidence.get('cross_market', 'Unavailable')}\n"
-        f"Binance unavailable · {len(s.evidence.get('fundamentals', []))} source-attributed asset facts",
+        f"{cross_summary} · {len(s.evidence.get('fundamentals', []))} source-attributed asset facts",
     )
     field("Data / why / invalidation", f"{s.coverage}\n{s.reason}\n{s.invalidation}")
+    if s.source != "tradingview":
+        field(
+            "Potential trapped participants · heuristic",
+            f"Buyers: {f.get('potential_trapped_buyers', 'Unavailable')} · sellers: {f.get('potential_trapped_sellers', 'Unavailable')}\nPublic prints do not reveal actual inventory.",
+        )
     if s.source == "tradingview":
         field(
             "Potential trapped participants · heuristic",
@@ -105,7 +118,7 @@ def embed(signal, dashboard_url):
         "embeds": [
             {
                 "title": f"{s.final_tier if s.final_tier.startswith('SSS RESEARCH') or s.validation_status == 'validated' else 'UNVALIDATED RESEARCH'} · {s.symbol} · {s.direction}",
-                "description": f"Bybit linear perpetual · source {s.source} · 4H / 1H / 15M · UTC · {s.state}",
+                "description": f"Linear perpetual · source {s.source} · 4H / 1H / 15M · UTC · {s.state}",
                 "url": f"{dashboard_url.rstrip('/')}/#signal/{s.id}",
                 "color": 0x4CC9A4 if s.direction == "LONG" else 0xEF7F86,
                 "timestamp": iso(s.created_ms),

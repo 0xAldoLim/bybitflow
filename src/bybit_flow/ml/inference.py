@@ -149,7 +149,7 @@ def delivery_eligible(signal, settings, store):
             or abs(prediction["probability"] - signal.calibrated_probability) > 1e-12
         ):
             return False
-        if signal.source == "bybit":
+        if signal.source in {"bybit", "binance", "okx"}:
             book = signal.evidence.get("book", {})
             if not 0 <= now_ms() - book.get("receipt_ms", 0) <= settings.book_stale_ms:
                 return False

@@ -85,6 +85,10 @@ def replay(rows, settings, families=None):
     decisions = 0
     funding_seen = set()
     for row in rows:
+        if row["source"].startswith(("native/", "raw/binance/", "raw/okx/")):
+            raise ValueError(
+                "Legacy strategy replay is Bybit-only; use source-separated ml label for native candidate outcomes"
+            )
         now = row["receipt_ms"]
         if now < last_receipt:
             raise ValueError("Replay requires receipt order")

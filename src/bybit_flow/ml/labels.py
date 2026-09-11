@@ -110,6 +110,9 @@ def label_recordings(store, rows, settings, stage="decision", max_active=2000):
         previous = now
         event_hash.update(digest(row).encode())
         payload = json.loads(row["payload"]) if isinstance(row["payload"], str) else row["payload"]
+        source, symbol, venue = row["source"], row["symbol"], "bybit"
+        if source.startswith("native/"):
+            _, venue, source = source.split("/", 2)
         while next_snapshot and next_snapshot["decision_ms"] <= now:
             s = next_snapshot
             next_snapshot = next(pending, None)
@@ -129,28 +132,39 @@ def label_recordings(store, rows, settings, stage="decision", max_active=2000):
                 fee_bps=settings.taker_fee_bps,
                 slippage_bps=settings.slippage_bps,
             )
-            if signal.symbol not in subscribed or now - s["decision_ms"] > settings.trade_stale_ms:
+            if (signal.source, signal.symbol) not in subscribed or now - s[
+                "decision_ms"
+            ] > settings.trade_stale_ms:
                 p.data_gaps.append("entry coverage not continuously observed")
             active[s["id"]] = (s, p)
-        source, symbol = row["source"], row["symbol"]
         if source == "control/subscribed":
-            subscribed.update(payload["symbols"])
-        removed = set(payload.get("removed", [])) if source == "control/rotation" else set()
+            subscribed.update((venue, s) for s in payload["symbols"])
+        removed = {(venue, s) for s in payload.get("removed", [])} if source == "control/rotation" else set()
         if source == "control/gap":
+            removed = {key for key in subscribed if key[0] == venue and (symbol == "ALL" or key[1] == symbol)}
+        if source == "control/source_change":
             removed = set(subscribed)
         subscribed.difference_update(removed)
         for s, p in active.values():
-            if not row.get("complete", True) or p.signal.symbol in removed or source == "control/gap":
+            affected = (p.signal.source, p.signal.symbol) in removed
+            if affected or (
+                not row.get("complete", True)
+                and (
+                    source == "control/source_change"
+                    or (p.signal.source == venue and symbol in {"ALL", p.signal.symbol})
+                )
+            ):
                 if "recording continuity lost" not in p.data_gaps:
                     p.data_gaps.append("recording continuity lost")
         if source.startswith("ws/publicTrade."):
-            if symbol in last and now - last[symbol] > settings.trade_stale_ms:
+            source_symbol = (venue, symbol)
+            if source_symbol in last and now - last[source_symbol] > settings.trade_stale_ms:
                 for s, p in active.values():
-                    if p.signal.symbol == symbol:
+                    if (p.signal.source, p.signal.symbol) == source_symbol:
                         p.data_gaps.append("trade-feed stale interval")
-            last[symbol] = now
+            last[source_symbol] = now
             for raw in payload["data"]:
-                key = (symbol, raw["i"])
+                key = (venue, symbol, raw["i"])
                 if raw.get("BT") or key in seen:
                     continue
                 seen.add(key)
@@ -158,10 +172,18 @@ def label_recordings(store, rows, settings, stage="decision", max_active=2000):
                     # ID set only bounds duplicate suppression, not proof of complete tape coverage.
                     seen = {key}
                 trade = Trade(
-                    symbol, int(raw["T"]), now, raw["i"], raw["S"], Decimal(raw["p"]), Decimal(raw["v"])
+                    symbol,
+                    int(raw["T"]),
+                    now,
+                    raw["i"],
+                    raw["S"],
+                    Decimal(raw["p"]),
+                    Decimal(raw["v"]),
+                    venue,
                 )
                 for s, p in active.values():
-                    p.on_trade(trade)
+                    if p.signal.source == venue:
+                        p.on_trade(trade)
         done = [
             ident
             for ident, (s, p) in active.items()

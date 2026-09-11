@@ -25,6 +25,8 @@ class Streams:
         self.last_message = 0
         self.ws = None
         self.subscription_changes = {}
+        self.frames = {}
+        self.last_frame = {}
 
     def topics(self, symbols):
         return [
@@ -52,6 +54,8 @@ class Streams:
                 self.books.pop(s, None)
                 self.tapes.pop(s, None)
                 self.liquidations.pop(s, None)
+                self.frames.pop(s, None)
+                self.last_frame.pop(s, None)
             try:
                 if removed:
                     await self.ws.send(json.dumps({"op": "unsubscribe", "args": self.topics(removed)}))
@@ -96,6 +100,11 @@ class Streams:
         self.recorder.offer("ws/" + topic, symbol, msg["ts"], msg, receipt)
         if topic.startswith("orderbook."):
             self.books[symbol].apply(msg, receipt)
+            if receipt - self.last_frame.get(symbol, 0) >= 5000:
+                frame = self.books[symbol].features(receipt) | {"exchange": "bybit"}
+                self.frames.setdefault(symbol, deque(maxlen=720)).append(frame)
+                self.last_frame[symbol] = receipt
+                self.recorder.offer("liquidity/frame", symbol, self.books[symbol].event_ms, frame, receipt)
         elif topic.startswith("publicTrade."):
             for t in msg["data"]:
                 # Block trades remain raw, excluded from continuous-book execution evidence.

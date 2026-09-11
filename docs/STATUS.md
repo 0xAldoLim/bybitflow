@@ -1,5 +1,27 @@
 # Implemented, experimental, unavailable
 
+## Exchange-native milestone — 2026-09-10 (supersedes older TV-first setup)
+
+Use [USER_RUNBOOK.md](USER_RUNBOOK.md). TradingView, Pine, paid subscriptions, exchange
+keys and public ingress are not required. The legacy TV worker is off unless enabled.
+
+Implemented: public Binance/Bybit/OKX adapters, contract/base normalization, auto/fixed/multi
+sources, isolated native tapes, venue-specific sequencing, source-change invalidation,
+early core/pending subscriptions, sampled liquidity frames, internal candidates and native
+SSS RESEARCH opt-in. Added doctor/test-market/test-discord, trapped-participant heuristics,
+retained-print profile horizons, DOM concentration/slope, source-separated ML v4 labels/exports,
+checksummed Binance aggregate archives, exchange-health/flow/DOM UI and operator instructions.
+
+Experimental/limited: all trading hypotheses, multi price/spread/delta comparison (zero
+predictive score credit), long profiles only with adequate retained prints, sampled liquidity
+table rather than graphical heatmap, limited optimizer/ablations and account stress assumptions.
+
+Unavailable: OKX liquidations, cross-venue OI/funding/liquidation clustering, durable multiweek
+profiles, validated wall/auction models, full Binance/OKX strategy-regeneration replay,
+verified-cost training labels and genuine OOS model evidence. No champion, calibrated
+probability, profitable backtest or validated SSS is claimed. This milestone does not
+complete every advanced research feature. See VERIFICATION.md for actual external checks.
+
 ## ML extension — current `main`, 2026-09-09
 
 See [ML research](ML_RESEARCH.md) for runnable commands, source audit and precise limitations.

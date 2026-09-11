@@ -50,14 +50,15 @@ def create_app(settings=None):
         app.state.store, app.state.recorder, app.state.scanner = store, recorder, scanner
         app.state.gateway = Gateway(settings, store)
         app.state.gateway.scanner = scanner
-        gateway_task = asyncio.create_task(app.state.gateway.run())
+        gateway_task = asyncio.create_task(app.state.gateway.run()) if settings.tv_enabled else None
         app.state.gateway_task = gateway_task
         task = asyncio.create_task(recorder.run())
         scanner.start()
         yield
-        gateway_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await gateway_task
+        if gateway_task:
+            gateway_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await gateway_task
         await scanner.stop()
         recorder.running = False
         await task
@@ -128,6 +129,56 @@ def create_app(settings=None):
 
         return Registry(request.app.state.store).summary()
 
+    @app.get("/api/exchanges")
+    async def exchange_health(request: Request):
+        from .exchanges import VENUES
+
+        store, scanner = request.app.state.store, request.app.state.scanner
+        return {
+            "configured": settings.market_source,
+            "active": scanner.exchange,
+            "source_ready": scanner.source_ready,
+            "transition": store.get("active_exchange"),
+            "probes": [store.get("probe:" + n, {"exchange": n, "status": "NOT_TESTED"}) for n in VENUES],
+        }
+
+    @app.get("/api/orderflow/{symbol}")
+    async def orderflow_view(symbol: str, request: Request):
+        from .flow_views import profiles
+
+        scanner = request.app.state.scanner
+        tape, context = scanner.streams.tapes.get(symbol), scanner.context.get(symbol)
+        if not tape or not context:
+            return {"available": False, "reason": "No selected live tape and closed-candle context"}
+        from .features import candle_features
+
+        now = now_ms()
+        return {
+            "exchange": scanner.exchange,
+            "profiles": profiles(
+                tape,
+                context["instrument"].tick,
+                candle_features(context["m15"], now)["atr"],
+                now,
+                scanner.exchange,
+            ),
+            "tape": [
+                dict(event_ms=t.event_ms, side=t.side, price=str(t.price), size=str(t.size))
+                for t in list(tape.trades)[-50:]
+            ],
+            "coverage_start": tape.coverage_start,
+        }
+
+    @app.get("/api/liquidity/{symbol}")
+    async def liquidity_frames(symbol: str, request: Request):
+        scanner = request.app.state.scanner
+        return {
+            "exchange": scanner.exchange,
+            "symbol": symbol,
+            "frames": list(scanner.streams.frames.get(symbol, []))[-120:],
+            "methodology": "5-second observed depth samples, not every update or hidden liquidity",
+        }
+
     @app.post("/webhooks/tradingview")
     async def tradingview(request: Request):
         if request.app.state.gateway_task.done():
@@ -181,8 +232,14 @@ def create_app(settings=None):
     @app.get("/healthz")
     async def health(request: Request):
         rec, scanner = request.app.state.recorder, request.app.state.scanner
-        worker_alive = not request.app.state.gateway_task.done()
-        status = 200 if rec.healthy and scanner.status["state"] != "error" and worker_alive else 503
+        worker_alive = bool(request.app.state.gateway_task and not request.app.state.gateway_task.done())
+        status = (
+            200
+            if rec.healthy
+            and scanner.status["state"] != "error"
+            and (worker_alive or not settings.tv_enabled)
+            else 503
+        )
         return JSONResponse(
             {
                 "ok": status == 200,
@@ -199,6 +256,7 @@ def create_app(settings=None):
         store, rec, scanner = request.app.state.store, request.app.state.recorder, request.app.state.scanner
         return dict(
             scanner=scanner.status,
+            exchange=scanner.exchange,
             watchlist=store.get("watchlist", []),
             signals=store.signals(),
             health=dict(
@@ -221,6 +279,12 @@ def create_app(settings=None):
         data = store.get("market:" + symbol)
         if data is None:
             raise HTTPException(404, "No collected data for this symbol")
+        if data.get("exchange", "bybit") != request.app.state.scanner.exchange:
+            data["book"], data["book_fresh"] = (
+                {"available": False, "reason": "stored market context is from a previous source"},
+                False,
+            )
+            return data
         book = streams.books.get(symbol)
         data["book"] = book.features(now_ms()) if book else {"available": False}
         data["book_fresh"] = book.fresh(now_ms(), settings.book_stale_ms) if book else False

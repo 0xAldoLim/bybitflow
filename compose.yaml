@@ -10,6 +10,8 @@ services:
         required: false
     environment:
       FLOW_DATA_DIR: /app/data
+      FLOW_SCAN_ENABLED: ${FLOW_SCAN_ENABLED:-true}
+      FLOW_MARKET_SOURCE: ${FLOW_MARKET_SOURCE:-auto}
       FLOW_ADMIN_TOKEN: ${FLOW_ADMIN_TOKEN:?Set a long random dashboard password in .env}
     volumes:
       - research-data:/app/data

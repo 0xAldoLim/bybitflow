@@ -66,6 +66,8 @@ class Instrument(BaseModel):
     def parse(cls, r):
         lot = r["lotSizeFilter"]
         return cls(
+            exchange_symbol=r["symbol"],
+            quote=r.get("quoteCoin", r["settleCoin"]),
             symbol=r["symbol"],
             base=r["baseCoin"],
             settle=r["settleCoin"],
@@ -121,7 +123,7 @@ class Signal(BaseModel):
     expected_net_r_uncertainty: tuple[float, float] | None = None
     validation_status: str = "unvalidated"
     model_version: str | None = None
-    feature_schema_version: str = "candidate-v3"
+    feature_schema_version: str = "candidate-v4"
     data_coverage: float | None = Field(None, ge=0, le=1)
 
     @computed_field

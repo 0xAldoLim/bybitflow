@@ -35,8 +35,10 @@ async function render(){
   $('#status').textContent=data.scanner.state; $('#clock').textContent=utc(data.at_ms);
   document.querySelectorAll('nav a').forEach(a=>a.classList.toggle('active',a.hash==='#'+page));
   const titles={overview:'Market overview',watchlist:'Market scanner',signals:'Signal journal',research:'Research & experiments',journal:'Paper journal',health:'Data health',settings:'Desk settings',signal:'Signal detail',market:'Market detail'};
-  titles.tradingview='TradingView gateway';
+  titles.tradingview='Optional legacy TradingView gateway';
   titles.ml='ML Research';
+  titles.exchanges='Public exchange health';
+  titles.flow='Native order flow / DOM';
   $('#title').textContent=titles[page]||'Market overview'; let body='';
   if(page==='overview'){
    const metrics=[['ELIGIBLE MARKETS',data.scanner.eligible||0,'Dynamic liquidity-filtered universe'],['ACTIVE SETUPS',data.signals.filter(s=>!['EXPIRED','INVALIDATED','RESOLVED'].includes(s.state)).length,'Independent experimental families'],['RECORDED EVENTS',number(data.health.records_written),'This collector process'],['CALIBRATION','Pending','No claimed predictive probability']];
@@ -54,6 +56,22 @@ async function render(){
       body+=panel('Thresholds and validation trials',json({thresholds:latest.thresholds,trials:latest.report.experiments,walk_forward:latest.report.walk_forward}),'VALIDATION-TUNED, NOT HOLDOUT-TUNED');
     }
     body+=panel('Promotion / rollback history',json(ml.history));
+  }
+  else if(page==='exchanges')body=panel('Sources and transitions',json(await api('exchanges')))+panel('Connection checks','<p>Run docker compose exec desk bybit-flow test-market. No exchange keys or TradingView account are required. Probe timestamps are not continuous-feed health.</p>');
+  else if(page==='flow'){
+    const symbol=id||'BTCUSDT', flow=await api('orderflow/'+encodeURIComponent(symbol));
+    body=panel('Selected markets',data.scanner.deep_symbols?.map(s=>`<a href="#flow/${encodeURIComponent(s)}">${escape(s)}</a>`).join(' · ')||'No deep subscriptions');
+    if(flow.available===false)body+=empty('Order flow unavailable',flow.reason);
+    else{
+      const f=flow.profiles['15m'];
+      body+=panel(symbol+' · 15M footprint',profile(f.profile),flow.exchange)+panel('Window CVD',lineChart(f.cvd_path||[]));
+      body+=panel('Profile coverage',table(['Period','Complete','PoC','VAL / VAH'],Object.entries(flow.profiles).map(([k,v])=>[escape(k),String(v.complete),number(v.poc),`${number(v.val)} / ${number(v.vah)}`])));
+      body+=panel('Trade tape',table(['UTC','Side','Price','Base size'],flow.tape.map(t=>[utc(t.event_ms),escape(t.side),escape(t.price),escape(t.size)])));
+      const market=await api('markets/'+encodeURIComponent(symbol)), frames=await api('liquidity/'+encodeURIComponent(symbol));
+      body+=panel('Visible DOM',depthChart(market.book),market.book_fresh?'Fresh':'Stale / unavailable');
+      body+=panel('Sampled liquidity history',table(['UTC','Mid','Spread bps','10bps bid / ask'],frames.frames.slice(-60).map(f=>[utc(f.event_ms),number(f.mid),number(f.spread_bps),`${money(f.depth['10'].bid)} / ${money(f.depth['10'].ask)}`])),'5 SECOND SAMPLES — NOT HIDDEN LIQUIDITY');
+      body+=panel('Derivatives',json(market.derivatives));
+    }
   }
   else if(page==='health')body=panel('Collection health',json(data.health))+panel('Scanner status',json(data.scanner));
   else if(page==='tradingview'){const tv=await api('tradingview');body=panel('Ingress and qualification',json({enabled:tv.enabled,sss_research:tv.sss_research,qualification:tv.qualification}))+panel('Durable event inbox',table(['Event','Received UTC','State','Result'],tv.queue.map(r=>[escape(r.event_id),utc(r.received_ms),escape(r.status),escape(r.result)])))+panel('How to connect','<p>Follow docs/TRADINGVIEW_SETUP.md for TradingView Premium, domain/HTTPS and Discord. Classified chart volume is not exchange taker-side data. Missing liquidity blocks strict SSS; opt-in proxy research is unsized and capped below SSS.</p>');}

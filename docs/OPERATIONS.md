@@ -1,5 +1,12 @@
 # Operations, deployment and data care
 
+Current operator path: [USER_RUNBOOK.md](USER_RUNBOOK.md), superseding older TV-first
+assumptions. Native operation needs no subscription, Pine, inbound webhook, domain or key.
+Compose keeps the dashboard authenticated on localhost; Discord is outbound. Windows/Linux
+setup, diagnostics, updates, full stopped-writer backup and fresh-project restore are in
+the runbook. Run one primary collector and at most one separate ML worker per data directory.
+SSS RESEARCH is explicit opt-in, not validated SSS; assumed-cost labels cannot promote a model.
+
 ## Local and VPS
 
 Use one process per SQLite/data directory. A 2-core / 2–4GB VPS is a starting resource budget,

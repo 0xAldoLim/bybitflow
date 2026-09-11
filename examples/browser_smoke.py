@@ -90,6 +90,8 @@ async def main():
                     "watchlist",
                     "signals",
                     "tradingview",
+                    "exchanges",
+                    "flow/BTCUSDT",
                     "research",
                     "ml",
                     "journal",

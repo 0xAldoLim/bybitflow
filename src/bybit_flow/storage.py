@@ -165,7 +165,7 @@ class Recorder:
         with gzip.open(raw, "wt") as f:
             for row in batch:
                 f.write(json.dumps(row) + "\n")
-        from .normalization import SCHEMA, normalize
+        from .normalization import NORMALIZATION_VERSION, SCHEMA, normalize
 
         observations = [r for envelope in batch for r in normalize(envelope)]
         pq.write_table(pa.Table.from_pylist(observations, schema=SCHEMA), normalized, compression="zstd")
@@ -174,6 +174,7 @@ class Recorder:
             id=ident,
             source="mixed-public",
             schema_version=1,
+            normalization_version=NORMALIZATION_VERSION,
             rows=len(batch),
             min_event_ms=min(r["event_ms"] for r in batch),
             max_event_ms=max(r["event_ms"] for r in batch),

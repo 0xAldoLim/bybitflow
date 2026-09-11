@@ -265,6 +265,7 @@ class VenueAPI:
                         bid1Price=r["bidPrice"],
                         ask1Price=r["askPrice"],
                         observed_ms=int(r["time"]),
+                        funding_observed_ms=int(marks.get(r["symbol"], {}).get("time") or 0),
                         fundingRate=marks.get(r["symbol"], {}).get("lastFundingRate"),
                         markPrice=marks.get(r["symbol"], {}).get("markPrice"),
                         indexPrice=marks.get(r["symbol"], {}).get("indexPrice"),

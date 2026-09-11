@@ -24,11 +24,13 @@ def main():
     sub.add_parser("test-discord", help="Send a connection test, never a trade signal")
     candles = sub.add_parser("download-candles")
     candles.add_argument("symbol")
+    candles.add_argument("--exchange", choices=["binance", "bybit", "okx"], default="binance")
     candles.add_argument("--interval", choices=["15", "60", "240", "D"], default="60")
     candles.add_argument("--days", type=int, default=90)
     archive = sub.add_parser("download-trades")
     archive.add_argument("symbol")
     archive.add_argument("day", help="UTC YYYY-MM-DD; download an actual official daily archive")
+    archive.add_argument("--exchange", choices=["bybit", "binance"], default="bybit")
     agg = sub.add_parser("aggregate-trades")
     agg.add_argument("path", type=Path)
     agg.add_argument("--minutes", type=int, default=60)
@@ -156,12 +158,15 @@ async def diagnostic_command(args, settings, store):
         report = await doctor(settings, store)
         print(json.dumps(report, indent=2) if args.json else human_report(report))
     elif args.command == "test-discord":
-        print(json.dumps(await discord_test(settings, store), indent=2))
+        result = await discord_test(settings, store)
+        print(json.dumps(result, indent=2))
+        if result["status"] != "sent":
+            raise SystemExit(1)
     else:
         names = (
             (args.exchange,)
             if args.exchange
-            else (VENUES if settings.market_source == "auto" else (settings.market_source,))
+            else (VENUES if settings.market_source in {"auto", "multi"} else (settings.market_source,))
         )
         reports = await asyncio.gather(*(market_probe(n, settings) for n in names))
         for report in reports:
@@ -173,18 +178,19 @@ async def diagnostic_command(args, settings, store):
 
 async def network_command(args, settings, store):
     if args.command == "download-trades":
-        from .history import download_trades
+        from .history import download_binance_trades, download_trades
 
-        print(
-            json.dumps(await download_trades(args.symbol, args.day, settings.data_dir / "archives"), indent=2)
-        )
+        download = download_binance_trades if args.exchange == "binance" else download_trades
+
+        print(json.dumps(await download(args.symbol, args.day, settings.data_dir / "archives"), indent=2))
         return
-    from .ingestion import Bybit, candle_records
+    from .exchanges import VenueAPI
+    from .ingestion import candle_records
     from .scanner import Scanner
 
     recorder = Recorder(store, settings)
     writer = asyncio.create_task(recorder.run())
-    api = Bybit(settings, recorder)
+    api = VenueAPI(getattr(args, "exchange", "bybit"), settings, recorder)
     try:
         if args.command == "scan-once":
             scanner = Scanner(settings, store, recorder)
@@ -206,7 +212,7 @@ async def network_command(args, settings, store):
             )
             if not rows:
                 raise ValueError("No actual candles returned")
-            path = settings.data_dir / f"{args.symbol}-{args.interval}-{asof}.parquet"
+            path = settings.data_dir / f"{api.name}-{args.symbol}-{args.interval}-{asof}.parquet"
             pq.write_table(pa.Table.from_pylist(candle_records(rows)), path, compression="zstd")
             print(path)
     finally:

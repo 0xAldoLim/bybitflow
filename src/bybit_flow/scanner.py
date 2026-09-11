@@ -4,11 +4,13 @@ import json
 import logging
 from statistics import median
 
+from .exchanges import VenueAPI, market_probe
 from .features import candle_features, validate_bars
 from .fundamentals import facts_asof
-from .ingestion import Bybit, candle_records, parse_eligible_metadata
+from .ingestion import candle_records, parse_eligible_metadata
 from .liquidity import SpreadHistory
 from .models import DAY, Signal
+from .native_streams import NativeStreams
 from .notifications import Notifier
 from .orderflow import Book, footprint
 from .risk import evaluate_risk
@@ -24,14 +26,68 @@ TERMINAL = {"INVALIDATED", "EXPIRED", "RESOLVED"}
 class Scanner:
     def __init__(self, settings, store, recorder):
         self.settings, self.store, self.recorder = settings, store, recorder
-        self.api = Bybit(settings, recorder)
-        self.streams = Streams(settings, store, recorder)
+        name = settings.market_source if settings.market_source not in {"auto", "multi"} else "bybit"
+        self.api = VenueAPI(name, settings, recorder)
+        self.streams = (
+            Streams(settings, store, recorder)
+            if name == "bybit"
+            else NativeStreams(settings, store, recorder, self.api)
+        )
+        self.source_ready = settings.market_source not in {"auto", "multi"}
         self.notifier = Notifier(settings, store)
         self.context = {}
         self.candle_cache = {}
         self.tasks = []
         self.scan_lock = asyncio.Lock()
         self.status = {"state": "disabled", "at_ms": now_ms(), "eligible": 0, "errors": 0}
+
+    @property
+    def exchange(self):
+        return getattr(self.api, "name", "bybit")
+
+    def spread_key(self, symbol):
+        return "spreads:" + ("" if self.exchange == "bybit" else self.exchange + ":") + symbol
+
+    def market_context(self, now):
+        """Never score cached BTC/ETH context from a prior venue or future receipt."""
+        result = {}
+        for symbol in ("BTCUSDT", "ETHUSDT"):
+            row = self.store.get("market:" + symbol, {})
+            valid = row.get("exchange") == self.exchange and 0 <= now - row.get("asof", 0) < 960_000
+            result[symbol] = row.get("h4", {}).get("regime", "unavailable") if valid else "unavailable"
+        return result
+
+    async def select_source(self):
+        if self.source_ready or not isinstance(self.api, VenueAPI):
+            return
+        # Stable primary until failure, deterministic preference; no round-robin tape mixing.
+        for name in ("binance", "bybit", "okx"):
+            report = await market_probe(name, self.settings)
+            self.store.put("probe:" + name, report)
+            if report["status"] != "HEALTHY":
+                continue
+            previous = self.exchange
+            await self.streams.stop()
+            await self.api.close()
+            self.api = VenueAPI(name, self.settings, self.recorder)
+            self.streams = (
+                Streams(self.settings, self.store, self.recorder)
+                if name == "bybit"
+                else NativeStreams(self.settings, self.store, self.recorder, self.api)
+            )
+            self.context.clear()
+            self.candle_cache.clear()
+            self.source_ready = True
+            change = dict(
+                previous=previous,
+                current=name,
+                at_ms=now_ms(),
+                reason="verified REST and trade WS probe; fresh book/tape warmup required",
+            )
+            self.store.put("active_exchange", change)
+            self.recorder.offer("control/source_change", "ALL", now_ms(), change, complete=False)
+            return
+        raise ConnectionError("No compatible public exchange passed REST and trade WS checks")
 
     async def cached_candles(self, symbol, interval, asof, limit):
         duration = {"D": DAY, "240": 14_400_000, "60": 3_600_000, "15": 900_000}[interval]
@@ -49,10 +105,11 @@ class Scanner:
             dict.fromkeys(
                 r[0]
                 for r in self.store.db.execute(
-                    "SELECT symbol FROM signals WHERE state NOT IN ('INVALIDATED','EXPIRED','RESOLVED') "
-                    "AND json_extract(payload,'$.source') IS NOT 'tradingview' AND "
-                    "json_extract(payload,'$.expires_ms')>? ORDER BY created_ms",
-                    (now_ms(),),
+                    "SELECT symbol FROM signals WHERE coalesce(json_extract(payload,'$.source'),'bybit')=? AND ("
+                    "(state NOT IN ('INVALIDATED','EXPIRED','RESOLVED') AND json_extract(payload,'$.expires_ms')>?) OR "
+                    "(json_extract(payload,'$.holding_deadline_ms')>? AND EXISTS "
+                    "(SELECT 1 FROM transitions t WHERE t.signal_id=signals.id AND t.state='ALERTED'))) ORDER BY created_ms",
+                    (self.exchange, now_ms(), now_ms()),
                 )
             )
         )
@@ -76,10 +133,18 @@ class Scanner:
 
     def record_membership(self, evaluated_ms, symbol, eligible, payload):
         available = now_ms()
-        payload = payload | {"evaluated_ms": evaluated_ms, "available_ms": available}
+        payload = payload | {
+            "evaluated_ms": evaluated_ms,
+            "available_ms": available,
+            "exchange": self.exchange,
+        }
         self.store.membership(available, symbol, eligible, payload)
         self.recorder.offer(
-            "universe/membership", symbol, available, {"eligible": eligible, "details": payload}, available
+            "universe/membership",
+            symbol,
+            available,
+            {"exchange": self.exchange, "eligible": eligible, "details": payload},
+            available,
         )
 
     def record_quotes(self, body, receipt):
@@ -88,18 +153,21 @@ class Scanner:
             symbol = ticker["symbol"]
             if symbol in self.context:
                 d = self.context[symbol]["derivatives"]
-                d.update(
-                    funding_rate=float(ticker["fundingRate"]) if ticker.get("fundingRate") else None,
-                    ticker_observed_ms=int(body["time"]),
-                )
-            history = SpreadHistory(self.store.get("spreads:" + symbol, []))
+                if ticker.get("fundingRate") is not None:
+                    d.update(
+                        funding_rate=float(ticker["fundingRate"]),
+                        ticker_observed_ms=int(
+                            ticker.get("funding_observed_ms", ticker.get("observed_ms", body["time"]))
+                        ),
+                    )
+            history = SpreadHistory(self.store.get(self.spread_key(symbol), []))
             history.add(
-                int(body["time"]),
+                int(ticker.get("observed_ms", body["time"])),
                 receipt,
                 float(ticker.get("bid1Price") or 0),
                 float(ticker.get("ask1Price") or 0),
             )
-            updates.append(("spreads:" + symbol, json.dumps(history.export())))
+            updates.append((self.spread_key(symbol), json.dumps(history.export())))
         with self.store.db:
             self.store.db.executemany("INSERT OR REPLACE INTO kv VALUES(?,?)", updates)
         self.store.put(
@@ -110,26 +178,78 @@ class Scanner:
     async def quote_loop(self):
         while True:
             try:
+                if not self.source_ready:
+                    await asyncio.sleep(5)
+                    continue
                 body = await self.api.get("tickers", category="linear")
                 self.record_quotes(body, now_ms())
             except Exception as exc:
                 self.store.put("quote_health", {"at_ms": now_ms(), "error_type": type(exc).__name__})
             await asyncio.sleep(self.settings.quote_sample_seconds)
 
+    async def source_watchdog(self):
+        failed_since = None
+        while True:
+            await asyncio.sleep(30)
+            self.store.put(
+                "runtime_health",
+                dict(
+                    at_ms=now_ms(),
+                    scanner_enabled=self.settings.scan_enabled,
+                    scanner_state=self.status["state"],
+                    recorder_healthy=self.recorder.healthy,
+                    recorder_reason=self.recorder.reason,
+                    source=self.exchange,
+                    source_ready=self.source_ready,
+                    selected=list(self.streams.selected),
+                    streams_fresh=self.streams.connected,
+                ),
+            )
+            if not self.source_ready or not self.streams.selected or self.streams.connected:
+                failed_since = None
+                continue
+            failed_since = failed_since or now_ms()
+            if now_ms() - failed_since >= 120_000 and self.settings.market_source in {"auto", "multi"}:
+                async with self.scan_lock:
+                    self.source_ready = False
+                    self.context.clear()
+                    await self.streams.select([])
+                    self.status.update(
+                        state="error",
+                        reason="deep feed stale; source requalification required",
+                        at_ms=now_ms(),
+                    )
+                    self.store.put("scanner", self.status)
+                failed_since = None
+
     async def scan_once(self):
         async with self.scan_lock:
+            await self.select_source()
             self.status.update(state="scanning", started_ms=now_ms())
             body = await self.api.get("time")
             asof = int(body["time"])
             if abs(asof - now_ms()) > 2000:
                 raise ValueError("Local/exchange clock skew exceeds two seconds")
             rows = await self.api.instruments()
+            priority_symbols = self.pending_symbols() + self.settings.core_watchlist
+            rows.sort(
+                key=lambda r: (
+                    priority_symbols.index(r["symbol"])
+                    if r["symbol"] in priority_symbols
+                    else len(priority_symbols),
+                    r["symbol"],
+                )
+            )
             ticker_body = await self.api.get("tickers", category="linear")
             self.record_quotes(ticker_body, now_ms())
             tickers = {r["symbol"]: r for r in ticker_body["result"]["list"]}
             ranked, new_context, errors = [], {}, 0
             for raw in rows:
-                inst = parse_eligible_metadata(raw, self.settings, asof)
+                inst = (
+                    self.api.parse(raw, asof)
+                    if isinstance(self.api, VenueAPI)
+                    else parse_eligible_metadata(raw, self.settings, asof)
+                )
                 if not inst:
                     self.record_membership(
                         asof, raw["symbol"], False, {"reason": "instrument metadata gate", "metadata": raw}
@@ -199,10 +319,18 @@ class Scanner:
                     funding = await self.api.history(
                         "funding/history", inst.symbol, evaluated - 2 * DAY, evaluated
                     )
+                    if self.exchange == "okx":
+                        current_funding = await self.api.funding_now(inst.symbol)
+                        t = t | {
+                            "fundingRate": current_funding.get("fundingRate"),
+                            "nextFundingTime": current_funding.get("nextFundingTime"),
+                            "observed_ms": int(current_funding["ts"]),
+                        }
                     oi = sorted(oi, key=lambda x: int(x["timestamp"]))
                     f = sorted(funding, key=lambda x: int(x["fundingRateTimestamp"]))
                     # Current predicted funding is context only, never injected into historical decisions.
                     derivatives = {
+                        "exchange": self.exchange,
                         "funding_rate": float(t["fundingRate"]) if t.get("fundingRate") else None,
                         "next_funding_ms": int(t.get("nextFundingTime") or 0),
                         "funding_interval_minutes": inst.funding_interval_minutes,
@@ -213,10 +341,14 @@ class Scanner:
                         if len(oi) >= 2 and float(oi[0]["openInterest"])
                         else None,
                         "oi_unit": "base coin, API openInterest field; see audited definition",
-                        "oi_notional": float(t["openInterestValue"]) if t.get("openInterestValue") else None,
+                        "oi_notional": float(t["openInterestValue"])
+                        if t.get("openInterestValue")
+                        else (float(oi[-1]["notional"]) if oi and oi[-1].get("notional") else None),
                         "mark": float(t["markPrice"]) if t.get("markPrice") else None,
                         "index": float(t["indexPrice"]) if t.get("indexPrice") else None,
-                        "ticker_observed_ms": int(ticker_body["time"]),
+                        "ticker_observed_ms": int(
+                            t.get("funding_observed_ms", t.get("observed_ms", ticker_body["time"]))
+                        ),
                         "collected_ms": now_ms(),
                     }
                     point = {
@@ -226,7 +358,7 @@ class Scanner:
                         "continuous_daily_bars": len(daily),
                         "available_ms": evaluated,
                     }
-                    normal_spread = SpreadHistory(self.store.get("spreads:" + inst.symbol, [])).assess(
+                    normal_spread = SpreadHistory(self.store.get(self.spread_key(inst.symbol), [])).assess(
                         now_ms(), self.settings.max_spread_bps, self.settings.spread_min_samples
                     )
                     point["normal_spread"] = normal_spread
@@ -241,6 +373,7 @@ class Scanner:
                     priority = (30 if plans else 0) + 20 * f1["efficiency"] + 10 * f1["volume_expansion"]
                     ranked.append(
                         {
+                            "exchange": self.exchange,
                             "symbol": inst.symbol,
                             "regime_4h": f4["regime"],
                             "regime_1h": f1["regime"],
@@ -257,9 +390,22 @@ class Scanner:
                         instrument=inst, h4=h4, h1=h1, m15=m15, derivatives=derivatives, asof=evaluated
                     )
                     self.context[inst.symbol] = new_context[inst.symbol]
+                    # Start core/pending tape collection before a long universe sweep finishes.
+                    if inst.symbol in priority_symbols or plans:
+                        wanted = list(
+                            dict.fromkeys(
+                                [s for s in self.pending_symbols() if s in self.context]
+                                + [s for s in self.settings.core_watchlist if s in self.context]
+                                + list(self.streams.selected)
+                                + [inst.symbol]
+                            )
+                        )[: self.settings.deep_symbols]
+                        if tuple(wanted) != tuple(self.streams.selected):
+                            await self.streams.select(wanted)
                     self.store.put(
                         "market:" + inst.symbol,
                         {
+                            "exchange": self.exchange,
                             "instrument": inst.model_dump(mode="json"),
                             "candles": candle_records(h1),
                             "h4": f4,
@@ -300,6 +446,7 @@ class Scanner:
                 provisional=sum(not r["eligible"] for r in ranked),
                 errors=errors,
                 deep_symbols=selected,
+                exchange=self.exchange,
             )
             self.store.put("scanner", self.status)
             return self.status
@@ -308,7 +455,7 @@ class Scanner:
         now = now_ms()
         for payload in self.store.signals(2000):
             s = Signal.model_validate(payload)
-            if s.source != "bybit":
+            if s.source == "tradingview":
                 continue  # TradingView has its own source freshness and lifecycle worker.
             if s.state in TERMINAL:
                 continue
@@ -318,6 +465,9 @@ class Scanner:
             mid = float((max(book.bids) + min(book.asks)) / 2) if book and book.valid else None
             if now >= s.expires_ms:
                 s.state = "EXPIRED"
+            elif s.source != self.exchange:
+                s.state = "INVALIDATED"
+                s.invalidation = "Primary exchange changed; source continuity cannot be transferred"
             elif mid and (mid <= s.stop if s.direction == "LONG" else mid >= s.stop):
                 s.state = "INVALIDATED"
             elif was_alerted and (
@@ -360,7 +510,7 @@ class Scanner:
                 facts = facts_asof(self.store, c["instrument"].base, now)
                 regime = candle_features(c["h4"], now)["regime"]
                 supportive = regime in {"range", "trending up" if s.direction == "LONG" else "trending down"}
-                spread_ok = SpreadHistory(self.store.get("spreads:" + s.symbol, [])).assess(
+                spread_ok = SpreadHistory(self.store.get(self.spread_key(s.symbol), [])).assess(
                     now, self.settings.max_spread_bps, self.settings.spread_min_samples
                 )["eligible"]
                 if not healthy or not supportive or not spread_ok or any(f["major_event"] for f in facts):
@@ -369,11 +519,18 @@ class Scanner:
                     self.store.signal(s)
                     await self.notifier.send_research(s, update=True)
                 continue
+            # One immutable first-covered execution decision per setup ID. Re-evaluating
+            # changed flow against yesterday's frozen ML vector would corrupt meta-labels.
+            if s.evidence.get("score_components"):
+                continue
             s.state = "PENDING CONFIRMATION"
             self.store.signal(s)
             if not healthy:
                 continue
             trades = tape.window(start, end)
+            s.evidence["m15"] = candle_features(c["m15"], now)
+            s.trigger_expires_ms = end + 900_000
+            s.holding_deadline_ms = now + 14_400_000
             # Use only additions at/before window close to avoid confirmation leakage.
             window_book = Book()
             window_book.valid = book.valid
@@ -381,7 +538,7 @@ class Scanner:
             flow = footprint(trades, c["instrument"].tick, s.evidence["m15"]["atr"], window_book)
             flow_ok = confirm(s, flow, c["m15"])
             s.gates = []
-            normal_spread = SpreadHistory(self.store.get("spreads:" + s.symbol, [])).assess(
+            normal_spread = SpreadHistory(self.store.get(self.spread_key(s.symbol), [])).assess(
                 now, self.settings.max_spread_bps, self.settings.spread_min_samples
             )
             s.evidence["normal_spread"] = normal_spread
@@ -399,11 +556,18 @@ class Scanner:
                 s.gates.append("current spread exceeds gate")
             d = dict(c["derivatives"])
             rate = d["funding_rate"]
-            if rate is None or now - d["ticker_observed_ms"] > 1_200_000:
+            if rate is None or not 0 <= now - d["ticker_observed_ms"] <= 1_200_000:
                 s.gates.append("derivatives ticker unavailable or stale")
             if rate is not None and (rate if s.direction == "LONG" else -rate) > 0.001:
                 s.gates.append("extreme same-direction funding crowding")
-            d["liquidations"] = list(self.streams.liquidations[s.symbol])[-50:]
+            d["liquidation_feed"] = {
+                "bybit": "actual allLiquidation events; reported bankruptcy prices",
+                "binance": "sampled forceOrder events; approximate last-fill notional, not a census",
+                "okx": "unavailable; stream not implemented",
+            }[self.exchange]
+            d["liquidations"] = (
+                list(self.streams.liquidations[s.symbol])[-50:] if self.exchange != "okx" else None
+            )
             facts = facts_asof(self.store, c["instrument"].base, now)
             if any(f["major_event"] for f in facts):
                 s.gates.append("known major asset event")
@@ -412,19 +576,19 @@ class Scanner:
                 portfolio = None
             s.risk = evaluate_risk(s, c["instrument"], self.settings, book, portfolio, rate)
             s.gates.extend(s.risk["reasons"])
+            from .cross_venue import fresh_comparison
+
             s.evidence.update(
+                cross_exchange=fresh_comparison(self.store.get("cross:" + s.symbol, {}), now, self.exchange),
                 flow=flow,
                 book=bf,
                 derivatives=d,
                 fundamentals=facts,
-                cross_market={
-                    x: self.store.get("market:" + x, {}).get("h4", {}).get("regime", "unavailable")
-                    if now - self.store.get("market:" + x, {}).get("asof", 0) < 960_000
-                    else "unavailable"
-                    for x in ("BTCUSDT", "ETHUSDT")
-                },
+                cross_market=self.market_context(now),
             )
             score(s, flow_ok, rate is not None)
+            if self.settings.sss_research and s.quality >= 95 and not s.gates and s.risk.get("accepted"):
+                s.final_tier = "SSS RESEARCH · UNCALIBRATED"
             from .ml.inference import apply as apply_ml
 
             apply_ml(s, self.settings, self.store, now_ms())
@@ -433,6 +597,7 @@ class Scanner:
                 s.symbol,
                 end,
                 {
+                    "exchange": self.exchange,
                     "signal_id": s.id,
                     "quality": s.quality,
                     "flow": flow,
@@ -461,6 +626,8 @@ class Scanner:
                 self.store.put("scanner", self.status)
                 self.context.clear()
                 await self.streams.select([])
+                if self.settings.market_source in {"auto", "multi"}:
+                    self.source_ready = False
                 log.warning("scan_failed", extra={"error_type": type(exc).__name__})
             await asyncio.sleep(self.settings.scan_seconds)
 
@@ -478,6 +645,11 @@ class Scanner:
             self.tasks.append(asyncio.create_task(self.scan_loop()))
             self.tasks.append(asyncio.create_task(self.quote_loop()))
             self.tasks.append(asyncio.create_task(self.refresh_pending()))
+            self.tasks.append(asyncio.create_task(self.source_watchdog()))
+            if self.settings.market_source == "multi":
+                from .cross_venue import CrossVenue
+
+                self.tasks.append(asyncio.create_task(CrossVenue(self).run()))
 
     async def stop(self):
         for task in self.tasks:

@@ -1,7 +1,7 @@
 # Current status
 
 See [implementation status](docs/STATUS.md), [executed checks](docs/VERIFICATION.md), and
-[complete TradingView/domain/Discord setup](docs/TRADINGVIEW_SETUP.md).
+[self-hosted operator runbook](docs/USER_RUNBOOK.md). TradingView and a domain are not required.
 
 The existing `main` now includes the preserved TradingView gateway and an optional supervised
 ML research layer. See [ML instructions and limitations](docs/ML_RESEARCH.md).

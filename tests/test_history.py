@@ -10,6 +10,25 @@ from bybit_flow.replay import segment_rows
 from bybit_flow.storage import Recorder, Store
 
 
+def test_binance_zip_normalization_is_explicit_aggregate_data(tmp_path):
+    import zipfile
+
+    from bybit_flow.history import convert_binance_archive
+
+    raw = tmp_path / "synthetic.zip"
+    with zipfile.ZipFile(raw, "w") as archive:
+        archive.writestr(
+            "synthetic.csv",
+            "agg_trade_id,price,quantity,first_trade_id,last_trade_id,transact_time,is_buyer_maker\n1,100,2,1,1,1704067200000,true\n2,101,3,2,2,1704067201000,false\n",
+        )
+    output = tmp_path / "synthetic.parquet"
+    manifest = convert_binance_archive(raw, output, "TESTUSDT", "2024-01-01", "synthetic-software-test")
+    rows = pq.read_table(output).to_pylist()
+    assert manifest["rows"] == 2 and not manifest["book_coverage"]
+    assert rows[0]["side"] == "Sell" and rows[1]["notional"] == "303"
+    assert all(r["exchange"] == "binance" for r in rows)
+
+
 def test_trade_aggregation_preserves_source_order_with_equal_timestamps(tmp_path):
     rows = [
         {"event_ms": 1000, "event_index": 0, "price": "100", "size": "2", "notional": "200"},

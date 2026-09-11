@@ -1,5 +1,17 @@
 # ML research implementation and audit
 
+## Exchange-native extension — 2026-09-10
+
+Follow [USER_RUNBOOK.md](USER_RUNBOOK.md) for subscription-free operation. Feature schema
+is now `candidate-v4`, adding native trapped-participant and mean-execution-size features.
+Old snapshots/models remain preserved; current exports are schema- and source-specific.
+Use `ml export --source binance` (or bybit/okx). Mixed venue datasets are rejected rather
+than silently pooled. Weekly export selects the recorded primary venue; inference requires
+the same methodology. One first-covered execution decision per setup ID prevents later
+changed flow from being scored against an older frozen vector. Source-tagged print labels
+cannot consume another venue's same-symbol executions. TV chart commands remain optional
+legacy research, not a required fallback. No real financial improvement is established.
+
 ## Repository audit, 2026-09-09
 
 Started from clean, freshly pulled `origin/main` (`9690cd3`). The existing tested TradingView
@@ -87,7 +99,7 @@ This milestone passed 65 software tests, including logistic/LightGBM JSON parity
 holdout reuse, tamper rejection, rejected-candidate labels, gaps, API authentication and mock
 Discord operations. The runtime Docker image builds. Real collection tables remain empty.
 
-## Bybit-unavailable fallback
+## Optional legacy TradingView research (not the native fallback)
 
 Save actual received TradingView setups and export real corresponding 15M candles. CSV columns:
 `time,open,high,low,close`. Time accepts Unix seconds/milliseconds or timezone-qualified ISO8601.

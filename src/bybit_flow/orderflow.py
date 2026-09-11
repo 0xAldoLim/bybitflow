@@ -101,6 +101,10 @@ class Book:
             for side in ("bid", "ask")
         }
         # Depletion combines fills and cancellations; it is not cancellation volume.
+        concentration = {}
+        for side, levels in (("bid", self.bids), ("ask", self.asks)):
+            notionals = [float(p * q) for p, q in levels.items()]
+            concentration[side] = max(notionals) / sum(notionals) if notionals else None
         return dict(
             available=True,
             event_ms=self.event_ms,
@@ -108,6 +112,10 @@ class Book:
             spread_bps=float((ask - bid) / mid * 10000),
             mid=float(mid),
             depth=depth,
+            depth_concentration=concentration,
+            book_slope_notional_per_bps={
+                side: (depth["25"][side] - depth["5"][side]) / 20 for side in ("bid", "ask")
+            },
             microprice=float(
                 (ask * self.bids[bid] + bid * self.asks[ask]) / (self.bids[bid] + self.asks[ask])
             ),
@@ -216,6 +224,18 @@ def footprint(trades, tick, atr, book=None):
     )
     total = {p: sum(v) for p, v in levels.items()}
     profile = value_area(total)
+    vwap = (buy_n + sell_n) / (buy + sell)
+    high, low = max(t.price for t in trades), min(t.price for t in trades)
+    trapped_buyers = (
+        delta_pct >= 20
+        and float(high - first.price) >= 0.3 * atr
+        and float(last.price) < min(float(first.price), vwap)
+    )
+    trapped_sellers = (
+        delta_pct <= -20
+        and float(first.price - low) >= 0.3 * atr
+        and float(last.price) > max(float(first.price), vwap)
+    )
     return dict(
         available=True,
         buy_base=buy,
@@ -229,7 +249,17 @@ def footprint(trades, tick, atr, book=None):
         cvd=cvd,
         cvd_scope="this complete execution window",
         cvd_path=cvd_path[:: max(1, len(cvd_path) // 200)],
-        vwap=(buy_n + sell_n) / (buy + sell),
+        vwap=vwap,
+        average_trade_size=(buy + sell) / len(trades),
+        large_trade_count=sum(float(t.size) >= 5 * ((buy + sell) / len(trades)) for t in trades),
+        large_trade_definition="at least 5 times this window mean reported execution size; not whale identity",
+        potential_trapped_buyers=trapped_buyers,
+        potential_trapped_sellers=trapped_sellers,
+        trapped_definition="delta >=20% in excursion direction; >=0.3 ATR excursion then close through start and VWAP against aggression; inventory unknown",
+        unfinished_auction_high=all(v >= floor for v in levels[max(levels)]),
+        unfinished_auction_low=all(v >= floor for v in levels[min(levels)]),
+        hvn=[float(p) for p, volume in total.items() if volume >= 1.5 * typical],
+        lvn=[float(p) for p, volume in total.items() if 0 < volume <= 0.5 * typical],
         bucket=str(bucket),
         **profile,
         profile=[dict(price=float(p), buy=v[0], sell=v[1]) for p, v in sorted(levels.items())],

@@ -1,6 +1,6 @@
 # Public exchange adapter audit
 
-Audit date: 2026-09-09. No exchange credentials, trading endpoints, TLS bypasses or
+Audit dates: 2026-09-09–10. No exchange credentials, trading endpoints, TLS bypasses or
 paid chart services are used. `exchanges.py` preserves wire responses separately
 from its documented internal scanner-v1 compatibility view.
 
@@ -52,9 +52,39 @@ was reviewed. This project does not depend on it or on edgedepth-terminal.
 
 ## Executed connectivity evidence
 
-On this development host, real HTTPS GETs to all three official time endpoints
-failed TLS hostname verification on 2026-09-09. Certificate verification stayed
-enabled. No DNS override, alternate geographic routing or regional-access bypass
-was attempted. Payload unit tests are synthetic schema tests, not proof of live
-compatibility. Run `bybit-flow test-market --exchange binance` (or bybit/okx) on
-your own lawful deployment host to establish actual REST and WS evidence.
+Host and isolated Docker probes on September 10 did not establish any healthy live
+source. REST failed with certificate/connectivity errors (Bybit also timed out in
+Docker); Binance/Bybit trade WS failed certificate verification. OKX's normalized
+WS test could not progress past mandatory REST contract metadata, so this is not a
+successful or independently completed OKX WS handshake. Host DNS returned filtering
+service addresses/names; system time reported NTP synchronized. Correct-SNI hostname
+verification failed. Certificate verification stayed enabled. No DNS override,
+alternate geographic routing or regional-access bypass was attempted.
+
+The official Binance historical archive was accessible. The published SHA256 matched
+and 115,985 LINKUSDT aggregate execution records from January 1, 2024 were converted
+to Parquet and used for actual footprint calculations. This proves historical archive
+and feature processing, not current REST/WS compatibility, historical DOM or strategy
+profitability. See [VERIFICATION.md](VERIFICATION.md) for hashes and exact commands.
+
+Payload/sequence and adapter-to-scanner tests use synthetic HTTP transports. Run
+`bybit-flow test-market --exchange binance` (or bybit/okx) on your own lawful deployment
+host to establish its actual REST and normalized trade WS evidence.
+
+## Implemented operating modes
+
+`FLOW_MARKET_SOURCE=auto` probes Binance, Bybit, then OKX, retaining a working primary
+until a failure requires requalification. `binance`, `bybit` and `okx` are fixed modes;
+they never silently switch. `multi` uses the same primary selection and bounded,
+separate secondary collectors for at most the first two configured core symbols.
+Primary default deep capacity is eight symbols. This is not maximum-depth subscription
+to the whole exchange. A source transition clears continuity-dependent state and is
+persisted; old-venue BTC/ETH regimes and stale cross-venue comparisons cannot earn credit.
+
+Current cross-venue outputs are aligned price dislocation, spread dispersion and
+same-window delta agreement. Tapes and contract units are never pooled. Predictive
+weight is zero pending OOS testing. Cross-venue funding/OI dispersion, CVD agreement
+and liquidation clusters are explicitly unavailable. Bybit liquidation events and
+Binance's sampled forceOrder events retain their different semantics; OKX liquidation
+collection is not implemented. Historical full-strategy replay remains Bybit-specific;
+native frozen-candidate outcome labeling is source-separated for all implemented venues.
