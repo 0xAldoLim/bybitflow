@@ -697,3 +697,7 @@ Keep error reports to status/type/timestamp, never secrets. TLS verification sta
 - [ ] Backup and separate restore tested
 - [ ] SSS RESEARCH status understood
 - [ ] Validated SSS status and remaining evidence requirements understood
+
+## September 2026 ML and top-30 installation
+
+See [ML collection and top-30 setup](ML_TOP30_SETUP.md) for the current Windows configuration, audited clock-gap recovery, source-reviewed asset pack, and start/stop commands.

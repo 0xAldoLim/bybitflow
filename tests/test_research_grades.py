@@ -56,3 +56,23 @@ async def test_all_research_grades_send_without_claiming_validation(settings, si
     assert "TP1" in fields["Targets"] and "TP2" in fields["Targets"]
     assert (await notifier.send_public(signal)).startswith("blocked")
     store.close()
+
+
+async def test_validated_lower_grade_still_uses_requested_research_channel(settings, signal):
+    cfg = settings.model_copy(
+        update={
+            "research_alerts": True,
+            "research_webhook": SecretStr("https://discord.com/api/webhooks/mock/test"),
+        }
+    )
+    signal.quality, signal.raw_tier, signal.final_tier = 80, "A", "A"
+    signal.validation_status = "validated"
+    signal.state = "CONFIRMED"
+    store = Store(settings.data_dir)
+    store.signal(signal)
+    notifier = Notifier(
+        cfg, store, httpx.MockTransport(lambda request: httpx.Response(200, json={"id": "mock-id"}))
+    )
+    assert await notifier.send_research(signal) == "sent"
+    assert (await notifier.send_public(signal)).startswith("blocked")
+    store.close()

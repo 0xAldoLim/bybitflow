@@ -157,9 +157,12 @@ def test_disabling_ml_clears_stale_approval(settings, signal):
     store = Store(settings.data_dir)
     signal.validation_status, signal.final_tier = "validated", "SSS"
     signal.calibrated_probability, signal.expected_net_r = 0.9, 1.0
+    signal.evidence["ml"] = {"research_score": 99}
+    signal.qualification["ml_reason"] = "obsolete reason"
     apply(signal, settings, store)
     assert signal.validation_status == "unvalidated" and signal.final_tier == "RESEARCH"
     assert signal.calibrated_probability is None and signal.expected_net_r is None
+    assert "ml" not in signal.evidence and "ml_reason" not in signal.qualification
     store.close()
 
 

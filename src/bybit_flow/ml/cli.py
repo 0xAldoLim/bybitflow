@@ -12,14 +12,13 @@ from .store import FeatureStore
 
 
 def cycle(settings, store):
-    from ..replay import segment_rows
     from .labels import label_recordings
+    from .recordings import worker_rows
     from .training import train
 
-    paths = sorted((store.root / "segments").glob("*.jsonl.gz"))
-    if not paths:
+    if not store.db.execute("SELECT 1 FROM segments LIMIT 1").fetchone():
         raise ValueError("No verified real recording segments; weekly training abstains")
-    label_recordings(store, segment_rows(paths), settings)
+    label_recordings(store, worker_rows(store), settings)
     source = store.get("runtime_health", {}).get("source")
     path = FeatureStore(store).export(now_ms(), source=source)
     return train(store, path)["id"]
@@ -27,14 +26,14 @@ def cycle(settings, store):
 
 def monitor(settings, store):
     """Resolve paper labels and check drift independently of the weekly fit cadence."""
-    from ..replay import segment_rows
     from .drift import check
     from .labels import label_recordings
+    from .recordings import worker_rows
 
-    paths = sorted((store.root / "segments").glob("*.jsonl.gz"))
+    paths = store.db.execute("SELECT 1 FROM segments LIMIT 1").fetchone()
     result = dict(at_ms=now_ms(), status="no-recordings")
     if paths:
-        labels = label_recordings(store, segment_rows(paths), settings)
+        labels = label_recordings(store, worker_rows(store), settings)
         result.update(status="observed", complete=labels["complete"])
     ident = store.get("ml_champion")
     if ident:
@@ -156,8 +155,11 @@ def run(arguments, settings, store):
                         monitor(settings, store)
                     except (ValueError, OSError) as exc:
                         store.put("ml_monitor", dict(at_ms=now_ms(), status="abstained", reason=str(exc)))
-                previous = store.get("ml_cycle", {}).get("at_ms", 0)
-                if args.command == "cycle" or now_ms() - previous >= 7 * 86_400_000:
+                previous_cycle = store.get("ml_cycle", {})
+                previous = previous_cycle.get("at_ms", 0)
+                # Recheck data readiness daily; successful fits remain weekly.
+                cadence = (7 if previous_cycle.get("status") == "challenger" else 1) * 86_400_000
+                if args.command == "cycle" or now_ms() - previous >= cadence:
                     try:
                         result = dict(at_ms=now_ms(), status="challenger", model_id=cycle(settings, store))
                     except (ValueError, OSError) as exc:

@@ -18,6 +18,8 @@ def apply(signal, settings, store, at_ms=None):
     signal.calibrated_probability = signal.probability_uncertainty = None
     signal.expected_net_r = signal.expected_net_r_uncertainty = None
     signal.validation_status, signal.model_version = "unvalidated", None
+    signal.evidence.pop("ml", None)
+    signal.qualification.pop("ml_reason", None)
     if not settings.ml_enabled:
         return signal
     now = at_ms or now_ms()
@@ -70,6 +72,8 @@ def apply(signal, settings, store, at_ms=None):
         p = float(predict(model["model"], [row])[0])
         qualifies = accepted(row, p, model["model"]["thresholds"])
         signal.evidence["ml"] = dict(
+            research_score=round(p * 100, 2),
+            score_label="Unvalidated ML ranking / 100; not a proven win probability",
             explanation=explain(model["model"], row),
             research_acceptance=qualifies,
             thresholds=model["model"]["thresholds"],

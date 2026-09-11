@@ -1,0 +1,660 @@
+[
+  {
+    "asset": "BTC",
+    "category": "economic_purpose",
+    "definition": "Network purpose and native asset function.",
+    "value": "Bitcoin supports peer-to-peer payments without a central operator. This describes functionality, not measured adoption or future returns.",
+    "source": "https://bitcoin.org/en/faq#what-is-bitcoin"
+  },
+  {
+    "asset": "BTC",
+    "category": "value_accrual",
+    "definition": "Relationship between utility and holder value.",
+    "value": "BTC value depends on acceptance and market supply/demand. Utility and scarcity do not guarantee purchasing power or appreciation.",
+    "source": "https://bitcoin.org/en/faq#why-do-bitcoins-have-value"
+  },
+  {
+    "asset": "BTC",
+    "category": "dilution",
+    "definition": "Native issuance mechanism and supply constraint.",
+    "value": "Mining creates BTC on a declining issuance schedule, approaching a 21-million limit under existing rules. This is not a current circulating-supply measurement.",
+    "source": "https://bitcoin.org/en/faq#how-are-bitcoins-created"
+  },
+  {
+    "asset": "BTC",
+    "category": "security",
+    "definition": "Consensus security mechanism and limitations.",
+    "value": "Mining makes rewriting confirmed history costly. Dominant computing power can threaten recent transactions; this review does not measure current mining concentration.",
+    "source": "https://bitcoin.org/en/faq#how-does-mining-help-secure-bitcoin"
+  },
+  {
+    "asset": "BTC",
+    "category": "governance",
+    "definition": "How protocol changes become adopted rules.",
+    "value": "Developers propose changes; users choose compatible software. Adoption determines effective rules. This does not assess current disputes or participant influence.",
+    "source": "https://bitcoin.org/en/faq#who-controls-the-bitcoin-network"
+  },
+  {
+    "asset": "ETH",
+    "category": "economic_purpose",
+    "definition": "Network purpose and native asset function.",
+    "value": "ETH is Ethereum's native asset, used for transaction gas and staking to secure the network. These functions do not measure current application demand or imply a price direction.",
+    "source": "https://ethereum.org/what-is-ether/"
+  },
+  {
+    "asset": "ETH",
+    "category": "value_accrual",
+    "definition": "Relationship between network fees and token supply.",
+    "value": "Ethereum transaction base fees are paid in ETH and burned. This links use of blockspace to removal of ETH, but issuance can offset burning; it is not guaranteed appreciation or a dividend to every holder.",
+    "source": "https://ethereum.org/roadmap/merge/issuance/"
+  },
+  {
+    "asset": "ETH",
+    "category": "dilution",
+    "definition": "New issuance and offsets to net supply growth.",
+    "value": "Post-Merge ETH issuance rewards validators and varies with total stake. Net supply reflects issuance and burning, so ETH is not unconditionally deflationary. The source's historical numerical examples are not treated as current issuance, stake or inflation measurements.",
+    "source": "https://ethereum.org/roadmap/merge/issuance/"
+  },
+  {
+    "asset": "ETH",
+    "category": "security",
+    "definition": "Consensus security mechanism and limitations.",
+    "value": "Ethereum uses proof-of-stake: validators commit ETH and validate/propose blocks. Conflicting attestations or other slashable actions can destroy stake. This mechanism does not establish absence of vulnerabilities; current validator concentration and client health were not independently measured.",
+    "source": "https://ethereum.org/developers/docs/consensus-mechanisms/pos/"
+  },
+  {
+    "asset": "ETH",
+    "category": "governance",
+    "definition": "How protocol changes become adopted rules.",
+    "value": "Ethereum protocol governance occurs offchain through stakeholder discussion and implementation, including EIP authors, developers, validators and node operators. It differs from token voting used by some applications. This summary does not establish equal influence or absence of contentious changes.",
+    "source": "https://ethereum.org/governance/"
+  },
+  {
+    "asset": "USDT",
+    "category": "economic_purpose",
+    "definition": "Asset function and economic purpose.",
+    "value": "USD-linked tokens support transfers across supported blockchains. This is an issuer-designed peg, not guaranteed secondary-market pricing.",
+    "source": "https://tether.to/en/faqs/"
+  },
+  {
+    "asset": "USDT",
+    "category": "value_accrual",
+    "definition": "How usage or contractual rights relate to holder value.",
+    "value": "Tether describes one-dollar backing through reserves including cash equivalents and other assets. This is issuer-reported backing, not appreciation evidence or an independent reserve audit.",
+    "source": "https://tether.to/en/faqs/"
+  },
+  {
+    "asset": "USDT",
+    "category": "dilution",
+    "definition": "Issuance and supply-change mechanisms.",
+    "value": "Authorized treasury tokens are distinct from issued circulation. Issuance and redemptions change circulating supply; authorization alone is not market circulation.",
+    "source": "https://tether.to/en/faqs/"
+  },
+  {
+    "asset": "USDT",
+    "category": "security",
+    "definition": "Security mechanisms and material limitations.",
+    "value": "Backing depends on reserve assets and operations across distinct chains. Transfers require the correct network; reported reserve values may lag the review time.",
+    "source": "https://tether.to/en/faqs/"
+  },
+  {
+    "asset": "USDT",
+    "category": "governance",
+    "definition": "Control of protocol or issuer decisions.",
+    "value": "Creation uses Tether authorization keys and treasury issuance. Administration is issuer-controlled; holding USDT is not evidence of protocol-governance authority.",
+    "source": "https://tether.to/en/faqs/"
+  },
+  {
+    "asset": "BNB",
+    "category": "economic_purpose",
+    "definition": "Asset function and economic purpose.",
+    "value": "BNB pays gas and supports staking on an EVM-compatible smart-contract chain. Utility does not establish current demand.",
+    "source": "https://docs.bnbchain.org/bnb-smart-chain/introduction/"
+  },
+  {
+    "asset": "BNB",
+    "category": "value_accrual",
+    "definition": "How usage or contractual rights relate to holder value.",
+    "value": "Transaction fees reward validators, which can share fees with delegators. Passive ownership does not guarantee this income or appreciation.",
+    "source": "https://docs.bnbchain.org/bnb-smart-chain/introduction/"
+  },
+  {
+    "asset": "BNB",
+    "category": "dilution",
+    "definition": "Issuance and supply-change mechanisms.",
+    "value": "BSC documentation describes fee-funded validator rewards without new BNB mining issuance. This does not measure current circulating supply or verify every burn event.",
+    "source": "https://docs.bnbchain.org/bnb-smart-chain/introduction/"
+  },
+  {
+    "asset": "BNB",
+    "category": "security",
+    "definition": "Security mechanisms and material limitations.",
+    "value": "Proof of Staked Authority selects a limited validator set; slashing addresses misconduct. Security depends on validator honesty and availability, not merely token market cap.",
+    "source": "https://docs.bnbchain.org/bnb-smart-chain/introduction/"
+  },
+  {
+    "asset": "BNB",
+    "category": "governance",
+    "definition": "Control of protocol or issuer decisions.",
+    "value": "BSC governance uses proposals and delegated voting power associated with staking credits. Participation and proposer requirements apply; stake distribution can affect influence.",
+    "source": "https://docs.bnbchain.org/bnb-smart-chain/governance/overview/"
+  },
+  {
+    "asset": "XRP",
+    "category": "economic_purpose",
+    "definition": "Asset function and economic purpose.",
+    "value": "XRP is the native asset of the XRP Ledger, used for payments and ledger operation. It is distinct from ownership of Ripple the company.",
+    "source": "https://xrpl.org/docs/introduction/what-is-xrp"
+  },
+  {
+    "asset": "XRP",
+    "category": "value_accrual",
+    "definition": "How usage or contractual rights relate to holder value.",
+    "value": "Transaction costs destroy XRP rather than paying a fee recipient. Fee consumption provides utility but does not guarantee significant scarcity or price appreciation.",
+    "source": "https://xrpl.org/docs/concepts/transactions/transaction-cost"
+  },
+  {
+    "asset": "XRP",
+    "category": "dilution",
+    "definition": "Issuance and supply-change mechanisms.",
+    "value": "The ledger began with 100 billion XRP, including an allocation to Ripple. Existing holdings entering circulation differ from new creation; current escrow releases were not measured.",
+    "source": "https://xrpl.org/docs/introduction/what-is-xrp"
+  },
+  {
+    "asset": "XRP",
+    "category": "security",
+    "definition": "Security mechanisms and material limitations.",
+    "value": "Servers rely on agreement among trusted validators. Validator-list choice and overlap matter; publishers influence which validators are widely trusted. Current concentration was not measured.",
+    "source": "https://xrpl.org/docs/concepts/consensus-protocol/unl"
+  },
+  {
+    "asset": "XRP",
+    "category": "governance",
+    "definition": "Control of protocol or issuer decisions.",
+    "value": "Transaction-processing amendments require sustained supermajority validator support before activation. A proposal alone is not an active rule; operators must run compatible software.",
+    "source": "https://xrpl.org/docs/concepts/networks-and-servers/amendments"
+  },
+  {
+    "asset": "USDC",
+    "category": "economic_purpose",
+    "definition": "Asset function and economic purpose.",
+    "value": "USDC represents dollar-denominated value transferable on supported chains, with issuance and redemption under Circle's terms.",
+    "source": "https://www.circle.com/legal/usdc-terms"
+  },
+  {
+    "asset": "USDC",
+    "category": "value_accrual",
+    "definition": "How usage or contractual rights relate to holder value.",
+    "value": "USDC targets one dollar. Holders are not entitled to reserve interest solely by holding USDC; direct redemption is conditional on applicable terms and eligibility.",
+    "source": "https://www.circle.com/legal/usdc-terms"
+  },
+  {
+    "asset": "USDC",
+    "category": "dilution",
+    "definition": "Issuance and supply-change mechanisms.",
+    "value": "Issuance requires corresponding dollar reserves or equivalent dollar-denominated assets. Supply expansion is reserve-backed issuance by design, not a fixed-cap mining schedule.",
+    "source": "https://www.circle.com/transparency"
+  },
+  {
+    "asset": "USDC",
+    "category": "security",
+    "definition": "Security mechanisms and material limitations.",
+    "value": "Circle can block addresses and freeze USDC under its policies; operational issues can delay redemption. Reserve backing does not remove issuer or transfer-restriction risk.",
+    "source": "https://www.circle.com/legal/usdc-terms"
+  },
+  {
+    "asset": "USDC",
+    "category": "governance",
+    "definition": "Control of protocol or issuer decisions.",
+    "value": "Circle administers issuance, redemption and service terms, subject to applicable law. USDC is not a holder-voted protocol-governance token.",
+    "source": "https://www.circle.com/legal/usdc-terms"
+  },
+  {
+    "asset": "SOL",
+    "category": "economic_purpose",
+    "definition": "Asset function and economic purpose.",
+    "value": "SOL pays fees for Solana transactions, including a base fee and optional prioritization fee. This establishes usage, not a forecast of demand.",
+    "source": "https://solana.com/docs/core/fees"
+  },
+  {
+    "asset": "SOL",
+    "category": "value_accrual",
+    "definition": "How usage or contractual rights relate to holder value.",
+    "value": "The documented base fee is split between burning and validators; priority fees go to validators. Fee activity is not guaranteed net deflation or passive-holder yield.",
+    "source": "https://solana.com/docs/core/fees"
+  },
+  {
+    "asset": "SOL",
+    "category": "dilution",
+    "definition": "Issuance and supply-change mechanisms.",
+    "value": "The documented inflation schedule declines toward a long-run annual rate of 1.5%. Inflation differs from staking yield; current realized issuance was not independently measured.",
+    "source": "https://solana.com/staking"
+  },
+  {
+    "asset": "SOL",
+    "category": "security",
+    "definition": "Security mechanisms and material limitations.",
+    "value": "Validators process transactions and vote on blocks; delegated stake helps secure the network. Validator uptime and commission affect staking rewards. No current outage or concentration clearance is implied.",
+    "source": "https://solana.com/staking"
+  },
+  {
+    "asset": "SOL",
+    "category": "governance",
+    "definition": "Control of protocol or issuer decisions.",
+    "value": "Solana documents validator voting to activate inflation and staking rewards. This establishes stakeholder involvement, not that every protocol decision uses the same voting mechanism.",
+    "source": "https://solana.com/staking"
+  },
+  {
+    "asset": "TRX",
+    "category": "economic_purpose",
+    "definition": "Asset function and economic purpose.",
+    "value": "TRX staking supplies network resources and voting power. Bandwidth meters transactions and Energy meters smart-contract computation.",
+    "source": "https://developers.tron.network/docs/resource-model"
+  },
+  {
+    "asset": "TRX",
+    "category": "value_accrual",
+    "definition": "How usage or contractual rights relate to holder value.",
+    "value": "Insufficient resource quota triggers burning of TRX for execution. Burn rates are governed parameters; demand does not guarantee holder appreciation.",
+    "source": "https://developers.tron.network/docs/paying-for-resources"
+  },
+  {
+    "asset": "TRX",
+    "category": "dilution",
+    "definition": "Issuance and supply-change mechanisms.",
+    "value": "The network generates block-production and voting rewards. These issuance flows coexist with resource-fee burns; current net supply growth was not measured.",
+    "source": "https://developers.tron.network/docs/reward-calculation"
+  },
+  {
+    "asset": "TRX",
+    "category": "security",
+    "definition": "Security mechanisms and material limitations.",
+    "value": "Twenty-seven elected Super Representatives produce blocks under delegated proof of stake. This limited producer set makes election and operator behavior material dependencies.",
+    "source": "https://developers.tron.network/docs/super-representatives"
+  },
+  {
+    "asset": "TRX",
+    "category": "governance",
+    "definition": "Control of protocol or issuer decisions.",
+    "value": "Staked TRX supplies voting power for Super Representatives, which also govern through onchain proposals. Voting concentration and current proposals were not independently assessed.",
+    "source": "https://developers.tron.network/docs/super-representatives"
+  },
+  {
+    "asset": "ZEC",
+    "category": "economic_purpose",
+    "definition": "Asset function and economic purpose.",
+    "value": "Zcash is a digital payment currency with privacy-oriented transaction options. Its utility does not imply universal exchange support or guaranteed anonymity in every usage pattern.",
+    "source": "https://z.cash/learn/what-is-zcash/"
+  },
+  {
+    "asset": "ZEC",
+    "category": "value_accrual",
+    "definition": "How usage or contractual rights relate to holder value.",
+    "value": "ZEC's payment utility and supply constraint are monetary attributes, not a contractual dividend or price floor. This is a qualitative interpretation, not a valuation.",
+    "source": "https://z.cash/learn/what-are-the-economics-of-zcash/"
+  },
+  {
+    "asset": "ZEC",
+    "category": "dilution",
+    "definition": "Issuance and supply-change mechanisms.",
+    "value": "Zcash documentation describes a 21-million supply cap and declining block rewards. Current reward allocation and any proposed issuance changes must be checked separately; proposed ZIPs are not assumed active.",
+    "source": "https://z.cash/learn/what-are-the-economics-of-zcash/"
+  },
+  {
+    "asset": "ZEC",
+    "category": "security",
+    "definition": "Security mechanisms and material limitations.",
+    "value": "Zero-knowledge proofs enable verification without revealing the underlying private information. This explains the privacy mechanism; it is not an audit of wallets or a claim of zero vulnerabilities.",
+    "source": "https://z.cash/learn/what-are-zero-knowledge-proofs/"
+  },
+  {
+    "asset": "ZEC",
+    "category": "governance",
+    "definition": "Control of protocol or issuer decisions.",
+    "value": "The ZIP process distinguishes drafts, proposals, implemented changes and network activation. Publication does not alone make a proposal a consensus rule.",
+    "source": "https://zips.z.cash/zip-0000"
+  },
+  {
+    "asset": "FIGR_HELOC",
+    "category": "economic_purpose",
+    "definition": "Asset function and economic purpose.",
+    "value": "Figure describes tokenizing loan notes on Provenance to record ownership and transfers. CoinGecko lists Figure HELOC as a tokenized asset; it must not be confused with FIGR corporate equity.",
+    "source": "https://investors.figure.com/static-files/5db20221-0091-47fb-9f6b-b170a67854b0"
+  },
+  {
+    "asset": "FIGR_HELOC",
+    "category": "value_accrual",
+    "definition": "How usage or contractual rights relate to holder value.",
+    "value": "Figure's filing describes a loan-note token owner as holding the underlying note's rights and obligations. This is loan exposure, not a guaranteed return; exact listed-unit rights require instrument-specific documents.",
+    "source": "https://investors.figure.com/static-files/5db20221-0091-47fb-9f6b-b170a67854b0"
+  },
+  {
+    "asset": "FIGR_HELOC",
+    "category": "research_gap",
+    "definition": "Unresolved evidence; not qualifying category coverage.",
+    "value": "Current instrument-specific supply/mint rules, security controls and governance were not established. These categories remain missing; corporate disclosures are not a substitute for contract-level evidence.",
+    "source": "https://investors.figure.com/static-files/5db20221-0091-47fb-9f6b-b170a67854b0"
+  },
+  {
+    "asset": "HYPE",
+    "category": "economic_purpose",
+    "definition": "Source-reviewed baseline token mechanism and its limitations.",
+    "value": "HYPE supports delegated proof-of-stake on Hyperliquid through validator delegation in HyperCore.",
+    "source": "https://hyperliquid.gitbook.io/hyperliquid-docs/hypercore/staking"
+  },
+  {
+    "asset": "HYPE",
+    "category": "dilution",
+    "definition": "Source-reviewed baseline token mechanism and its limitations.",
+    "value": "Staking rewards come from the future emissions reserve; the documented reward formula varies with total stake. No fixed future yield is assumed.",
+    "source": "https://hyperliquid.gitbook.io/hyperliquid-docs/hypercore/staking"
+  },
+  {
+    "asset": "HYPE",
+    "category": "security",
+    "definition": "Source-reviewed baseline token mechanism and its limitations.",
+    "value": "The documented staking-to-spot withdrawal queue lasts seven days; documentation states automatic slashing is not currently implemented. This is a mechanism review, not a security audit.",
+    "source": "https://hyperliquid.gitbook.io/hyperliquid-docs/hypercore/staking"
+  },
+  {
+    "asset": "DOGE",
+    "category": "economic_purpose",
+    "definition": "Source-reviewed baseline token mechanism and its limitations.",
+    "value": "Dogecoin uses miners to process its peer-to-peer transaction network.",
+    "source": "https://dogecoin.com/dogepedia/articles/what-is-a-miner/"
+  },
+  {
+    "asset": "DOGE",
+    "category": "security",
+    "definition": "Source-reviewed baseline token mechanism and its limitations.",
+    "value": "Mining uses Scrypt proof-of-work. Mining costs and participation support consensus; this does not establish immunity to attacks.",
+    "source": "https://dogecoin.com/dogepedia/articles/what-is-a-miner/"
+  },
+  {
+    "asset": "RAIN",
+    "category": "economic_purpose",
+    "definition": "Source-reviewed baseline token mechanism and its limitations.",
+    "value": "RAIN is the token associated with Rain's prediction-market protocol. The March 2026 whitepaper says the token is not required for core trading or creating markets.",
+    "source": "https://whitepaper.rain.one/"
+  },
+  {
+    "asset": "RAIN",
+    "category": "governance",
+    "definition": "Source-reviewed baseline token mechanism and its limitations.",
+    "value": "The whitepaper describes intended governance rights, but says they were not exercisable at admission. This review does not verify subsequent governance activation.",
+    "source": "https://whitepaper.rain.one/"
+  },
+  {
+    "asset": "RAIN",
+    "category": "value_accrual",
+    "definition": "Source-reviewed baseline token mechanism and its limitations.",
+    "value": "The whitepaper does not grant token holders equity, ownership or redemption rights. Governance intent must not be interpreted as a claim on platform profits.",
+    "source": "https://whitepaper.rain.one/"
+  },
+  {
+    "asset": "USDS",
+    "category": "economic_purpose",
+    "definition": "Source-reviewed baseline token mechanism and its limitations.",
+    "value": "USDS is a Sky Protocol dollar stablecoin. Sky provides conversion and savings interfaces; USDS and the savings token sUSDS are distinct assets.",
+    "source": "https://sky.money/"
+  },
+  {
+    "asset": "XMR",
+    "category": "economic_purpose",
+    "definition": "Source-reviewed baseline token mechanism and its limitations.",
+    "value": "Monero is a cryptocurrency for private electronic payments.",
+    "source": "https://www.getmonero.org/get-started/what-is-monero/"
+  },
+  {
+    "asset": "XMR",
+    "category": "security",
+    "definition": "Source-reviewed baseline token mechanism and its limitations.",
+    "value": "Monero documentation describes stealth addresses, ring signatures and RingCT for transaction privacy. These protocol descriptions do not guarantee anonymity for every user's operational behavior.",
+    "source": "https://www.getmonero.org/get-started/what-is-monero/"
+  },
+  {
+    "asset": "WBT",
+    "category": "economic_purpose",
+    "definition": "Source-reviewed baseline token mechanism and its limitations.",
+    "value": "WBT is WhiteBIT's ecosystem coin, with exchange benefits subject to the platform's holding and account rules.",
+    "source": "https://help.whitebit.com/hc/en-gb/articles/17190215630493-All-about-WBT-Coin"
+  },
+  {
+    "asset": "WBT",
+    "category": "value_accrual",
+    "definition": "Source-reviewed baseline token mechanism and its limitations.",
+    "value": "WhiteBIT describes holding-related benefits and a burn mechanism. These are issuer-dependent utility mechanisms; this review does not verify realized burn totals or predict price appreciation.",
+    "source": "https://help.whitebit.com/hc/en-gb/articles/17190215630493-All-about-WBT-Coin"
+  },
+  {
+    "asset": "LINK",
+    "category": "economic_purpose",
+    "definition": "Source-reviewed baseline token mechanism and its limitations.",
+    "value": "LINK staking supports the cryptoeconomic security of Chainlink oracle services.",
+    "source": "https://chain.link/economics/staking"
+  },
+  {
+    "asset": "LINK",
+    "category": "security",
+    "definition": "Source-reviewed baseline token mechanism and its limitations.",
+    "value": "Staking adds an economic security layer to supported oracle services. Coverage depends on the specific staking deployment; it is not a guarantee that every data feed or integration is secure.",
+    "source": "https://chain.link/economics/staking"
+  },
+  {
+    "asset": "LEO",
+    "category": "economic_purpose",
+    "definition": "Source-reviewed baseline token mechanism and its limitations.",
+    "value": "LEO is a Bitfinex utility token providing fee-related benefits under account, holding and jurisdiction rules.",
+    "source": "https://support.bitfinex.com/hc/en-us/articles/360023342674-Unus-Sed-LEO-LEO"
+  },
+  {
+    "asset": "LEO",
+    "category": "security",
+    "definition": "Source-reviewed baseline token mechanism and its limitations.",
+    "value": "The issuer documents LEO on Ethereum and Vaulta, with conversion through Bitfinex. Correct chain selection and platform dependencies remain relevant.",
+    "source": "https://support.bitfinex.com/hc/en-us/articles/360023342674-Unus-Sed-LEO-LEO"
+  },
+  {
+    "asset": "ADA",
+    "category": "economic_purpose",
+    "definition": "Source-reviewed baseline token mechanism and its limitations.",
+    "value": "ADA holders can delegate stake to Cardano stake pools; pools produce blocks in proportion to delegated stake.",
+    "source": "https://developers.cardano.org/docs/developers/curriculum/staking-governance/staking/"
+  },
+  {
+    "asset": "ADA",
+    "category": "security",
+    "definition": "Source-reviewed baseline token mechanism and its limitations.",
+    "value": "Delegation participates in proof-of-stake network security. Staking functionality alone does not establish current decentralization or a security clearance.",
+    "source": "https://developers.cardano.org/docs/developers/curriculum/staking-governance/staking/"
+  },
+  {
+    "asset": "XLM",
+    "category": "economic_purpose",
+    "definition": "Source-reviewed baseline token mechanism and its limitations.",
+    "value": "XLM pays Stellar network fees and satisfies account minimum-balance requirements, helping discourage network spam.",
+    "source": "https://stellar.org/learn/lumens"
+  },
+  {
+    "asset": "XLM",
+    "category": "dilution",
+    "definition": "Source-reviewed baseline token mechanism and its limitations.",
+    "value": "The protocol's annual inflation mechanism ended in October 2019. The issuer describes roughly 50 billion total lumens after the 2019 supply reduction; this is not a current circulating-supply audit.",
+    "source": "https://stellar.org/learn/lumens"
+  },
+  {
+    "asset": "XLM",
+    "category": "value_accrual",
+    "definition": "Source-reviewed baseline token mechanism and its limitations.",
+    "value": "XLM has network utility, but Stellar explicitly notes that its market price can be volatile and holders can lose value. Usage does not imply guaranteed appreciation.",
+    "source": "https://stellar.org/learn/lumens"
+  },
+  {
+    "asset": "DAI",
+    "category": "economic_purpose",
+    "definition": "Source-reviewed baseline token mechanism and its limitations.",
+    "value": "DAI remains part of Sky's stablecoin ecosystem alongside USDS. It is a separate token from USDS and savings receipt tokens.",
+    "source": "https://sky.money/"
+  },
+  {
+    "asset": "BCH",
+    "category": "economic_purpose",
+    "definition": "Source-reviewed baseline token mechanism and its limitations.",
+    "value": "Bitcoin Cash is a peer-to-peer electronic cash network intended for direct payments.",
+    "source": "https://bitcoincash.org/"
+  },
+  {
+    "asset": "BCH",
+    "category": "governance",
+    "definition": "Source-reviewed baseline token mechanism and its limitations.",
+    "value": "The project directs coordination proposals to Bitcoin Cash Research and multiple development teams. This review does not measure current developer or mining concentration.",
+    "source": "https://bitcoincash.org/"
+  },
+  {
+    "asset": "USDE",
+    "category": "economic_purpose",
+    "definition": "Source-reviewed baseline token mechanism and its limitations.",
+    "value": "USDe is Ethena's synthetic dollar; its design combines backing assets and derivative hedges rather than simply holding one cash dollar for each token.",
+    "source": "https://docs.ethena.fi/solution-overview/usde-overview"
+  },
+  {
+    "asset": "USD1",
+    "category": "economic_purpose",
+    "definition": "Source-reviewed baseline token mechanism and its limitations.",
+    "value": "USD1 is a dollar stablecoin presented by World Liberty Financial, with redemption governed by the issuer's terms and eligibility.",
+    "source": "https://worldlibertyfinancial.com/usd1"
+  },
+  {
+    "asset": "USD1",
+    "category": "security",
+    "definition": "Source-reviewed baseline token mechanism and its limitations.",
+    "value": "The issuer publishes monthly reserve reports. This review identifies the reporting mechanism; it does not independently reconcile current reserves or attest to continuous solvency.",
+    "source": "https://worldlibertyfinancial.com/usd1"
+  },
+  {
+    "asset": "LTC",
+    "category": "economic_purpose",
+    "definition": "Source-reviewed baseline token mechanism and its limitations.",
+    "value": "Litecoin is a peer-to-peer currency supporting payments without a central payment processor.",
+    "source": "https://litecoin.com/what-is-litecoin"
+  },
+  {
+    "asset": "LTC",
+    "category": "dilution",
+    "definition": "Source-reviewed baseline token mechanism and its limitations.",
+    "value": "Litecoin's documented maximum supply is 84 million LTC. A supply cap does not guarantee price stability or appreciation.",
+    "source": "https://litecoin.com/what-is-litecoin"
+  },
+  {
+    "asset": "CC",
+    "category": "economic_purpose",
+    "definition": "Source-reviewed baseline token mechanism and its limitations.",
+    "value": "Canton Coin is used for activity on the Canton Network's Global Synchronizer.",
+    "source": "https://www.canton.network/faq"
+  },
+  {
+    "asset": "CC",
+    "category": "dilution",
+    "definition": "Source-reviewed baseline token mechanism and its limitations.",
+    "value": "Canton describes a burn-and-mint equilibrium tied to network activity. Supply can change through both mechanisms; this review does not assume burns currently exceed issuance.",
+    "source": "https://www.canton.network/faq"
+  },
+  {
+    "asset": "UNI",
+    "category": "economic_purpose",
+    "definition": "Source-reviewed baseline token mechanism and its limitations.",
+    "value": "UNI is the governance token of the Uniswap Protocol.",
+    "source": "https://developers.uniswap.org/docs/ecosystem/governance/uni"
+  },
+  {
+    "asset": "UNI",
+    "category": "governance",
+    "definition": "Source-reviewed baseline token mechanism and its limitations.",
+    "value": "UNI governance controls protocol decisions. Voting power and participation should not be treated as equal per-person ownership.",
+    "source": "https://developers.uniswap.org/docs/ecosystem/governance/uni"
+  },
+  {
+    "asset": "GRAM",
+    "category": "economic_purpose",
+    "definition": "Source-reviewed baseline token mechanism and its limitations.",
+    "value": "The TON project's current media documentation identifies Gram (GRAM) as the native token formerly called Toncoin (TON). TON remains the blockchain's name.",
+    "source": "https://ton.org/media/"
+  },
+  {
+    "asset": "GRAM",
+    "category": "research_gap",
+    "definition": "Source-reviewed baseline token mechanism and its limitations.",
+    "value": "Token identity was verified from TON's official site. This review has not verified every exchange's ticker migration or contract mapping; no automatic trade-symbol substitution is assumed.",
+    "source": "https://ton.org/media/"
+  },
+  {
+    "asset": "USDG",
+    "category": "economic_purpose",
+    "definition": "Source-reviewed baseline token mechanism and its limitations.",
+    "value": "USDG is a US-dollar stablecoin issued by Paxos Digital Singapore, intended for payments, settlement and treasury use.",
+    "source": "https://docs.paxos.com/guides/stablecoin/usdg"
+  },
+  {
+    "asset": "USDG",
+    "category": "security",
+    "definition": "Source-reviewed baseline token mechanism and its limitations.",
+    "value": "Paxos describes segregated cash and cash-equivalent reserves, monthly reserve reports and third-party attestations. This review does not independently audit backing.",
+    "source": "https://docs.paxos.com/guides/stablecoin/usdg"
+  },
+  {
+    "asset": "USDG",
+    "category": "value_accrual",
+    "definition": "Source-reviewed baseline token mechanism and its limitations.",
+    "value": "Paxos describes one-for-one USD redemption through its platform. Eligibility and issuer terms apply; dollar redemption is not a promise of capital appreciation.",
+    "source": "https://docs.paxos.com/guides/stablecoin/usdg"
+  },
+  {
+    "asset": "HBAR",
+    "category": "economic_purpose",
+    "definition": "Source-reviewed baseline token mechanism and its limitations.",
+    "value": "HBAR pays Hedera network service fees, including token transfers and smart-contract execution.",
+    "source": "https://hedera.com/faq/"
+  },
+  {
+    "asset": "HBAR",
+    "category": "security",
+    "definition": "Source-reviewed baseline token mechanism and its limitations.",
+    "value": "Hedera supports native staking as part of proof-of-stake consensus. Network-service utility and staking do not independently demonstrate investment quality.",
+    "source": "https://hedera.com/faq/"
+  },
+  {
+    "asset": "USDS",
+    "category": "security",
+    "definition": "Source-reviewed baseline token mechanism and its limitations.",
+    "value": "Sky's risk documentation identifies protocol, smart-contract and market risks. A dollar target does not establish an unconditional guarantee or current collateral clearance.",
+    "source": "https://docs.sky.money/legal/skybase-international/user-risks"
+  },
+  {
+    "asset": "DAI",
+    "category": "security",
+    "definition": "Source-reviewed baseline token mechanism and its limitations.",
+    "value": "DAI's role in the Sky ecosystem carries protocol and market dependencies. This review does not audit live collateral composition, governance actions or solvency.",
+    "source": "https://docs.sky.money/legal/skybase-international/user-risks"
+  },
+  {
+    "asset": "ADA",
+    "category": "governance",
+    "definition": "Source-reviewed baseline token mechanism and its limitations.",
+    "value": "Cardano governance uses delegated representatives, stake-pool operators and a constitutional committee for different governance roles.",
+    "source": "https://cardano.org/governance/"
+  },
+  {
+    "asset": "USDE",
+    "category": "security",
+    "definition": "Source-reviewed baseline token mechanism and its limitations.",
+    "value": "Ethena identifies custody, exchange, funding and backing-asset risks. Delta hedging does not eliminate these risks or guarantee a persistent dollar peg.",
+    "source": "https://docs.ethena.fi/solution-overview/risks"
+  },
+  {
+    "asset": "UNI",
+    "category": "value_accrual",
+    "definition": "Source-reviewed baseline token mechanism and its limitations.",
+    "value": "Uniswap documents protocol-fee collection and releaser contracts that burn UNI to claim accumulated assets. Configuration and coverage vary by deployment; realized burn volume was not independently checked.",
+    "source": "https://developers.uniswap.org/docs/protocols/protocol-fee/overview"
+  }
+]

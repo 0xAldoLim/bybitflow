@@ -186,8 +186,13 @@ class Registry:
             models=models,
             drift=self.store.get("ml_degraded"),
             monitoring=self.store.get("ml_monitor"),
+            recording_audit=self.store.get("ml_recordings"),
+            learning_note="Requires real resolved decisions and chronological train/calibration/validation/holdout partitions (at least 500 complete labels). No automatic model promotion.",
             cycle=self.store.get("ml_cycle"),
             snapshots=self.db.execute("SELECT COUNT(*) FROM ml_snapshots").fetchone()[0],
+            decision_snapshots=self.db.execute(
+                "SELECT COUNT(*) FROM ml_snapshots WHERE stage='decision'"
+            ).fetchone()[0],
             labels=self.db.execute("SELECT COUNT(*) FROM ml_labels").fetchone()[0],
             history=[dict(r) for r in self.db.execute("SELECT * FROM ml_history ORDER BY id DESC LIMIT 100")],
         )

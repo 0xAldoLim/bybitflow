@@ -47,11 +47,14 @@ def embed(signal, dashboard_url):
         field(
             "ML evidence",
             f"{s.model_version[:12]} · {s.validation_status}\n"
+            f"Research ML ranking {s.evidence.get('ml', {}).get('research_score', 'Unavailable')}/100 (unvalidated)\n"
             f"Net EV {s.expected_net_r if s.expected_net_r is not None else 'Unavailable'}R · "
             f"interval {s.expected_net_r_uncertainty or 'Unavailable'}\n"
             f"n {s.qualification.get('samples', 'N/A')} · clusters {s.qualification.get('effective_samples', 'N/A')}\n"
             f"{s.evidence.get('ml', {}).get('explanation', 'No qualified model evidence')}",
         )
+    elif s.qualification.get("ml_reason"):
+        field("ML status", s.qualification["ml_reason"])
     field("Setup / regime", f"{s.family}\n{s.regime}", True)
     field("Entry zone / invalidation", f"{s.zone[0]:g} – {s.zone[1]:g}\nStop {s.stop:g}", True)
     field(
@@ -143,7 +146,7 @@ class Notifier:
         self.settings, self.store, self.transport = settings, store, transport
 
     async def send_research(self, signal, update=False):
-        if signal.validation_status == "validated":
+        if signal.validation_status == "validated" and not self.settings.research_alerts:
             return await self.send_public(signal, update)
         if not (
             self.settings.research_alerts

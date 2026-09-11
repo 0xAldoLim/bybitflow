@@ -48,7 +48,7 @@ async function render(){
   else if(page==='signals')body=panel('Lifecycle journal',signalTable(data.signals),'No signal represents a user execution');
   else if(page==='ml'){
     const ml=await api('ml'), latest=ml.models[0];
-    body=panel('Champion and collection',json({champion:ml.champion||'None — no validated model',snapshots:ml.snapshots,labels:ml.labels,cycle:ml.cycle,drift:ml.drift}));
+    body=panel('Champion and collection',json({champion:ml.champion||'None — no validated model',snapshots:ml.snapshots,decision_snapshots:ml.decision_snapshots,labels:ml.labels,monitoring:ml.monitoring,recording_audit:ml.recording_audit,learning_note:ml.learning_note,cycle:ml.cycle,drift:ml.drift}));
     body+=panel('Model comparison',ml.models.length?table(['Model','Holdout N / clusters','Net R / interval','Brier','Approval blockers'],ml.models.map(m=>[escape(m.id.slice(0,12)),`${m.report.holdout.n} / ${m.report.holdout.effective_samples}`,`${number(m.report.holdout.net_expectancy_r)} / ${escape(m.report.holdout.ev_interval)}`,number(m.report.all_holdout.brier,4),escape(m.promotion_reasons.join('; '))])):empty('No trained models','Collect real candidate snapshots and resolved cost-aware labels, then run bybit-flow ml export and ml train. No synthetic test performance is shown.'));
     if(latest){
       body+=panel('Holdout reliability',table(['Probability bin','Count','Predicted','Observed'],latest.report.all_holdout.reliability.map(r=>[number(r.lower,1),r.count,number(r.predicted,3),number(r.observed,3)])),'OUT OF SAMPLE — NOT PROOF OF EDGE');
