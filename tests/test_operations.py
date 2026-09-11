@@ -132,6 +132,29 @@ def test_password_protects_entire_dashboard(settings):
         assert client.get("/", auth=("research", "test-password")).status_code == 200
 
 
+def test_manual_asset_fact_is_source_attributed_not_a_signal(settings):
+    from bybit_flow.storage import now_ms
+
+    now = now_ms()
+    fact = dict(
+        asset="EXAMPLE",
+        category="economic_purpose",
+        definition="Synthetic API test only",
+        value="No financial evidence",
+        source="https://example.com/test",
+        known_ms=now - 1000,
+        effective_ms=now - 1000,
+        expires_ms=now + 86400000,
+    )
+    with TestClient(create_app(settings)) as client:
+        assert client.post("/api/facts", json=fact).status_code == 200
+        recorded = client.get("/api/research").json()["facts"]
+        assert len(recorded) == 1 and recorded[0]["verification"] == "user-sourced; review source"
+        assert recorded[0]["collected_ms"] >= now
+        assert client.post("/api/facts", json=fact | {"known_ms": now + 3600000}).status_code == 422
+        assert client.get("/api/overview").json()["signals"] == []
+
+
 def test_backup_is_recoverable(settings, tmp_path):
     store = Store(settings.data_dir)
     store.put("test", {"saved": True})

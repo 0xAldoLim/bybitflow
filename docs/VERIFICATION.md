@@ -1,5 +1,99 @@
 # Verification record
 
+## Exchange-native milestone — 2026-09-10 UTC
+
+This section supersedes the TV-first runtime descriptions below. It reports executed
+software checks and real external observations separately; no financial performance is
+inferred from either.
+
+### Software verification
+
+- Full host Python 3.13.12 suite: **87 passed**, 18.41 seconds, two existing third-party
+  Starlette/AnyIO deprecation warnings. Ruff, format check, compileall, JavaScript syntax,
+  `pip check` and `git diff --check` passed. FastAPI tests ran outside the restricted
+  sandbox because its in-process transport stalls there.
+- New synthetic tests cover Binance/OKX public normalization and base-contract units,
+  full REST adapter → liquidity/candles/derivatives → persistent scanner watchlist,
+  Binance snapshot bridge/pu gaps, OKX snapshot/sequence/heartbeat, missing profile
+  history, source-transition resets, stale/future/old-venue regime exclusion, stale
+  cross-venue comparisons, funding freshness distinct from quote freshness, normalized
+  schema v2 provenance, optional gateway venue isolation and non-trade Discord diagnostics.
+  Existing deterministic strategy, paper fills, risk, ML/logistic/LightGBM, purged folds,
+  calibration, holdout, registry/drift, authenticated APIs and mocked Discord tests pass.
+  The reviewed-asset-fact form uses the existing protected endpoint; a new synthetic API
+  test verifies source/collection-time attribution, future-knowledge refusal and no signal
+  creation. Runbook environment coverage was checked against all **52** actual Settings fields.
+- Runtime image built: `sha256:e91e89fc5536a24a0f644330226df447b89665dbc11c75f9d23b20db4890519f`.
+- Separate trainer built: `sha256:568cbc1be16afc17ac38b613e50dead13cd424528944ee86f82e32c5a88625f7`.
+- `examples/ml_docker_smoke.py --image bybit-flow:native-review --trainer
+  bybit-flow:native-trainer-review` passed: non-root/read-only runtime, authenticated
+  health, unauthorized 401, zero models/no champion, alerts-only true, legacy TV worker
+  **off**. Trainer imports sklearn 1.9.0 and LightGBM 4.7.0. Numerical pytest ran on the
+  host, not inside the trainer image.
+- `examples/native_operations_smoke.py` exercised human/JSON doctor, `test-market`,
+  missing-webhook refusal, ML status and SQLite backup/reopen in a disposable container.
+  Tiny intentional 128 MB tmpfs caused the documented disk warning. Market-test failure
+  exited 1 correctly; it is **not** recorded as a successful exchange connection.
+- `examples/compose_smoke.py` built/started the actual base Compose service with scanning
+  enabled and no webhook, stopped writers, copied the full volume, restored into a second
+  fresh named project, repaired ownership, verified the software-test metadata marker and
+  SQLite integrity, and ran the restored ML registry CLI. An initial restore attempt
+  found missing CHOWN/DAC_OVERRIDE capabilities; the one-shot command and runbook were
+  corrected, then the entire drill passed. Normal service capabilities remain dropped.
+  This was a small empty-market installation, not a large-data/model disaster-recovery test.
+- Compose `ml` profile configuration passed. Real Chromium rendered desktop 1440/scroll
+  1425 and mobile 390/scroll 390, with no reported page errors, including exchanges,
+  order-flow/DOM, ML and retained optional legacy routes. Screenshots remain ignored.
+- Temporary test containers and loopback server were stopped. Unique Compose test volumes
+  were deliberately retained; unrelated running containers/data were not modified.
+
+### Real external connectivity and historical data
+
+- Host and final Docker live Binance/Bybit REST+trade WS probes did **not** establish
+  connectivity. REST reported certificate/connect errors (Bybit also timed out in Docker);
+  Binance/Bybit WS reported certificate-verification errors.
+- OKX REST failed; its normalized trade probe could not acquire required contract metadata.
+  An independent successful OKX WS handshake/normalized trade is **not established**.
+- Host DNS on September 10 returned filtering-service names `internetpositif.id` /
+  `internetsehatku.com` and addresses 36.86.63.185 / 195.35.23.222 for official exchange
+  hosts. System NTP reported synchronized; proper-SNI hostname verification failed.
+  No TLS disablement, DNS override or regional-access bypass was used. These observations
+  describe this development host, not universal exchange outages.
+- **Real historical archive success:**
+  `https://data.binance.vision/data/futures/um/daily/aggTrades/LINKUSDT/LINKUSDT-aggTrades-2024-01-01.zip`.
+  The official checksum sidecar matched SHA256
+  `93877f83f4a97a5c10f4cf50f6ab54ff4da78e502155b9e29cf8c11abbe0acc7`.
+  Download size 1,780,848 bytes; **115,985** actual reported aggregate executions converted.
+  Parquet SHA256: `ded63852cc2b11f5b0806a2212afd621e1685a9b0b61210fd8643023bf8c7797`.
+  File, normalized trades and manifest remain outside Git under `data/archives`.
+
+Reproduce archive acquisition and feature calculation from a Python checkout:
+
+```sh
+bybit-flow download-trades LINKUSDT 2024-01-01 --exchange binance
+python examples/archive_footprint.py data/archives/LINKUSDT-aggTrades-2024-01-01.zip.trades.parquet --bucket-increment 0.001
+```
+
+The executed historical sample was January 1, 2024, 23:30–23:45 UTC: 1,715 aggregate
+execution records, buy 89,991.04 base, sell 85,974.89 base, delta 4,016.15 base, delta
+2.2823452244%, PoC 15.576, VAL 15.539, VAH 15.589, VWAP 15.55312944. These are **historical
+feature values**, not a current trade or strategy result. The explicitly supplied 0.001
+analytical bucket increment is not verified historical instrument metadata. No historical
+book/absorption, point-in-time universe, fill, calibration or profitability is established.
+
+### Still unverified or unavailable
+
+No valid local Discord webhook was supplied: actual delivery was not attempted. The CLI
+correctly refuses absent configuration; synthetic HTTP mocks are not real delivery.
+No live market recording, genuine native candidate-to-Discord alert, resolved real candidate
+label, real-data model training/backtest, champion, calibrated probability, profitable edge
+or validated SSS exists in this development installation. The archive feature demonstration
+is not a family backtest or model dataset. Windows instructions were checked for PowerShell
+syntax but were not executed on a Windows machine. Loaded VPS operation, long-running
+rotation/failover, large-data restore, and complete native strategy replay remain unverified.
+Current assumed-cost labels cannot approve a validated model. See STATUS.md and the
+authoritative [USER_RUNBOOK.md](USER_RUNBOOK.md) for precise operator steps and limitations.
+
 ## ML research extension — 2026-09-09 UTC
 
 - Final local Python 3.13 suite: **71 passed** in 13.62 seconds; two existing third-party

@@ -403,6 +403,20 @@ contribute diligence coverage, not token intrinsic value. `FLOW_RESEARCH_ALERTS=
 a separate broader research opt-in and can send qualifying lower-score candidates; leave
 it false if you want SSS-only research.
 
+The native rubric allocates 10 points to source-attributed diligence. Without any such
+facts its theoretical maximum is 90, even with perfect other components. This is not
+automatic token research and the app does not verify a claim merely because it has a URL.
+To record genuinely reviewed information, open **Research & experiments → Record a
+reviewed asset fact** in the dashboard. Use the base asset (BTC, not BTCUSDT), a source
+you have read, a precise definition, the actual observation and limitations, known/effective
+times in UTC, and a review-expiration time. Categories earning coverage are
+`economic_purpose`, `value_accrual`, `dilution`, `security`, and `governance`. A documented
+absence of token-holder value capture is legitimate context, not a positive valuation.
+Mark a major event only when it invalidates strategy assumptions; that blocks affected
+setups. The form stores user-reviewed facts with the current collection time, cannot
+retroactively change past decisions, and does not create a signal. If you cannot substantiate
+a category, leave it missing and accept the lower score. Do not invent facts to reach SSS.
+
 SSS RESEARCH is not validated SSS. No trained model is needed to collect deterministic
 research evidence. While uncalibrated, public probability and expected net R stay null.
 Optional ML shadow/filtering never weakens risk gates. It may abstain or reject.
