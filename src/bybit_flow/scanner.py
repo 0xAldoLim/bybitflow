@@ -619,6 +619,7 @@ class Scanner:
 
     async def scan_loop(self):
         while True:
+            delay = self.settings.scan_seconds
             try:
                 await self.scan_once()
             except Exception as exc:
@@ -629,7 +630,9 @@ class Scanner:
                 if self.settings.market_source in {"auto", "multi"}:
                     self.source_ready = False
                 log.warning("scan_failed", extra={"error_type": type(exc).__name__})
-            await asyncio.sleep(self.settings.scan_seconds)
+                # A transient outage should not suspend collection for a full scan interval.
+                delay = min(delay, 60)
+            await asyncio.sleep(delay)
 
     async def evaluation_loop(self):
         while True:

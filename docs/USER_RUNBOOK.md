@@ -7,6 +7,18 @@ No strategy, probability or profitability has been validated on real data here.
 
 ## WHAT YOU NEED BEFORE STARTING
 
+A quiet Discord channel does not establish a delivery failure. Check `doctor`,
+scanner eligibility and actual feed freshness. Failed scans retry within 60 seconds
+after the failed attempt finishes; successful scans use the configured scan interval.
+Keep collection running through spread and execution warmup. Missing reviewed
+asset facts still cap quality below the SSS research threshold. Do not add filler
+facts or lower gates to force an alert.
+
+If ML reports non-monotonic recording receipt time, preserve the original segment
+and manifest. Clock synchronization cannot repair past bytes. Any audited quarantine
+must retain the original hashes and expose the missing-chain gap during replay;
+never sort timestamps or treat affected outcomes as complete.
+
 You personally need:
 
 - Windows 11 with Docker Desktop, or Linux/Ubuntu workstation/VPS with Docker Engine.
@@ -65,10 +77,11 @@ Set-Location bybitflow
 git switch main
 git pull --ff-only origin main
 git status
-Copy-Item .env.example .env
+if (!(Test-Path -LiteralPath .env)) { Copy-Item .env.example .env }
 ```
 
-Generate the dashboard password directly into the local file without printing it:
+Preserve an existing `.env` and dashboard password. For a new installation, generate
+the dashboard password directly into the local file without printing it:
 
 ```powershell
 $flowBytes = New-Object byte[] 32
@@ -97,6 +110,18 @@ Start-Process http://127.0.0.1:8000
 ```
 
 Log in as `research` with the `FLOW_ADMIN_TOKEN` password. Docker Desktop must stay running.
+Keep the computer awake for continuous collection; sleep interrupts feeds and affected
+windows must warm up again. Check available memory before also starting the ML worker.
+
+If Desktop aborts before creating its Linux engine pipe, inspect its local backend log
+under `%LOCALAPPDATA%\Docker\log\host`. On one Windows 11 installation, error 1920
+named stale `Docker\run\dockerInference` and `docker-secrets-engine\engine.sock`
+runtime sockets. Preserving/renaming their containing runtime directories while Desktop
+was fully stopped allowed startup. This is a targeted recovery, not general cleanup:
+inspect the exact paths and contents first, preserve both affected directories in the
+same stopped interval, and obtain approval before interrupting unrelated Docker work.
+Do not reset to factory defaults, delete WSL disks/volumes, or change security settings
+to address this symptom. See the [upstream report](https://github.com/docker/desktop-feedback/issues/531).
 
 ```powershell
 # Stop without deleting data; resume or restart.

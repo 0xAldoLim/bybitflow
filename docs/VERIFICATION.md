@@ -1,5 +1,121 @@
 # Verification record
 
+## Windows operator deployment — 2026-09-11 UTC
+
+### Follow-up recovery verification
+
+The isolated Docker suite passed **93 tests**, with two dependency deprecation
+warnings; Ruff lint passed. Regression tests reproduced two operational defects
+before their fixes: generic recorder-chain gaps did not invalidate Binance/OKX
+outcomes, and failed scans waited 900 seconds before retrying. Global gaps now
+invalidate every affected venue while venue-specific gaps remain isolated.
+Failed scans retry after at most 60 seconds; successful scans retain their normal
+configured cadence. Signal and risk gates are unchanged.
+
+Segment `1789091364628-c395e0d8` contained a 59 ms backward receipt-time step.
+With writers stopped, its raw, manifest and Parquet files were moved intact into
+an audited data-volume quarantine. All three hashes matched; 1,755 remaining
+segments replayed with an explicit missing-chain gap. Database provenance and
+original timestamps were retained. Real ML monitoring then returned `observed`,
+zero complete labels; a bounded cycle abstained because no complete resolved
+candidate labels existed. Four genuine snapshots and no models were observed.
+This establishes processing, not successful learning or financial validation.
+
+The operator confirmed Windows time synchronization. Subsequent OKX REST and
+genuine trade WS probes passed, but later probes failed with ConnectError.
+Strict TLS checks continued to show venue-dependent network variability.
+Current API health and fresh trade receipts remain essential checks: a running
+container alone does not establish healthy collection. Discord receipt is confirmed.
+
+After deploying both final images, authenticated health returned 200 and Docker
+marked desk healthy. OKX BTC book and trade events were fresh, 463 ticker symbols
+were observed, and 247 envelopes had already been written since startup. Trainer
+was running; compilation, runtime/trainer dependency checks, Ruff formatting
+(60 files) and lint passed. Continuous availability and future alerts remain
+unverified; spread warmup and reviewed facts still gate research signals.
+
+Checked out clean `main` at `80f3c80508cb63cf09c5782baf83d9b7f669d7c8`,
+fast-forward pull was already current, and push authentication passed a dry run.
+Host: Windows 11 Home Single Language 25H2/build 26200, PowerShell 7.6.6,
+Git 2.49.0, Docker Desktop 4.49.0, engine 28.5.1 and Compose 2.40.3.
+Approximately 15.4 GiB usable RAM and 196 GiB free host disk at initial inspection.
+
+Docker initially aborted on inaccessible stale runtime sockets. With the failed
+Desktop processes stopped, the exact affected runtime directories were renamed
+and retained. Fixing both in the same stopped interval allowed the WSL2 engine
+to start. No reinstall, reboot, factory reset, volume deletion, WSL reset,
+security-setting change or DNS override was used. Initial Docker inventories
+after recovery contained no existing containers or named volumes.
+
+The actual Compose desk image built and started with the original non-root user,
+read-only root, dropped capabilities, no-new-privileges and localhost-only port.
+A generated dashboard password and operator-entered webhook stayed in ignored
+`.env`. Unauthenticated health returned 401; authenticated dashboard APIs returned
+200. Health initially returned 503 for the real scanner outage, then 200 during
+real OKX collection. `pip check` passed. No trading permissions or orders exist.
+
+### Real external and collection evidence
+
+- Discord `test-discord` returned `sent` at epoch ms `1789091170064`; the operator
+  confirmed the connection-test message in the channel. Its persisted outbox row
+  has a message ID and null signal ID. Candidate/label counts stayed zero at that
+  check; the test did not create financial research evidence.
+- Binance REST failed with ConnectError and trade WS with certificate/handshake
+  errors. Bybit REST intermittently succeeded; its WS failed with TLS errors.
+- OKX initially returned actual normalized trades rejected by the unchanged
+  freshness gate because the computer was about 2.2 seconds behind. Windows Time
+  reported unsynchronized; an attempted resync was denied. A later measurement
+  improved to 57 ms clock difference and 509 ms trade age: both REST and genuine
+  normalized trade WS passed. No code-based timestamp adjustment was made.
+- DNS and strict-SNI probes showed network variability: several official hosts
+  resolved to filtering-service addresses and failed hostname verification, while
+  OKX WS also resolved to its serving addresses and passed verification. Successful
+  application probes do not establish uninterrupted connectivity. TLS stayed on;
+  no alternate routing or geographic-access bypass was introduced.
+- At 01:54 UTC auto mode selected OKX: 463 discovered instruments, 47 provisional,
+  zero fully eligible during spread warmup, eight deep subscriptions and four scan
+  errors. Recorder reported 19,333 envelopes, no recorder gap, and a fresh BTC book.
+  These envelope counts are not execution/fill counts.
+- A complete real BTC 01:53–01:54 UTC one-minute footprint contained 248 trade
+  records, delta 2.1183 base, delta 14.0875325%, window CVD 2.1183, PoC 76908.3,
+  VAL 76899.9 and VAH 76908.3. This is a feature observation, not a strategy result.
+  The full closed 15-minute window and longer profiles remained unavailable then.
+- Two genuine ADA candidate generation snapshots were PENDING CONFIRMATION;
+  no complete labels, model, champion, calibrated probability or validated SSS.
+
+### Recovery and limits
+
+The running SQLite backup command succeeded. Writers were stopped for a full-volume
+copy, then the main service restarted. A separate checkout/project restored to a
+different localhost port with scanning/webhooks disabled. Before restored startup,
+both SQLite hashes matched the copied files; quick-check was OK, the Discord outbox
+receipt and zero snapshot/model counts were preserved, and ML status/doctor ran.
+The disposable restore service was stopped and its volume retained. This first drill
+used the small pre-collection database; it does not prove large-data/model recovery.
+
+A second stopped-writer backup included real collection: all 2,093 files (27,206,379
+bytes) matched SHA256 after copying into another fresh isolated project. Its 697
+recording segments, two candidate snapshots, one Discord outbox receipt and SQLite
+integrity survived startup. That restore service was also stopped, with its volume
+retained. Neither drill establishes recovery of a large trained-model installation.
+Main subsequently resumed OKX collection. A read-only Parquet query separately
+observed 8,326 normalized OKX trade rows; recorder envelope counts are not used as
+a substitute for this executed-trade evidence.
+
+After real OKX and confirmed Discord checks passed, `FLOW_SSS_RESEARCH=true` was
+applied by recreating desk. Authenticated settings verified research alerts false,
+ML inference false and research ML filtering false. No risk or freshness gate changed.
+
+The in-app browser refused localhost navigation with ERR_BLOCKED_BY_CLIENT. A normal
+browser was opened, but native browser automation then stopped because it could not
+confidently identify the current URL. Visual dashboard and reviewed-fact-form checks
+are not claimed; authenticated HTTP/API checks are established separately.
+
+Missing reviewed asset facts cap native quality at 90. Normal spread requires the
+real 12 five-minute buckets and execution requires a complete closed 15-minute tape
+window. Current assumed-cost labels still cannot unlock validated SSS; a verified-cost
+extension, independent statistical evidence and manual approval remain required.
+
 ## Exchange-native milestone — 2026-09-10–11 UTC
 
 This section supersedes the TV-first runtime descriptions below. It reports executed

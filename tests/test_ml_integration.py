@@ -56,6 +56,63 @@ def test_counterfactual_rejected_fill_and_gap_exclusion(settings, signal):
     store.close()
 
 
+@pytest.mark.parametrize("venue", ["bybit", "binance", "okx"])
+def test_quarantined_clock_segment_excludes_native_outcomes(settings, signal, venue):
+    from pathlib import Path
+
+    from bybit_flow.replay import segment_rows
+    from bybit_flow.storage import Recorder
+
+    store = Store(settings.data_dir)
+    signal.source = venue
+    FeatureStore(store).capture(signal, 1000, "decision")
+
+    def native(row):
+        return row | {"source": f"native/{venue}/" + row["source"]}
+
+    recorder = Recorder(store, settings)
+    recorder.flush(
+        [
+            native(envelope("control/subscribed", 500, {"symbols": [signal.symbol]})),
+            native(print_event(1500, 100)),
+        ]
+    )
+    recorder.flush([envelope("test", 2100, {}), envelope("test", 2000, {})])
+    recorder.flush([native(print_event(5000, 116, "exit"))])
+    segments = sorted(store.rows("segments"), key=lambda row: row["min_receipt_ms"])
+    paths = [Path(row["raw"]) for row in segments]
+    with pytest.raises(ValueError, match="Non-monotonic segment receipt time"):
+        list(segment_rows(paths))
+    # Quarantining an invalid segment must preserve an explicit global gap. It
+    # cannot silently create a complete native outcome from the surrounding files.
+    remaining = list(segment_rows([paths[0], paths[2]]))
+    assert any(row["source"] == "control/gap" and row["symbol"] == "ALL" for row in remaining)
+    report = label_recordings(store, remaining, settings)
+    assert report["complete"] == 0
+    assert report["outcomes"][0]["net_r"] is None
+    assert "recording continuity lost" in report["outcomes"][0]["data_gaps"]
+    assert FeatureStore(store).dataset(6000) == []
+    store.close()
+
+
+@pytest.mark.parametrize("venue", ["binance", "okx"])
+def test_other_venue_gap_does_not_invalidate_native_outcome(settings, signal, venue):
+    store = Store(settings.data_dir)
+    signal.source = venue
+    FeatureStore(store).capture(signal, 1000, "decision")
+    rows = [
+        envelope(f"native/{venue}/control/subscribed", 500, {"symbols": [signal.symbol]}),
+        print_event(1500, 100),
+        envelope("native/bybit/control/gap", 2000, {}, symbol="ALL"),
+        print_event(5000, 116, "exit"),
+    ]
+    for index in (1, 3):
+        rows[index]["source"] = f"native/{venue}/" + rows[index]["source"]
+    report = label_recordings(store, rows, settings)
+    assert report["complete"] == 1
+    store.close()
+
+
 def test_chart_fallback_keeps_rejected_candidate_without_fake_trades(settings, tmp_path):
     from test_tradingview import NOW, payload
 

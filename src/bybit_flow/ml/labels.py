@@ -111,6 +111,9 @@ def label_recordings(store, rows, settings, stage="decision", max_active=2000):
         event_hash.update(digest(row).encode())
         payload = json.loads(row["payload"]) if isinstance(row["payload"], str) else row["payload"]
         source, symbol, venue = row["source"], row["symbol"], "bybit"
+        # Recorder-chain gaps have no venue prefix: they affect every source,
+        # unlike a venue-specific native subscription gap.
+        global_gap = source == "control/gap"
         if source.startswith("native/"):
             _, venue, source = source.split("/", 2)
         while next_snapshot and next_snapshot["decision_ms"] <= now:
@@ -141,7 +144,11 @@ def label_recordings(store, rows, settings, stage="decision", max_active=2000):
             subscribed.update((venue, s) for s in payload["symbols"])
         removed = {(venue, s) for s in payload.get("removed", [])} if source == "control/rotation" else set()
         if source == "control/gap":
-            removed = {key for key in subscribed if key[0] == venue and (symbol == "ALL" or key[1] == symbol)}
+            removed = {
+                key
+                for key in subscribed
+                if (global_gap or key[0] == venue) and (symbol == "ALL" or key[1] == symbol)
+            }
         if source == "control/source_change":
             removed = set(subscribed)
         subscribed.difference_update(removed)
@@ -151,7 +158,7 @@ def label_recordings(store, rows, settings, stage="decision", max_active=2000):
                 not row.get("complete", True)
                 and (
                     source == "control/source_change"
-                    or (p.signal.source == venue and symbol in {"ALL", p.signal.symbol})
+                    or ((global_gap or p.signal.source == venue) and symbol in {"ALL", p.signal.symbol})
                 )
             ):
                 if "recording continuity lost" not in p.data_gaps:
