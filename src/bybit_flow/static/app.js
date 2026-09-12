@@ -1,91 +1,477 @@
-'use strict';
-const $ = s => document.querySelector(s);
-const escape = value => String(value ?? 'Unavailable').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const number = (n, digits=2) => n == null ? '—' : Number(n).toLocaleString('en-US',{maximumFractionDigits:digits});
-const utc = n => n ? new Date(n).toISOString().replace('T',' ').slice(0,19)+' UTC' : '—';
-const money = n => n >= 1e9 ? '$'+number(n/1e9)+'B' : n >= 1e6 ? '$'+number(n/1e6)+'M' : '$'+number(n);
-const empty = (heading,text) => `<div class="empty"><strong>${escape(heading)}</strong><p>${escape(text)}</p></div>`;
-const panel = (heading,body,caption='') => `<article class="panel"><div class="panel-head"><h2>${escape(heading)}</h2><span>${escape(caption)}</span></div>${body}</article>`;
-const json = x => `<pre>${escape(JSON.stringify(x,null,2))}</pre>`;
-function factForm(){return `<form id="asset-fact"><p>User-reviewed source material, not independently verified by the bot. Leave missing information missing. Never add facts merely to raise a score.</p><div class="grid2"><label>Asset (e.g. BTC)<input name="asset" required pattern="[A-Z0-9]+(?:_[A-Z0-9]+)*" maxlength="30"></label><label>Category<select name="category">${['economic_purpose','value_accrual','dilution','security','governance','catalyst'].map(x=>`<option>${x}</option>`).join('')}</select></label></div><label>Definition (what this observation means)<textarea name="definition" required minlength="10" maxlength="1000"></textarea></label><label>Observed fact and limitations<textarea name="value" required maxlength="2000"></textarea></label><label>Source you reviewed<input name="source" type="url" required maxlength="2000"></label><div class="grid2">${[['known','Source became known'],['effective','Fact/event effective'],['expires','Review expires']].map(([key,title])=>`<label>${title} (UTC)<input name="${key}" type="datetime-local" required></label>`).join('')}</div><label><input name="major_event" type="checkbox"> Major event invalidates current strategy assumptions (blocks affected setups)</label><label><input name="reviewed" type="checkbox" required> I reviewed this source; this is not an invented valuation or inferred trader ownership.</label><button type="submit">Save source-attributed fact</button><p id="fact-saved" role="status"></p></form>`;}
-async function api(path, data) { const r=await fetch('/api/'+path,data?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)}:{}); if(!r.ok) throw Error((await r.json()).detail || `HTTP ${r.status}`); return r.json(); }
-function table(columns, rows){return `<table><thead><tr>${columns.map(c=>`<th>${escape(c)}</th>`).join('')}</tr></thead><tbody>${rows.map(r=>`<tr>${r.map(c=>`<td>${c}</td>`).join('')}</tr>`).join('')}</tbody></table>`;}
-function signalTable(rows){return rows.length?table(['Market / direction','Setup','Quality','State','Created'],rows.map(s=>[`<a href="#signal/${encodeURIComponent(s.id)}">${escape(s.symbol)} <span class="${s.direction==='LONG'?'green':'red'}">${escape(s.direction)}</span></a>`,escape(s.family),`${number(s.quality,1)} <span class="tag">${escape(s.final_tier)}</span>`,escape(s.state),utc(s.created_ms)])):empty('No qualifying signals','Silence is expected when data coverage, setup rules or execution evidence do not qualify.');}
-function watchTable(rows){return rows.length?table(['Market','4H regime','1H regime','7D median turnover','Current / normal spread','Eligibility','Research rank'],rows.map(r=>[`<a href="#market/${encodeURIComponent(r.symbol)}">${escape(r.symbol)}</a>`,escape(r.regime_4h),escape(r.regime_1h),money(r.turnover_7d),number(r.spread_bps)+' / '+number(r.normal_spread?.median_bps)+' bps',r.eligible?'<span class="pill">Eligible</span>':`<span class="tag">Warmup / gated</span><br>${escape(r.normal_spread?.samples||0)} quote samples`,number(r.rank_score)])):empty('Waiting for market observations','Enable FLOW_SCAN_ENABLED in your environment and restart to discover eligible public Bybit markets.');}
-function lineChart(points, levels=[]){
-  if(points.length<2) return empty('No chart data','Charts display collected observations only.');
-  const vals=points.map(p=>Number(p[1])), lo=Math.min(...vals,...levels.map(l=>l.price)), hi=Math.max(...vals,...levels.map(l=>l.price));
-  const y=v=>200-(v-lo)/Math.max(hi-lo,1e-10)*175, x=i=>45+i/(points.length-1)*810;
-  return `<svg viewBox="0 0 900 230" role="img" aria-label="Observed data chart">${[0,.25,.5,.75,1].map(t=>`<line x1="45" x2="855" y1="${y(lo+t*(hi-lo))}" y2="${y(lo+t*(hi-lo))}" stroke="#252d39"/><text x="860" y="${y(lo+t*(hi-lo))}">${number(lo+t*(hi-lo))}</text>`).join('')}<polyline fill="none" stroke="#65d2b4" stroke-width="1.8" points="${points.map((p,i)=>`${x(i)},${y(Number(p[1]))}`).join(' ')}"/>${levels.map(l=>`<line x1="45" x2="855" y1="${y(l.price)}" y2="${y(l.price)}" stroke="#dabc7e" stroke-dasharray="4 5"/><text x="50" y="${y(l.price)-4}">${escape(l.name)}</text>`).join('')}<text x="45" y="225">${escape(utc(points[0][0]))}</text><text x="650" y="225">${escape(utc(points.at(-1)[0]))}</text></svg>`;
+"use strict";
+const $ = (s) => document.querySelector(s);
+const escape = (value) =>
+  String(value ?? "Unavailable").replace(
+    /[&<>"']/g,
+    (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c],
+  );
+const number = (n, digits = 2) =>
+  n == null ? "—" : Number(n).toLocaleString("en-US", { maximumFractionDigits: digits });
+const utc = (n) => (n ? new Date(n).toISOString().replace("T", " ").slice(0, 19) + " UTC" : "—");
+const money = (n) =>
+  n >= 1e9 ? "$" + number(n / 1e9) + "B" : n >= 1e6 ? "$" + number(n / 1e6) + "M" : "$" + number(n);
+const empty = (heading, text) =>
+  `<div class="empty"><strong>${escape(heading)}</strong><p>${escape(text)}</p></div>`;
+const panel = (heading, body, caption = "") =>
+  `<article class="panel"><div class="panel-head"><h2>${escape(heading)}</h2><span>${escape(caption)}</span></div>${body}</article>`;
+const json = (x) => `<pre>${escape(JSON.stringify(x, null, 2))}</pre>`;
+function factForm() {
+  return `<form id="asset-fact"><p>Source-attributed research context. Review supporting material before recording an observation; missing categories receive no coverage points.</p><div class="grid2"><label>Asset (e.g. BTC)<input name="asset" required pattern="[A-Z0-9]+(?:_[A-Z0-9]+)*" maxlength="30"></label><label>Category<select name="category">${["economic_purpose", "value_accrual", "dilution", "security", "governance", "catalyst"].map((x) => `<option>${x}</option>`).join("")}</select></label></div><label>Observation definition<textarea name="definition" required minlength="10" maxlength="1000"></textarea></label><label>Observed fact and limitations<textarea name="value" required maxlength="2000"></textarea></label><label>Source URL<input name="source" type="url" required maxlength="2000"></label><div class="grid2">${[
+    ["known", "Source became known"],
+    ["effective", "Fact/event effective"],
+    ["expires", "Review expires"],
+  ]
+    .map(
+      ([key, title]) => `<label>${title} (UTC)<input name="${key}" type="datetime-local" required></label>`,
+    )
+    .join(
+      "",
+    )}</div><label><input name="major_event" type="checkbox"> Major event invalidates current strategy assumptions (blocks affected setups)</label><label><input name="reviewed" type="checkbox" required> Source reviewed; observation and limitations recorded accurately.</label><button type="submit">Save source-attributed fact</button><p id="fact-saved" role="status"></p></form>`;
 }
-function profile(rows){if(!rows?.length)return empty('Footprint unavailable','A complete executed-trade window is required.');const max=Math.max(...rows.map(r=>r.buy+r.sell));return table(['Price bucket','Aggressive buy / sell','Delta'],rows.slice(0,100).map(r=>[number(r.price,8),`<svg class="profile-bar" viewBox="0 0 220 15"><rect width="${200*r.buy/max}" height="12" fill="#65d2b4"/><rect x="${200*r.buy/max}" width="${200*r.sell/max}" height="12" fill="#ef929c"/></svg>`,number(r.buy-r.sell,4)]));}
-function depthChart(book){
- if(!book?.available)return empty('Depth unavailable','Only subscribed, reconstructed books appear.');
- const series=side=>{let cumulative=0;return book[side].map(([p,q])=>[Number(p),cumulative+=Number(p)*Number(q)]);};
- const bids=series('bids'),asks=series('asks'),all=[...bids,...asks];
- const low=Math.min(...all.map(p=>p[0])),high=Math.max(...all.map(p=>p[0])),max=Math.max(...all.map(p=>p[1]));
- const points=rows=>rows.map(([p,n])=>`${45+(p-low)/Math.max(high-low,1e-10)*810},${195-n/Math.max(max,1)*165}`).join(' ');
- return `<svg viewBox="0 0 900 230" role="img" aria-label="Cumulative visible bid and ask notional by price"><line x1="45" x2="855" y1="195" y2="195" stroke="#252d39"/><polyline fill="none" stroke="#65d2b4" stroke-width="2" points="${points(bids)}"/><polyline fill="none" stroke="#ef929c" stroke-width="2" points="${points(asks)}"/><text x="45" y="220">Price ${number(low,8)}</text><text x="750" y="220">${number(high,8)}</text><text x="45" y="20">Cumulative visible notional · max ${money(max)}</text></svg>`;
+async function api(path, data) {
+  const r = await fetch(
+    "/api/" + path,
+    data
+      ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) }
+      : {},
+  );
+  if (!r.ok) throw Error((await r.json()).detail || `HTTP ${r.status}`);
+  return r.json();
 }
-let generation=0;
-async function render(){
- const gen=++generation; $('#error').textContent='';
- try{
-  const route=location.hash.slice(1)||'overview', [page,id]=route.split('/');
-  const data=await api('overview'); if(gen!==generation)return;
-  $('#status').textContent=data.scanner.state; $('#clock').textContent=utc(data.at_ms);
-  document.querySelectorAll('nav a').forEach(a=>a.classList.toggle('active',a.hash==='#'+page));
-  const titles={overview:'Market overview',watchlist:'Market scanner',signals:'Signal journal',research:'Research & experiments',journal:'Paper journal',health:'Data health',settings:'Desk settings',signal:'Signal detail',market:'Market detail'};
-  titles.tradingview='Optional legacy TradingView gateway';
-  titles.ml='ML Research';
-  titles.exchanges='Public exchange health';
-  titles.flow='Native order flow / DOM';
-  $('#title').textContent=titles[page]||'Market overview'; let body='';
-  if(page==='overview'){
-   const metrics=[['ELIGIBLE MARKETS',data.scanner.eligible||0,'Dynamic liquidity-filtered universe'],['ACTIVE SETUPS',data.signals.filter(s=>!['EXPIRED','INVALIDATED','RESOLVED'].includes(s.state)).length,'Independent experimental families'],['RECORDED EVENTS',number(data.health.records_written),'This collector process'],['CALIBRATION','Pending','No claimed predictive probability']];
-   body=`<div class="metrics">${metrics.map(m=>`<div class="metric"><label>${m[0]}</label><b>${m[1]}</b><small>${m[2]}</small></div>`).join('')}</div>`+panel('Priority watchlist',watchTable(data.watchlist.slice(0,8)),'RESEARCH RANK ≠ PROBABILITY')+panel('Recent setups',signalTable(data.signals.slice(0,8)),'4H → 1H → 15M');
-  } else if(page==='watchlist') body=panel('Eligible markets',`<input id="filter" aria-label="Filter symbols" placeholder="Filter symbol…"><div id="watch-table">${watchTable(data.watchlist)}</div>`,'All paginated eligible contracts');
-  else if(page==='signals')body=panel('Lifecycle journal',signalTable(data.signals),'No signal represents a user execution');
-  else if(page==='ml'){
-    const ml=await api('ml'), latest=ml.models[0];
-    body=panel('Champion and collection',json({champion:ml.champion||'None — no validated model',snapshots:ml.snapshots,decision_snapshots:ml.decision_snapshots,labels:ml.labels,monitoring:ml.monitoring,recording_audit:ml.recording_audit,learning_note:ml.learning_note,cycle:ml.cycle,drift:ml.drift}));
-    body+=panel('Model comparison',ml.models.length?table(['Model','Holdout N / clusters','Net R / interval','Brier','Approval blockers'],ml.models.map(m=>[escape(m.id.slice(0,12)),`${m.report.holdout.n} / ${m.report.holdout.effective_samples}`,`${number(m.report.holdout.net_expectancy_r)} / ${escape(m.report.holdout.ev_interval)}`,number(m.report.all_holdout.brier,4),escape(m.promotion_reasons.join('; '))])):empty('No trained models','Collect real candidate snapshots and resolved cost-aware labels, then run bybit-flow ml export and ml train. No synthetic test performance is shown.'));
-    if(latest){
-      body+=panel('Holdout reliability',table(['Probability bin','Count','Predicted','Observed'],latest.report.all_holdout.reliability.map(r=>[number(r.lower,1),r.count,number(r.predicted,3),number(r.observed,3)])),'OUT OF SAMPLE — NOT PROOF OF EDGE');
-      body+=panel('Feature importance',table(['Feature','Magnitude'],Object.entries(latest.importance).sort((a,b)=>Math.abs(b[1])-Math.abs(a[1])).slice(0,15).map(([k,v])=>[escape(k),number(v,4)])),'ASSOCIATION, NOT CAUSATION');
-      body+=panel('Family / direction / regime / symbol / tier',json(latest.report.breakdown));
-      body+=panel('Thresholds and validation trials',json({thresholds:latest.thresholds,trials:latest.report.experiments,walk_forward:latest.report.walk_forward}),'VALIDATION-TUNED, NOT HOLDOUT-TUNED');
+function table(columns, rows) {
+  return `<table><thead><tr>${columns.map((c) => `<th>${escape(c)}</th>`).join("")}</tr></thead><tbody>${rows.map((r) => `<tr>${r.map((c) => `<td>${c}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
+}
+function signalTable(rows) {
+  return rows.length
+    ? table(
+        ["Market / direction", "Setup", "Quality", "State", "Created"],
+        rows.map((s) => [
+          `<a href="#signal/${encodeURIComponent(s.id)}">${escape(s.symbol)} <span class="${s.direction === "LONG" ? "green" : "red"}">${escape(s.direction)}</span></a>`,
+          escape(s.family),
+          `${number(s.quality, 1)} <span class="tag">${escape(s.final_tier)}</span>`,
+          escape(s.state),
+          utc(s.created_ms),
+        ]),
+      )
+    : empty(
+        "No qualifying signals",
+        "No setup currently meets the data, confirmation, and risk requirements.",
+      );
+}
+function watchTable(rows) {
+  return rows.length
+    ? table(
+        [
+          "Market",
+          "4H regime",
+          "1H regime",
+          "7D median turnover",
+          "Current / normal spread",
+          "Eligibility",
+          "Research rank",
+        ],
+        rows.map((r) => [
+          `<a href="#market/${encodeURIComponent(r.symbol)}">${escape(r.symbol)}</a>`,
+          escape(r.regime_4h),
+          escape(r.regime_1h),
+          money(r.turnover_7d),
+          number(r.spread_bps) + " / " + number(r.normal_spread?.median_bps) + " bps",
+          r.eligible
+            ? '<span class="pill">Eligible</span>'
+            : `<span class="tag">Warmup / gated</span><br>${escape(r.normal_spread?.samples || 0)} quote samples`,
+          number(r.rank_score),
+        ]),
+      )
+    : empty(
+        "Waiting for market observations",
+        "Market discovery requires an enabled scanner and an available exchange connection.",
+      );
+}
+function lineChart(points, levels = []) {
+  if (points.length < 2) return empty("No chart data", "Charts display collected observations only.");
+  const vals = points.map((p) => Number(p[1])),
+    lo = Math.min(...vals, ...levels.map((l) => l.price)),
+    hi = Math.max(...vals, ...levels.map((l) => l.price));
+  const y = (v) => 200 - ((v - lo) / Math.max(hi - lo, 1e-10)) * 175,
+    x = (i) => 45 + (i / (points.length - 1)) * 810;
+  return `<svg viewBox="0 0 900 230" role="img" aria-label="Observed data chart">${[0, 0.25, 0.5, 0.75, 1].map((t) => `<line x1="45" x2="855" y1="${y(lo + t * (hi - lo))}" y2="${y(lo + t * (hi - lo))}" stroke="#252d39"/><text x="860" y="${y(lo + t * (hi - lo))}">${number(lo + t * (hi - lo))}</text>`).join("")}<polyline fill="none" stroke="#65d2b4" stroke-width="1.8" points="${points.map((p, i) => `${x(i)},${y(Number(p[1]))}`).join(" ")}"/>${levels.map((l) => `<line x1="45" x2="855" y1="${y(l.price)}" y2="${y(l.price)}" stroke="#dabc7e" stroke-dasharray="4 5"/><text x="50" y="${y(l.price) - 4}">${escape(l.name)}</text>`).join("")}<text x="45" y="225">${escape(utc(points[0][0]))}</text><text x="650" y="225">${escape(utc(points.at(-1)[0]))}</text></svg>`;
+}
+function profile(rows) {
+  if (!rows?.length) return empty("Footprint unavailable", "A complete executed-trade window is required.");
+  const max = Math.max(...rows.map((r) => r.buy + r.sell));
+  return table(
+    ["Price bucket", "Aggressive buy / sell", "Delta"],
+    rows
+      .slice(0, 100)
+      .map((r) => [
+        number(r.price, 8),
+        `<svg class="profile-bar" viewBox="0 0 220 15"><rect width="${(200 * r.buy) / max}" height="12" fill="#65d2b4"/><rect x="${(200 * r.buy) / max}" width="${(200 * r.sell) / max}" height="12" fill="#ef929c"/></svg>`,
+        number(r.buy - r.sell, 4),
+      ]),
+  );
+}
+function depthChart(book) {
+  if (!book?.available) return empty("Depth unavailable", "Only subscribed, reconstructed books appear.");
+  const series = (side) => {
+    let cumulative = 0;
+    return book[side].map(([p, q]) => [Number(p), (cumulative += Number(p) * Number(q))]);
+  };
+  const bids = series("bids"),
+    asks = series("asks"),
+    all = [...bids, ...asks];
+  const low = Math.min(...all.map((p) => p[0])),
+    high = Math.max(...all.map((p) => p[0])),
+    max = Math.max(...all.map((p) => p[1]));
+  const points = (rows) =>
+    rows
+      .map(
+        ([p, n]) =>
+          `${45 + ((p - low) / Math.max(high - low, 1e-10)) * 810},${195 - (n / Math.max(max, 1)) * 165}`,
+      )
+      .join(" ");
+  return `<svg viewBox="0 0 900 230" role="img" aria-label="Cumulative visible bid and ask notional by price"><line x1="45" x2="855" y1="195" y2="195" stroke="#252d39"/><polyline fill="none" stroke="#65d2b4" stroke-width="2" points="${points(bids)}"/><polyline fill="none" stroke="#ef929c" stroke-width="2" points="${points(asks)}"/><text x="45" y="220">Price ${number(low, 8)}</text><text x="750" y="220">${number(high, 8)}</text><text x="45" y="20">Cumulative visible notional · max ${money(max)}</text></svg>`;
+}
+let generation = 0;
+async function render() {
+  const gen = ++generation;
+  $("#error").textContent = "";
+  try {
+    const route = location.hash.slice(1) || "overview",
+      [page, id] = route.split("/");
+    const data = await api("overview");
+    if (gen !== generation) return;
+    $("#status").textContent = data.scanner.state;
+    $("#clock").textContent = utc(data.at_ms);
+    document.querySelectorAll("nav a").forEach((a) => a.classList.toggle("active", a.hash === "#" + page));
+    const titles = {
+      overview: "Market overview",
+      watchlist: "Market scanner",
+      signals: "Signal journal",
+      research: "Research & experiments",
+      journal: "Paper journal",
+      health: "Data health",
+      settings: "Desk settings",
+      signal: "Signal detail",
+      market: "Market detail",
+    };
+    titles.ml = "ML Research";
+    titles.exchanges = "Public exchange health";
+    titles.flow = "Native order flow / DOM";
+    $("#title").textContent = titles[page] || "Market overview";
+    let body = "";
+    if (page === "overview") {
+      const metrics = [
+        ["ELIGIBLE MARKETS", data.scanner.eligible || 0, "Dynamic liquidity-filtered universe"],
+        [
+          "ACTIVE SETUPS",
+          data.signals.filter((s) => !["EXPIRED", "INVALIDATED", "RESOLVED"].includes(s.state)).length,
+          "Independent experimental families",
+        ],
+        ["RECORDED EVENTS", number(data.health.records_written), "This collector process"],
+        ["RESEARCH GRADES", "SSS–D", "Quality score, 0–100"],
+      ];
+      body =
+        `<div class="metrics">${metrics.map((m) => `<div class="metric"><label>${m[0]}</label><b>${m[1]}</b><small>${m[2]}</small></div>`).join("")}</div>` +
+        panel("Priority watchlist", watchTable(data.watchlist.slice(0, 8)), "RESEARCH RANK ≠ PROBABILITY") +
+        panel("Recent setups", signalTable(data.signals.slice(0, 8)), "4H → 1H → 15M");
+    } else if (page === "watchlist")
+      body = panel(
+        "Eligible markets",
+        `<input id="filter" aria-label="Filter symbols" placeholder="Filter symbol…"><div id="watch-table">${watchTable(data.watchlist)}</div>`,
+        "All paginated eligible contracts",
+      );
+    else if (page === "signals")
+      body = panel("Lifecycle journal", signalTable(data.signals), "Research alerts; no order execution");
+    else if (page === "ml") {
+      const ml = await api("ml"),
+        latest = ml.models[0];
+      body = panel(
+        "Champion and collection",
+        json({
+          champion: ml.champion || "None — no validated model",
+          snapshots: ml.snapshots,
+          decision_snapshots: ml.decision_snapshots,
+          labels: ml.labels,
+          monitoring: ml.monitoring,
+          recording_audit: ml.recording_audit,
+          learning_note: ml.learning_note,
+          cycle: ml.cycle,
+          drift: ml.drift,
+        }),
+      );
+      body += panel(
+        "Model comparison",
+        ml.models.length
+          ? table(
+              ["Model", "Holdout N / clusters", "Net R / interval", "Brier", "Approval blockers"],
+              ml.models.map((m) => [
+                escape(m.id.slice(0, 12)),
+                `${m.report.holdout.n} / ${m.report.holdout.effective_samples}`,
+                `${number(m.report.holdout.net_expectancy_r)} / ${escape(m.report.holdout.ev_interval)}`,
+                number(m.report.all_holdout.brier, 4),
+                escape(m.promotion_reasons.join("; ")),
+              ]),
+            )
+          : empty(
+              "No trained models",
+              "Training requires resolved candidate outcomes and independent chronological evaluation data. The ML worker reports data readiness above.",
+            ),
+      );
+      if (latest) {
+        body += panel(
+          "Holdout reliability",
+          table(
+            ["Probability bin", "Count", "Predicted", "Observed"],
+            latest.report.all_holdout.reliability.map((r) => [
+              number(r.lower, 1),
+              r.count,
+              number(r.predicted, 3),
+              number(r.observed, 3),
+            ]),
+          ),
+          "OUT OF SAMPLE — NOT PROOF OF EDGE",
+        );
+        body += panel(
+          "Feature importance",
+          table(
+            ["Feature", "Magnitude"],
+            Object.entries(latest.importance)
+              .sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]))
+              .slice(0, 15)
+              .map(([k, v]) => [escape(k), number(v, 4)]),
+          ),
+          "ASSOCIATION, NOT CAUSATION",
+        );
+        body += panel("Family / direction / regime / symbol / tier", json(latest.report.breakdown));
+        body += panel(
+          "Thresholds and validation trials",
+          json({
+            thresholds: latest.thresholds,
+            trials: latest.report.experiments,
+            walk_forward: latest.report.walk_forward,
+          }),
+          "VALIDATION-TUNED, NOT HOLDOUT-TUNED",
+        );
+      }
+      body += panel("Promotion / rollback history", json(ml.history));
+    } else if (page === "exchanges")
+      body =
+        panel("Sources and transitions", json(await api("exchanges"))) +
+        panel(
+          "Connection checks",
+          "<p>Source probes verify connectivity at the recorded time. Current stream coverage is reported under Data health. The test-market CLI command runs a new connectivity check.</p>",
+        );
+    else if (page === "flow") {
+      const symbol = id || "BTCUSDT",
+        flow = await api("orderflow/" + encodeURIComponent(symbol));
+      body = panel(
+        "Selected markets",
+        data.scanner.deep_symbols
+          ?.map((s) => `<a href="#flow/${encodeURIComponent(s)}">${escape(s)}</a>`)
+          .join(" · ") || "No deep subscriptions",
+      );
+      if (flow.available === false) body += empty("Order flow unavailable", flow.reason);
+      else {
+        const f = flow.profiles["15m"];
+        body +=
+          panel(symbol + " · 15M footprint", profile(f.profile), flow.exchange) +
+          panel("Window CVD", lineChart(f.cvd_path || []));
+        body += panel(
+          "Profile coverage",
+          table(
+            ["Period", "Complete", "PoC", "VAL / VAH"],
+            Object.entries(flow.profiles).map(([k, v]) => [
+              escape(k),
+              String(v.complete),
+              number(v.poc),
+              `${number(v.val)} / ${number(v.vah)}`,
+            ]),
+          ),
+        );
+        body += panel(
+          "Trade tape",
+          table(
+            ["UTC", "Side", "Price", "Base size"],
+            flow.tape.map((t) => [utc(t.event_ms), escape(t.side), escape(t.price), escape(t.size)]),
+          ),
+        );
+        const market = await api("markets/" + encodeURIComponent(symbol)),
+          frames = await api("liquidity/" + encodeURIComponent(symbol));
+        body += panel(
+          "Visible DOM",
+          depthChart(market.book),
+          market.book_fresh ? "Fresh" : "Stale / unavailable",
+        );
+        body += panel(
+          "Sampled liquidity history",
+          table(
+            ["UTC", "Mid", "Spread bps", "10bps bid / ask"],
+            frames.frames
+              .slice(-60)
+              .map((f) => [
+                utc(f.event_ms),
+                number(f.mid),
+                number(f.spread_bps),
+                `${money(f.depth["10"].bid)} / ${money(f.depth["10"].ask)}`,
+              ]),
+          ),
+          "5 SECOND SAMPLES — NOT HIDDEN LIQUIDITY",
+        );
+        body += panel("Derivatives", json(market.derivatives));
+      }
+    } else if (page === "health")
+      body = panel("Collection health", json(data.health)) + panel("Scanner status", json(data.scanner));
+    else if (page === "settings")
+      body =
+        panel("Configuration", json(await api("settings"))) +
+        panel(
+          "Manual portfolio snapshot",
+          `<p class="muted">All crypto positions share one conservative correlation group. Snapshot expires after 24 hours.</p><textarea id="portfolio" aria-label="Portfolio JSON">${escape(JSON.stringify((await api("portfolio")) || { positions: [], daily_loss_fraction: 0, weekly_loss_fraction: 0 }, null, 2))}</textarea><button id="save-portfolio">Save manual snapshot</button><p id="saved"></p>`,
+        );
+    else if (page === "journal")
+      body =
+        panel(
+          "Record a paper outcome",
+          `<div class="form-row"><input id="signal-id" placeholder="Signal ID (optional)" aria-label="Signal ID"><input id="net-r" type="number" step=".01" placeholder="Hypothetical net R" aria-label="Hypothetical net R"></div><textarea id="note" placeholder="Manual observations, assumptions, missed fills…" aria-label="Journal note"></textarea><label><input id="resolve" type="checkbox"> Resolve an alerted paper setup</label><br><button id="save-journal">Save journal entry</button>`,
+        ) + panel("Entries", json(await api("journal")));
+    else if (page === "research") {
+      const r = await api("research");
+      body =
+        panel(
+          "Experiments",
+          r.experiments.length
+            ? json(r.experiments)
+            : empty(
+                "No experiments recorded",
+                "Use the CLI research and replay commands. Results retain data hashes, code version and all assumptions.",
+              ),
+        ) +
+        panel(
+          "Source-attributed asset facts",
+          r.facts.length
+            ? json(r.facts)
+            : empty(
+                "Fundamentals not populated",
+                "Missing evidence earns no quality points. Source material can be reviewed and recorded using the form below.",
+              ),
+        ) +
+        panel(
+          "Record a reviewed asset fact",
+          factForm(),
+          "Optional manual context; no automatic verification",
+        ) +
+        panel("Recorded data segments", json(r.segments));
+    } else if (page === "market") {
+      const m = await api("markets/" + encodeURIComponent(id));
+      body =
+        panel(
+          id + " · 1H closes",
+          lineChart(
+            m.candles.map((c) => [c.start, c.close]),
+            [
+              { name: "Known high", price: m.h1.high },
+              { name: "Known low", price: m.h1.low },
+            ],
+          ),
+          utc(m.asof),
+        ) +
+        `<div class="grid2">` +
+        panel(
+          "Visible order-book depth",
+          depthChart(m.book),
+          m.book_fresh ? "Fresh observation" : "STALE / UNAVAILABLE",
+        ) +
+        panel("Derivatives & funding", json(m.derivatives)) +
+        `</div>` +
+        panel("Structure and value levels", json(m.h1)) +
+        panel("Fundamental context", json(m.fundamentals)) +
+        panel("Depth observations", json({ fresh: m.book_fresh, ...m.book }));
+    } else if (page === "signal") {
+      const { signal: s } = await api("signals/" + encodeURIComponent(id));
+      const f = s.evidence.flow || {};
+      body =
+        panel(
+          `${s.symbol} · ${s.direction} · ${s.final_tier}`,
+          `<p>${escape(s.reason)}</p>` +
+            table(
+              ["Entry zone", "Stop", "TP1 / TP2", "Quality / probability"],
+              [
+                [
+                  `${number(s.zone[0], 8)} – ${number(s.zone[1], 8)}`,
+                  number(s.stop, 8),
+                  `${number(s.tp1, 8)} / ${number(s.tp2, 8)}`,
+                  `${number(s.quality)} / ${s.validation_status === "validated" && s.calibrated_probability != null ? number(s.calibrated_probability * 100, 1) + "%" : "Uncalibrated"}`,
+                ],
+              ],
+            ) +
+            `<p class="muted">${escape(s.invalidation)}</p>`,
+        ) +
+        `<div class="grid2">` +
+        panel("Executed footprint", profile(f.profile), "Window profile; not a full session") +
+        panel("Cumulative volume delta", lineChart(f.cvd_path || []), "Base units · execution window") +
+        `</div>` +
+        panel(
+          "Evidence & risk",
+          `<details open><summary>Risk and rejection gates</summary>${json({ risk: s.risk, gates: s.gates })}</details><details><summary>Complete reproducible evidence</summary>${json(s)}</details>`,
+        );
     }
-    body+=panel('Promotion / rollback history',json(ml.history));
+    if (gen !== generation) return;
+    $("#view").innerHTML = body;
+    $("#filter")?.addEventListener("input", (e) => {
+      $("#watch-table").innerHTML = watchTable(
+        data.watchlist.filter((r) => r.symbol.includes(e.target.value.toUpperCase())),
+      );
+    });
+    $("#save-portfolio")?.addEventListener("click", async () => {
+      try {
+        await api("portfolio", JSON.parse($("#portfolio").value));
+        $("#saved").textContent = "Snapshot saved; expires after 24 hours.";
+      } catch (e) {
+        $("#error").textContent = e.message;
+      }
+    });
+    $("#save-journal")?.addEventListener("click", async () => {
+      try {
+        await api("journal", {
+          signal_id: $("#signal-id").value || null,
+          note: $("#note").value,
+          hypothetical_net_r: $("#net-r").value ? Number($("#net-r").value) : null,
+          resolve: $("#resolve").checked,
+        });
+        render();
+      } catch (e) {
+        $("#error").textContent = e.message;
+      }
+    });
+    $("#asset-fact")?.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      try {
+        const f = new FormData(e.target);
+        await api("facts", {
+          asset: f.get("asset"),
+          category: f.get("category"),
+          definition: f.get("definition"),
+          value: f.get("value"),
+          source: f.get("source"),
+          known_ms: Date.parse(f.get("known") + "Z"),
+          effective_ms: Date.parse(f.get("effective") + "Z"),
+          expires_ms: Date.parse(f.get("expires") + "Z"),
+          major_event: f.has("major_event"),
+        });
+        $("#fact-saved").textContent =
+          "Observation saved with its collection timestamp. Historical candidate scores remain unchanged.";
+        e.target.reset();
+      } catch (error) {
+        $("#error").textContent = error.message;
+      }
+    });
+  } catch (e) {
+    $("#error").textContent = e.message;
+    $("#status").textContent = "Unavailable";
   }
-  else if(page==='exchanges')body=panel('Sources and transitions',json(await api('exchanges')))+panel('Connection checks','<p>Run docker compose exec desk bybit-flow test-market. No exchange keys or TradingView account are required. Probe timestamps are not continuous-feed health.</p>');
-  else if(page==='flow'){
-    const symbol=id||'BTCUSDT', flow=await api('orderflow/'+encodeURIComponent(symbol));
-    body=panel('Selected markets',data.scanner.deep_symbols?.map(s=>`<a href="#flow/${encodeURIComponent(s)}">${escape(s)}</a>`).join(' · ')||'No deep subscriptions');
-    if(flow.available===false)body+=empty('Order flow unavailable',flow.reason);
-    else{
-      const f=flow.profiles['15m'];
-      body+=panel(symbol+' · 15M footprint',profile(f.profile),flow.exchange)+panel('Window CVD',lineChart(f.cvd_path||[]));
-      body+=panel('Profile coverage',table(['Period','Complete','PoC','VAL / VAH'],Object.entries(flow.profiles).map(([k,v])=>[escape(k),String(v.complete),number(v.poc),`${number(v.val)} / ${number(v.vah)}`])));
-      body+=panel('Trade tape',table(['UTC','Side','Price','Base size'],flow.tape.map(t=>[utc(t.event_ms),escape(t.side),escape(t.price),escape(t.size)])));
-      const market=await api('markets/'+encodeURIComponent(symbol)), frames=await api('liquidity/'+encodeURIComponent(symbol));
-      body+=panel('Visible DOM',depthChart(market.book),market.book_fresh?'Fresh':'Stale / unavailable');
-      body+=panel('Sampled liquidity history',table(['UTC','Mid','Spread bps','10bps bid / ask'],frames.frames.slice(-60).map(f=>[utc(f.event_ms),number(f.mid),number(f.spread_bps),`${money(f.depth['10'].bid)} / ${money(f.depth['10'].ask)}`])),'5 SECOND SAMPLES — NOT HIDDEN LIQUIDITY');
-      body+=panel('Derivatives',json(market.derivatives));
-    }
-  }
-  else if(page==='health')body=panel('Collection health',json(data.health))+panel('Scanner status',json(data.scanner));
-  else if(page==='tradingview'){const tv=await api('tradingview');body=panel('Ingress and qualification',json({enabled:tv.enabled,sss_research:tv.sss_research,qualification:tv.qualification}))+panel('Durable event inbox',table(['Event','Received UTC','State','Result'],tv.queue.map(r=>[escape(r.event_id),utc(r.received_ms),escape(r.status),escape(r.result)])))+panel('How to connect','<p>Follow docs/TRADINGVIEW_SETUP.md for TradingView Premium, domain/HTTPS and Discord. Classified chart volume is not exchange taker-side data. Missing liquidity blocks strict SSS; opt-in proxy research is unsized and capped below SSS.</p>');}
-  else if(page==='settings')body=panel('Configuration',json(await api('settings')))+panel('Manual portfolio snapshot',`<p class="muted">All crypto positions share one conservative correlation group. Snapshot expires after 24 hours.</p><textarea id="portfolio" aria-label="Portfolio JSON">${escape(JSON.stringify((await api('portfolio'))||{positions:[],daily_loss_fraction:0,weekly_loss_fraction:0},null,2))}</textarea><button id="save-portfolio">Save manual snapshot</button><p id="saved"></p>`);
-  else if(page==='journal')body=panel('Record a paper outcome',`<div class="form-row"><input id="signal-id" placeholder="Signal ID (optional)" aria-label="Signal ID"><input id="net-r" type="number" step=".01" placeholder="Hypothetical net R" aria-label="Hypothetical net R"></div><textarea id="note" placeholder="Manual observations, assumptions, missed fills…" aria-label="Journal note"></textarea><label><input id="resolve" type="checkbox"> Resolve an alerted paper setup</label><br><button id="save-journal">Save journal entry</button>`)+panel('Entries',json(await api('journal')));
-  else if(page==='research'){const r=await api('research');body=panel('Experiments',r.experiments.length?json(r.experiments):empty('No experiments recorded','Use the CLI research and replay commands. Results retain data hashes, code version and all assumptions.'))+panel('Source-attributed asset facts',r.facts.length?json(r.facts):empty('Fundamentals not populated','Missing evidence earns no quality points. Source material can be reviewed and recorded using the form below.'))+panel('Record a reviewed asset fact',factForm(),'Optional manual context; no automatic verification')+panel('Recorded data segments',json(r.segments));}
-  else if(page==='market'){const m=await api('markets/'+encodeURIComponent(id));body=panel(id+' · 1H closes',lineChart(m.candles.map(c=>[c.start,c.close]),[{name:'Known high',price:m.h1.high},{name:'Known low',price:m.h1.low}]),utc(m.asof))+`<div class="grid2">`+panel('Visible order-book depth',depthChart(m.book),m.book_fresh?'Fresh observation':'STALE / UNAVAILABLE')+panel('Derivatives & funding',json(m.derivatives))+`</div>`+panel('Structure and value levels',json(m.h1))+panel('Fundamental context',json(m.fundamentals))+panel('Depth observations',json({fresh:m.book_fresh,...m.book}));}
-  else if(page==='signal'){const {signal:s}=await api('signals/'+encodeURIComponent(id));const f=s.evidence.flow||{};body=panel(`${s.symbol} · ${s.direction} · ${s.final_tier}`,`<p>${escape(s.reason)}</p>`+table(['Entry zone','Stop','TP1 / TP2','Quality / probability'],[[`${number(s.zone[0],8)} – ${number(s.zone[1],8)}`,number(s.stop,8),`${number(s.tp1,8)} / ${number(s.tp2,8)}`,`${number(s.quality)} / Uncalibrated`]])+`<p class="muted">${escape(s.invalidation)}</p>`)+`<div class="grid2">`+panel('Executed footprint',profile(f.profile),'Window profile; not a full session')+panel('Cumulative volume delta',lineChart(f.cvd_path||[]),'Base units · execution window')+`</div>`+panel('Evidence & risk',`<details open><summary>Risk and rejection gates</summary>${json({risk:s.risk,gates:s.gates})}</details><details><summary>Complete reproducible evidence</summary>${json(s)}</details>`);}
-  if(gen!==generation)return; $('#view').innerHTML=body;
-  $('#filter')?.addEventListener('input',e=>{$('#watch-table').innerHTML=watchTable(data.watchlist.filter(r=>r.symbol.includes(e.target.value.toUpperCase())));});
-  $('#save-portfolio')?.addEventListener('click',async()=>{try{await api('portfolio',JSON.parse($('#portfolio').value));$('#saved').textContent='Saved; refresh daily.';}catch(e){$('#error').textContent=e.message;}});
-  $('#save-journal')?.addEventListener('click',async()=>{try{await api('journal',{signal_id:$('#signal-id').value||null,note:$('#note').value,hypothetical_net_r:$('#net-r').value?Number($('#net-r').value):null,resolve:$('#resolve').checked});render();}catch(e){$('#error').textContent=e.message;}});
-  $('#asset-fact')?.addEventListener('submit',async e=>{e.preventDefault();try{const f=new FormData(e.target);await api('facts',{asset:f.get('asset'),category:f.get('category'),definition:f.get('definition'),value:f.get('value'),source:f.get('source'),known_ms:Date.parse(f.get('known')+'Z'),effective_ms:Date.parse(f.get('effective')+'Z'),expires_ms:Date.parse(f.get('expires')+'Z'),major_event:f.has('major_event')});$('#fact-saved').textContent='Stored as user-sourced context. Collection time is now; past candidate scores are not rewritten.';e.target.reset();}catch(error){$('#error').textContent=error.message;}});
- }catch(e){$('#error').textContent=e.message;$('#status').textContent='Unavailable';}
 }
-window.addEventListener('hashchange',render);render();setInterval(()=>{if(!['TEXTAREA','INPUT'].includes(document.activeElement.tagName))render();},30000);
+window.addEventListener("hashchange", render);
+render();
+setInterval(() => {
+  if (!["TEXTAREA", "INPUT"].includes(document.activeElement.tagName)) render();
+}, 30000);

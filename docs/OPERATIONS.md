@@ -1,15 +1,12 @@
-# Operations, deployment and data care
+# Operations, deployment and data lifecycle
 
-Current operator path: [USER_RUNBOOK.md](USER_RUNBOOK.md), superseding older TV-first
-assumptions. Native operation needs no subscription, Pine, inbound webhook, domain or key.
-Compose keeps the dashboard authenticated on localhost; Discord is outbound. Windows/Linux
-setup, diagnostics, updates, full stopped-writer backup and fresh-project restore are in
-the runbook. Run one primary collector and at most one separate ML worker per data directory.
-SSS RESEARCH is explicit opt-in, not validated SSS; assumed-cost labels cannot promote a model.
+The [operator guide](USER_RUNBOOK.md) covers startup and configuration. Run one
+collector and at most one separate ML worker per data directory. Research alerts
+and validated model delivery have separate admission requirements.
 
 ## Local and VPS
 
-Use one process per SQLite/data directory. A 2-core / 2–4GB VPS is a starting resource budget,
+Use one collector and at most one separate ML worker per data directory. A 2-core / 2–4GB VPS is a starting resource budget,
 not a measured capacity promise. Deep subscriptions default to eight eligible instruments,
 50 book levels. Increase only after measuring throughput, memory and disk. Scanner REST
 budget is three requests/second; wide scans may outlast a 15-minute cadence, and stale
@@ -67,7 +64,7 @@ is supplied.
 
 Schema v1 creates versioned metadata tables idempotently. A future migration must back up,
 check `schema_version`, use a transaction and retain the original database until verification.
-No v2 migration is claimed. PostgreSQL migration would move metadata tables and the alert
+Additive migrations through schema version 4 include the chart inbox and ML tables. PostgreSQL migration would move metadata tables and the alert
 attempt ledger, while retaining Parquet/object files and their hashes; it is not implemented.
 
 ## Discord delivery semantics
@@ -82,8 +79,7 @@ separate deduplication keys. Paper RESOLVED requires manual journal input.
 If Discord times out after accepting a request, there is no safe exactly-once replay guarantee.
 Rows left `sending` or `uncertain` must be reconciled against the channel using the signal ID.
 HTTP 429/rejections are retained as `rate-limited`/`rejected`; they are not blindly retried.
-Do not clear the outbox to force a resend. A missed research card is preferable to duplicated
-or stale cards. Public alert delivery remains locked irrespective of webhook configuration.
+Do not clear the outbox to force a resend. Validated public delivery requires registry approval and current cohort evidence; a configured webhook alone is insufficient.
 
 ## Dependencies and licenses
 

@@ -65,7 +65,7 @@ The official Binance historical archive was accessible. The published SHA256 mat
 and 115,985 LINKUSDT aggregate execution records from January 1, 2024 were converted
 to Parquet and used for actual footprint calculations. This proves historical archive
 and feature processing, not current REST/WS compatibility, historical DOM or strategy
-profitability. See [VERIFICATION.md](VERIFICATION.md) for hashes and exact commands.
+profitability. See [VERIFICATION.md](VERIFICATION.md) for reproducible checks and their scope.
 
 Payload/sequence and adapter-to-scanner tests use synthetic HTTP transports. Run
 `bybit-flow test-market --exchange binance` (or bybit/okx) on your own lawful deployment

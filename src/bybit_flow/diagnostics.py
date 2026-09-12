@@ -87,7 +87,7 @@ async def discord_test(settings, store, transport=None):
     if not secret:
         return {
             "status": "NOT_CONFIGURED",
-            "action": "Set FLOW_RESEARCH_WEBHOOK locally; never paste it into chat",
+            "action": "Configure FLOW_RESEARCH_WEBHOOK in the private environment",
         }
     now = now_ms()
     health = {name: store.get("probe:" + name, {}).get("status", "NOT_TESTED") for name in VENUES}

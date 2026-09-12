@@ -269,7 +269,7 @@ def create_app(settings=None):
                 gap=store.get("recorder_gap"),
                 quotes=store.get("quote_health"),
             ),
-            qualification="Uncalibrated · public high-tier alerts locked",
+            qualification="Research alerts; model qualification evaluated per signal",
             at_ms=now_ms(),
         )
 

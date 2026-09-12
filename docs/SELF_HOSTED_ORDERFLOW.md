@@ -1,19 +1,4 @@
-# Exchange-native research implementation
-
-## Audit and preserved components
-
-Started from clean, pulled main `f33930a`. Inspected scoring, calibration, strategy,
-features, orderflow, scanner, replay, backtest, storage, risk, notifications, config,
-streams, ingestion, history, app, ML, tests and research docs before implementation.
-Preserved causal four-family candidates, Book/Tape/footprint, bounded recorder/Parquet,
-risk gates, rejected-candidate snapshots, paper positions, logistic/LightGBM safe JSON
-inference, purged training/calibration, registry/drift locks and authenticated UI.
-
-Blockers addressed: Bybit-specific wiring; TV-first operating instructions; absent
-operator diagnostics; venue identity missing from models; cross-venue label contamination;
-repeated live decisions against an older frozen ML vector; no native SSS research label.
-Milestones: public adapter/diagnostic foundation; native scanner and source separation;
-operator runbook and regression/Docker verification. See STATUS.md for remaining work.
+# Architecture
 
 ## Native data and continuity
 

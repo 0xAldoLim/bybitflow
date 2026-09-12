@@ -1,6 +1,6 @@
 # Source and schema audit
 
-## Current native sources — 2026-09-10
+## Native sources
 
 Start with [USER_RUNBOOK.md](USER_RUNBOOK.md); venue schemas and endpoints are audited in
 [MULTI_EXCHANGE.md](MULTI_EXCHANGE.md). TradingView sections below are optional legacy only.
@@ -12,24 +12,11 @@ corrections are possible; retain hashes and collection dates. See the
 [official archive definitions](https://github.com/binance/binance-public-data).
 Archives supply no historical DOM, liquidations or point-in-time instrument membership.
 
-Audit date: 2026-09-08. Official pages inspected via web browsing. Direct CLI attempts to
-`api.bybit.com` and `public.bybit.com` encountered TLS certificate hostname mismatches in
-the development environment; verification was NOT disabled. No successful live acquisition
-or historical coverage measurement is asserted. Contract-specific availability must be
-measured by the downloader and retained manifest, not inferred from the existence of a portal.
+Exchange availability is deployment-specific. Diagnose current access with the
+test-market command; preserve TLS verification and source manifests.
 
-## Public REST
-
-TradingView sources and host/Docker diagnosis were additionally audited on 2026-09-09 UTC.
-See [connectivity evidence](CONNECTIVITY_AUDIT.md) and [account setup](TRADINGVIEW_SETUP.md).
-The [official Pine footprint API](https://www.tradingview.com/pine-script-docs/concepts/other-timeframes-and-data/#requestfootprint)
-uses intrabar price-based buy/sell classification, returns `na` when unavailable, permits one
-footprint request per script and requires Premium/Ultimate. It is not exchange taker-side tape.
-`ticks_per_row` is a positive simple integer; VA defaults to 70 and imbalance to 300 percent.
-[Footprint/volume-row methods](https://www.tradingview.com/pine-script-docs/language/type-system/#footprints)
-provide per-bar volumes, rows, delta, PoC, value-area bounds and diagonal imbalance flags.
-Our scripts neither backfill actual liquidation/depth records from these values nor claim
-full-session/prior-week profile coverage. Provider history revisions remain an explicit limit.
+The optional [chart compatibility API](TRADINGVIEW_SETUP.md) accepts source-attested
+classifications. It does not reconstruct exchange taker-side trades or missing depth.
 
 ## Bybit REST details
 
@@ -107,6 +94,6 @@ or ambiguous attempts are journaled without blind duplicate retries.
 
 Fundamental facts are manual, source-linked, collection/knowledge/effective/expiry dated;
 there is no unreliable automated token-quality score. Binance integration is unavailable
-in this milestone and always displayed as such. Public access does not imply unrestricted
+in the current implementation and always displayed as such. Public access does not imply unrestricted
 redistribution: retain attribution and check the exchange's applicable data terms before
 publishing datasets. Application source is MIT; market data is not relicensed by this repository.

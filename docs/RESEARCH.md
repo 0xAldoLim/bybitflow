@@ -1,23 +1,4 @@
-# Research protocol and definitions
-
-## Native-source update — 2026-09-10
-
-[SELF_HOSTED_ORDERFLOW.md](SELF_HOSTED_ORDERFLOW.md) contains current native definitions
-and limits; [USER_RUNBOOK.md](USER_RUNBOOK.md) lists actual promotion gates. Raw score ≥95
-can produce opt-in SSS RESEARCH only after all gates. It is not a calibrated probability.
-The implemented champion gate requires 78 weekly clusters even with lower-grade alerts;
-older 52-cluster SS discussion below does not override that stricter policy. Source-separated
-frozen-candidate labels support native recordings; full strategy replay remains Bybit-only.
-Multi-venue observations earn zero predictive score credit without OOS evidence.
-
-## ML extension, 2026-09-09
-
-The new [ML research guide](ML_RESEARCH.md) supersedes historical statements below that fold
-generation, model artifacts and inference are unimplemented. It defines the current immutable
-candidate schema, first-scored-decision policy, separate calibration, purging/embargo, bounded
-threshold trials, untouched holdout reservation and promotion gates. No actual model is approved.
-The existing strategy/fill/source definitions below remain applicable. Cost-assumed print labels
-do not meet the verified-cost deployment prerequisite.
+# Research protocol
 
 ## Causal availability
 
@@ -75,32 +56,12 @@ or recording discontinuities prevent complete-cost qualification. Exact liquidat
 on account, collateral, margin mode, risk tiers, mark behavior and fees; only a stress
 approximation is implemented. The OHLCV baseline separately uses pessimistic stop-first bars.
 
-## Qualification prerequisites (fixed before evaluating a model)
+## Qualification
 
-No candidate model is deployed in this release. The following are necessary conditions for a
-future reviewed deployment artifact, not claims that sample counts alone prove reliability:
-
-- Independent chronological predictions, four-hour purging plus embargo, symbol/regime/liquidity/
-  family/direction strata and no overlap of unresolved labels with training.
-- At least 200 resolved out-of-sample trades and 26 UTC-week clusters for a base candidate
-  probability estimate; otherwise abstain. Independent uncertainty is bounded by cluster count.
-- At least 52 weekly clusters for SS consideration and 78 for SSS, plus relevant regime coverage,
-  positive lower 95% cluster-bootstrap net-EV bound, stable costs and acceptable tail drawdowns.
-- Calibration/reliability evaluation and held-out score-bin probabilities, compared with
-  uncalibrated and market-only baselines; sample adequacy must account for concentration and
-  correlation beyond a week. A count does not guarantee acceptable uncertainty.
-- Family-specific long/short results, untouched holdout, documented parameter trials, turnover,
-  adverse selection, funding, drawdown and tail losses. No selection for win rate alone.
-- SMC/order-flow/derivatives/fundamental ablations on the same timestamps/universe and cost
-  assumptions. Missing actual features prevent that ablation, not candle proxies.
-- SSS additionally requires raw quality >=95, all core coverage, no single-regime dependence,
-  and independent review. Raw quality may reach it with complete evidence; validated
-  qualification remains separate and has not been established.
-
-Implemented tools: clustered descriptive statistics, expanding-window score-bin estimation,
-Brier evaluation, fixed 60/20/20 OHLCV partitions and development-only ATR sensitivity. Full
-strategy validation, evidence-artifact approval, fold generation with multi-symbol overlapping
-labels, and model deployment are unfinished. Raw quality 95 never means 95% probability.
+Quality scoring, ML ranking, and validated probabilities have separate admission
+criteria. See [scoring](SCORING.md) for deterministic grades and [ML research](ML_RESEARCH.md)
+for the implemented model and live-cohort requirements. Current print labels use
+assumed costs and cannot satisfy verified-cost promotion.
 
 ## Reproduction and experiment controls
 

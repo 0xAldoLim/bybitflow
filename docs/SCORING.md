@@ -1,18 +1,14 @@
 # Evidence scores and qualification
 
 Research grades span the full 0–100 range: SSS >=95, SS >=90, S >=85,
-A >=75, B >=65, C >=50, D >=0. D includes the former E/F score bands;
-numeric component weights and mandatory rejection gates are unchanged.
+A >=75, B >=65, C >=50, D >=0. D is the lowest score band. Mandatory rejection gates apply to every grade.
 With `FLOW_RESEARCH_ALERTS=true`, confirmed setups across all grades can send
 uncalibrated research cards. `FLOW_SSS_RESEARCH=true` alone remains the narrower
 SSS-only opt-in. These grades are evidence scores, not win probabilities.
 Discord cards show the grade, entry zone, stop, TP1 and TP2. Lower-grade cards
 remain subject to confirmation, freshness, risk, cooldown and deduplication.
 
-`native-evidence-2` retains the original weights. The former fixed fractions capped quality at
-83. Current contributions change with observations and have direct unit tests, including a
-fully populated synthetic 100-point case. This proves software reachability, not the market
-frequency or effectiveness of high scores.
+The native-evidence-2 rubric assigns points from observed features:
 
 | Native component | Maximum | Measured rubric |
 |---|---:|---|
@@ -40,7 +36,7 @@ the rubric only penalizes specified crowding. These initial thresholds remain ex
 | Observed liquidity | 10 | Instrument age/status, turnover, spread history, quote freshness and executable notional |
 
 TV values are authenticated source **attestations**, not independently re-downloaded chart
-history. Raw row stacks originate in Pine; the gateway checks ranges/direction and the aggregate
+history. Raw row stacks originate in the chart source; the gateway checks ranges/direction and the aggregate
 observations but cannot independently prove the supplied row calculation. The inbox retains
 the original observations for comparison with recordings/exports.
 
@@ -52,8 +48,7 @@ from these two profiles are not interchangeable or eligible to share calibration
 Strict TV SSS research needs raw >=95, all gates, and explicit `FLOW_SSS_RESEARCH=true`.
 The label always includes RESEARCH and UNCALIBRATED. Turnover-proxy mode lacks actual spread,
 depth and contract sizing: capped at 84, never strict SSS. Default notification toggles are off.
-Validated public SSS remains locked in `Notifier.send_public`; there is no model artifact that
-unlocks it. A score is never assigned to `probability`.
+Validated public delivery requires registry approval and live cohort evidence. A score is never assigned to `probability`.
 
 Native strategies now support the same explicit `FLOW_SSS_RESEARCH=true` opt-in: raw ≥95,
 all structure/flow/liquidity/freshness/entry/risk gates, no rejections, and an accepted risk
