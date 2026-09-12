@@ -58,6 +58,15 @@ A configured webhook or passing offline test does not establish external deliver
 Eligible contracts require sufficient history and turnover. Spread qualification
 requires at least 12 observed five-minute buckets and coverage checks. Execution
 confirmation requires a complete closed 15-minute trade window and a fresh book.
+The spread baseline additionally requires at least 12 valid five-minute samples
+and 80% observation coverage. Initial liquidity warm-up therefore takes about an
+hour; recent collection gaps can extend it. A healthy process alone does not
+prove that a signal has enough evidence to confirm.
+
+The Compose setup uses a five-minute delay between broad scans. Each closed
+15-minute execution window receives a distinct candidate ID under rules-0.2.0,
+while repeated scans of the same window remain deduplicated. Native feeds recover
+per symbol; one stale coin does not reset the other coins' retained history.
 Source changes and interruptions reset affected continuity.
 
 Cards include direction, setup, quality, entry zone, stop, TP1, TP2, and risk

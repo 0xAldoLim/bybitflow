@@ -66,11 +66,12 @@ def candidates(instrument, h4, h1, m15, asof, families=FAMILIES):
                 )
 
             ident = hashlib.sha256(
-                f"{instrument.symbol}|{direction}|{family}|{last.end}|rules-0.1.0".encode()
+                f"{instrument.symbol}|{direction}|{family}|{last.end}|{m15[-1].end}|rules-0.2.0".encode()
             ).hexdigest()[:20]
             plans.append(
                 Signal(
                     id=ident,
+                    version="rules-0.2.0",
                     symbol=instrument.symbol,
                     direction=direction,
                     family=family,

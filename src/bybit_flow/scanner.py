@@ -191,6 +191,13 @@ class Scanner:
         failed_since = None
         while True:
             await asyncio.sleep(30)
+            # Native symbols reconnect independently. One quiet or stale symbol
+            # must not destroy continuous history for the rest of the universe.
+            source_feed_available = (
+                any(self.streams.connected_for(s) for s in self.streams.selected)
+                if isinstance(self.streams, NativeStreams)
+                else self.streams.connected
+            )
             self.store.put(
                 "runtime_health",
                 dict(
@@ -203,9 +210,10 @@ class Scanner:
                     source_ready=self.source_ready,
                     selected=list(self.streams.selected),
                     streams_fresh=self.streams.connected,
+                    source_feed_available=source_feed_available,
                 ),
             )
-            if not self.source_ready or not self.streams.selected or self.streams.connected:
+            if not self.source_ready or not self.streams.selected or source_feed_available:
                 failed_since = None
                 continue
             failed_since = failed_since or now_ms()
