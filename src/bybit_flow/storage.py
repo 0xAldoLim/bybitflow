@@ -205,6 +205,13 @@ class Recorder:
                     batch.append(await asyncio.wait_for(self.queue.get(), timeout=1))
                 except TimeoutError:
                     pass
+                # Drain buffered events before yielding to producers again. Awaiting
+                # every queued row lets websocket bursts outrun the single writer.
+                while len(batch) < 1000:
+                    try:
+                        batch.append(self.queue.get_nowait())
+                    except asyncio.QueueEmpty:
+                        break
                 if batch and (
                     len(batch) >= 100
                     or time.monotonic() - last_flush >= 1

@@ -1,3 +1,5 @@
+import asyncio
+import gzip
 import json
 
 import httpx
@@ -36,6 +38,32 @@ def test_backpressure_opens_circuit(settings):
     with pytest.raises(RuntimeError):
         rec.offer("test", "T", 1, {})
     assert not rec.healthy and store.get("recorder_gap")
+    store.close()
+
+
+async def test_recorder_keeps_up_with_bursts_without_losing_rows(settings):
+    settings = settings.model_copy(update={"queue_size": 256})
+    store = Store(settings.data_dir)
+    rec = Recorder(store, settings)
+
+    async def produce():
+        try:
+            for burst in range(100):
+                for offset in range(32):
+                    event = burst * 32 + offset
+                    rec.offer("test", "T", event, {"sequence": event})
+                await asyncio.sleep(0)
+        finally:
+            rec.running = False
+
+    await asyncio.gather(rec.run(), produce())
+    recorded = []
+    for manifest in store.rows("segments", limit=10000):
+        with gzip.open(manifest["raw"], "rt") as stream:
+            recorded.extend(json.loads(row)["event_ms"] for row in stream)
+    assert sorted(recorded) == list(range(3200))
+    assert rec.healthy and rec.written == 3200
+    assert rec.pending_bytes == 0 and rec.queue.empty()
     store.close()
 
 
