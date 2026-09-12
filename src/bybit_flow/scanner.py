@@ -462,6 +462,11 @@ class Scanner:
             was_alerted = s.state == "ALERTED"
             c = self.context.get(s.symbol)
             book, tape = self.streams.books.get(s.symbol), self.streams.tapes.get(s.symbol)
+            connected = (
+                self.streams.connected_for(s.symbol)
+                if isinstance(self.streams, NativeStreams)
+                else self.streams.connected
+            )
             mid = float((max(book.bids) + min(book.asks)) / 2) if book and book.valid else None
             if now >= s.expires_ms:
                 s.state = "EXPIRED"
@@ -475,7 +480,7 @@ class Scanner:
                 or not book
                 or not book.fresh(now, self.settings.book_stale_ms)
                 or not self.recorder.healthy
-                or not self.streams.connected
+                or not connected
             ):
                 s.state = "INVALIDATED"
                 s.invalidation = "Required live feed lost; the published setup is no longer supported"
@@ -488,23 +493,29 @@ class Scanner:
                 continue
             end = c["m15"][-1].end
             start = end - 900_000
-            healthy = (
-                self.recorder.healthy
-                and self.streams.connected
-                and book.fresh(now, self.settings.book_stale_ms)
-                and tape.coverage_start <= start
-                and tape.coverage_start > 0
-                and 0 <= now - tape.last_receipt <= self.settings.trade_stale_ms
-                and -1000 <= now - tape.last_event <= self.settings.trade_stale_ms
-                and now - end <= 960_000
-                and now - c["asof"] <= self.settings.scan_seconds * 1000 + 60_000
-            )
+            checks = {
+                "recorder unavailable": self.recorder.healthy,
+                "symbol feed unavailable or stale": connected,
+                "order book stale": book.fresh(now, self.settings.book_stale_ms),
+                "full closed 15-minute trade window not yet retained": 0 < tape.coverage_start <= start,
+                "latest trade stale": 0 <= now - tape.last_receipt <= self.settings.trade_stale_ms
+                and -1000 <= now - tape.last_event <= self.settings.trade_stale_ms,
+                "closed candle stale": 0 <= now - end <= 960_000,
+                "market context stale": 0 <= now - c["asof"] <= self.settings.scan_seconds * 1000 + 60_000,
+            }
+            coverage_reasons = [reason for reason, passed in checks.items() if not passed]
+            healthy = not coverage_reasons
             s.coverage = dict(
                 book_fresh=book.fresh(now, self.settings.book_stale_ms),
                 trade_window_complete=healthy,
                 recording=self.recorder.healthy,
                 historical_depth="not backfilled",
                 fundamentals="manual facts or missing",
+                checked_ms=now,
+                window_start_ms=start,
+                window_end_ms=end,
+                retained_from_ms=tape.coverage_start,
+                reasons=coverage_reasons,
             )
             if was_alerted:
                 facts = facts_asof(self.store, c["instrument"].base, now)

@@ -87,10 +87,14 @@ class NativeStreams:
 
     @property
     def connected(self):
-        return bool(self.selected) and all(
-            self.books[s].fresh(now_ms(), self.settings.book_stale_ms)
-            and 0 <= now_ms() - self.tapes[s].last_receipt <= self.settings.trade_stale_ms
-            for s in self.selected
+        return bool(self.selected) and all(self.connected_for(s) for s in self.selected)
+
+    def connected_for(self, symbol):
+        now = now_ms()
+        return (
+            symbol in self.selected
+            and self.books[symbol].fresh(now, self.settings.book_stale_ms)
+            and 0 <= now - self.tapes[symbol].last_receipt <= self.settings.trade_stale_ms
         )
 
     async def select(self, symbols):

@@ -39,7 +39,7 @@ class Settings(BaseSettings):
     book_depth: Literal[50, 200] = 50
     book_stale_ms: int = Field(5000, ge=1000)
     trade_stale_ms: int = Field(15000, ge=1000)
-    queue_size: int = Field(2000, ge=100, le=10000)
+    queue_size: int = Field(10000, ge=100, le=10000)
     queue_byte_limit: int = Field(32_000_000, ge=1_000_000, le=128_000_000)
     tape_max_trades: int = Field(50_000, ge=1000, le=200_000)
     max_storage_gb: float = Field(10, gt=0.1)

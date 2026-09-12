@@ -162,7 +162,8 @@ class Recorder:
         directory.mkdir(exist_ok=True)
         raw = directory / f"{ident}.jsonl.gz"
         normalized = directory / f"{ident}.parquet"
-        with gzip.open(raw, "wt") as f:
+        # Live collection prioritizes keeping up with bursts over maximum compression.
+        with gzip.open(raw, "wt", compresslevel=1) as f:
             for row in batch:
                 f.write(json.dumps(row) + "\n")
         from .normalization import NORMALIZATION_VERSION, SCHEMA, normalize
