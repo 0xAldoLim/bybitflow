@@ -17,6 +17,10 @@ def now_ms():
     return time.time_ns() // 1_000_000
 
 
+class StorageBudgetExceeded(OSError):
+    """Configured recording budget reached; physical disk may still have space."""
+
+
 class Store:
     def __init__(self, root: Path):
         self.root = root
@@ -156,7 +160,7 @@ class Recorder:
 
     def flush(self, batch):
         if self.disk_bytes >= self.settings.max_storage_gb * 1e9:
-            raise OSError("Storage budget exhausted; archive data before restarting")
+            raise StorageBudgetExceeded("Configured recording storage limit reached")
         ident = f"{now_ms()}-{uuid.uuid4().hex[:8]}"
         directory = self.store.root / "segments"
         directory.mkdir(exist_ok=True)
@@ -224,4 +228,9 @@ class Recorder:
                     last_flush = time.monotonic()
         except Exception as exc:
             self.healthy, self.reason = False, type(exc).__name__ + ": recorder write failed"
+            if isinstance(exc, StorageBudgetExceeded):
+                self.reason = (
+                    f"Recording storage limit reached ({self.settings.max_storage_gb:g} GB); "
+                    "increase FLOW_MAX_STORAGE_GB within available disk space or archive recordings, then restart"
+                )
             self.store.put("recorder_gap", {"at_ms": now_ms(), "reason": self.reason})

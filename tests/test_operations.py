@@ -67,6 +67,20 @@ async def test_recorder_keeps_up_with_bursts_without_losing_rows(settings):
     store.close()
 
 
+async def test_recording_storage_limit_reports_actionable_reason(settings):
+    store = Store(settings.data_dir)
+    rec = Recorder(store, settings)
+    rec.disk_bytes = settings.max_storage_gb * 1e9
+    rec.offer("test", "T", 100, {})
+    rec.running = False
+    await rec.run()
+    assert not rec.healthy
+    assert "FLOW_MAX_STORAGE_GB" in rec.reason
+    assert "storage limit reached" in store.get("recorder_gap")["reason"]
+    assert rec.written == 0
+    store.close()
+
+
 def test_pit_membership_and_facts(settings):
     store = Store(settings.data_dir)
     store.membership(100, "T", True, {})
