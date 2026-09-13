@@ -127,9 +127,26 @@ class Scanner:
                     h1 = await self.cached_candles(symbol, "60", now, 200)
                     m15 = await self.cached_candles(symbol, "15", now, 120)
                     self.context[symbol] = c | {"h4": h4, "h1": h1, "m15": m15, "asof": now}
+                    if self.settings.execution_window_seconds < 900:
+                        self.save_candidates(c["instrument"], h4, h1, m15, now)
                 except Exception:
                     self.context.pop(symbol, None)
             await asyncio.sleep(30)
+
+    def save_candidates(self, instrument, h4, h1, m15, evaluated):
+        plans = candidates(
+            instrument,
+            h4,
+            h1,
+            m15,
+            evaluated,
+            execution_window_ms=self.settings.execution_window_seconds * 1000,
+        )
+        for signal in plans:
+            old = self.store.db.execute("SELECT 1 FROM signals WHERE id=?", (signal.id,)).fetchone()
+            if not old and signal.expires_ms > evaluated:
+                self.store.signal(signal)
+        return plans
 
     def record_membership(self, evaluated_ms, symbol, eligible, payload):
         available = now_ms()
@@ -371,13 +388,7 @@ class Scanner:
                     )
                     point["normal_spread"] = normal_spread
                     self.record_membership(evaluated, inst.symbol, normal_spread["eligible"], point)
-                    plans = candidates(inst, h4, h1, m15, evaluated)
-                    for signal in plans:
-                        old = self.store.db.execute(
-                            "SELECT 1 FROM signals WHERE id=?", (signal.id,)
-                        ).fetchone()
-                        if not old and signal.expires_ms > evaluated:
-                            self.store.signal(signal)
+                    plans = self.save_candidates(inst, h4, h1, m15, evaluated)
                     priority = (30 if plans else 0) + 20 * f1["efficiency"] + 10 * f1["volume_expansion"]
                     ranked.append(
                         {
@@ -499,16 +510,24 @@ class Scanner:
                 continue
             if not c or not tape or not book:
                 continue
-            end = c["m15"][-1].end
-            start = end - 900_000
+            candle_end = c["m15"][-1].end
+            window_ms = s.evidence.get("execution_window_ms", 900_000)
+            end = s.evidence.get("execution_window_end_ms", candle_end) if window_ms < 900_000 else candle_end
+            if was_alerted and window_ms < 900_000:
+                # Monitor current coverage without ageing the published decision's frozen window.
+                end = now // 60_000 * 60_000
+            start = end - window_ms
             checks = {
                 "recorder unavailable": self.recorder.healthy,
                 "symbol feed unavailable or stale": connected,
                 "order book stale": book.fresh(now, self.settings.book_stale_ms),
-                "full closed 15-minute trade window not yet retained": 0 < tape.coverage_start <= start,
+                f"full closed {window_ms // 1000}-second trade window not yet retained": 0
+                < tape.coverage_start
+                <= start,
                 "latest trade stale": 0 <= now - tape.last_receipt <= self.settings.trade_stale_ms
                 and -1000 <= now - tape.last_event <= self.settings.trade_stale_ms,
-                "closed candle stale": 0 <= now - end <= 960_000,
+                "closed candle stale": 0 <= now - candle_end <= 960_000,
+                "execution window stale": 0 <= now - end <= (120_000 if window_ms < 900_000 else 960_000),
                 "market context stale": 0 <= now - c["asof"] <= self.settings.scan_seconds * 1000 + 60_000,
             }
             coverage_reasons = [reason for reason, passed in checks.items() if not passed]
@@ -548,7 +567,7 @@ class Scanner:
                 continue
             trades = tape.window(start, end)
             s.evidence["m15"] = candle_features(c["m15"], now)
-            s.trigger_expires_ms = end + 900_000
+            s.trigger_expires_ms = end + (120_000 if window_ms < 900_000 else 900_000)
             s.holding_deadline_ms = now + 14_400_000
             # Use only additions at/before window close to avoid confirmation leakage.
             window_book = Book()
@@ -565,7 +584,7 @@ class Scanner:
             if not flow_ok:
                 s.gates.append("executed order flow did not confirm family trigger")
             if now - end > 900_000:
-                s.gates.append("15-minute execution trigger expired")
+                s.gates.append("execution trigger expired")
             if end < s.evidence["trigger_bar_end"]:
                 s.gates.append("execution confirmation predates setup")
             if mid is None or not s.zone[0] <= mid <= s.zone[1]:

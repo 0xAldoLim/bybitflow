@@ -68,7 +68,9 @@ def embed(signal, dashboard_url):
         True,
     )
     field(
-        "TradingView classified volume · 15M" if s.source == "tradingview" else "Executed flow · 15M window",
+        "TradingView classified volume · 15M"
+        if s.source == "tradingview"
+        else f"Executed flow · {s.evidence.get('execution_window_ms', 900_000) // 1000}s window",
         f"Delta {f.get('delta_pct', 'N/A')}% · CVD {f.get('cvd', 'N/A')} base\n"
         f"Stack buy/sell {f.get('stacked_buy', 'N/A')}/{f.get('stacked_sell', 'N/A')} · "
         f"absorption L/S {f.get('absorption_long', 'N/A')}/{f.get('absorption_short', 'N/A')}\n"

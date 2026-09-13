@@ -24,3 +24,9 @@ def test_each_closed_execution_window_gets_its_own_candidate_id(instrument, monk
     assert a.id == repeat.id
     assert a.id != b.id
     assert a.version == b.version == "rules-0.2.0"
+    fast = candidates(*args, first, 3_660_100, families=("trend_pullback",), execution_window_ms=60_000)[0]
+    again = candidates(*args, first, 3_660_200, families=("trend_pullback",), execution_window_ms=60_000)[0]
+    later = candidates(*args, first, 3_720_100, families=("trend_pullback",), execution_window_ms=60_000)[0]
+    assert fast.id == again.id and fast.id != later.id
+    assert fast.evidence["execution_window_end_ms"] == 3_660_000
+    assert fast.version == "rules-0.3.0-flow-60s"

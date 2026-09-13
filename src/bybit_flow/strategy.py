@@ -9,7 +9,7 @@ from .models import Signal
 FAMILIES = ("liquidity_sweep", "trend_pullback", "range_rejection", "breakout_retest")
 
 
-def candidates(instrument, h4, h1, m15, asof, families=FAMILIES):
+def candidates(instrument, h4, h1, m15, asof, families=FAMILIES, execution_window_ms=900_000):
     f4, f1, f15 = [candle_features(b, asof) for b in (h4, h1, m15)]
     if f4["regime"] in {"high-volatility disorder", "uncertain"}:
         return []
@@ -65,13 +65,19 @@ def candidates(instrument, h4, h1, m15, asof, families=FAMILIES):
                     * instrument.tick
                 )
 
+            version = (
+                "rules-0.2.0"
+                if execution_window_ms == 900_000
+                else f"rules-0.3.0-flow-{execution_window_ms // 1000}s"
+            )
+            slot = m15[-1].end if execution_window_ms == 900_000 else asof // 60_000 * 60_000
             ident = hashlib.sha256(
-                f"{instrument.symbol}|{direction}|{family}|{last.end}|{m15[-1].end}|rules-0.2.0".encode()
+                f"{instrument.symbol}|{direction}|{family}|{last.end}|{slot}|{version}".encode()
             ).hexdigest()[:20]
             plans.append(
                 Signal(
                     id=ident,
-                    version="rules-0.2.0",
+                    version=version,
                     symbol=instrument.symbol,
                     direction=direction,
                     family=family,
@@ -92,6 +98,8 @@ def candidates(instrument, h4, h1, m15, asof, families=FAMILIES):
                         "h1": f1,
                         "m15": f15,
                         "trigger_bar_end": last.end,
+                        "execution_window_ms": execution_window_ms,
+                        "execution_window_end_ms": slot,
                         "target_method": "opposite range boundary"
                         if ranging
                         else "3R/4R measured projections",

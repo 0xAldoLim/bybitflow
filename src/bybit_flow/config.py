@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     data_dir: Path = Path("data")
     scan_enabled: bool = False
     scan_seconds: int = Field(900, ge=60)
+    execution_window_seconds: int = Field(900, ge=60, le=900)
     settle_coins: list[Literal["USDT", "USDC"]] = ["USDT"]
     core_watchlist: list[str] = ["BTCUSDT", "ETHUSDT"]
     deep_symbols: int = Field(8, ge=1, le=30)

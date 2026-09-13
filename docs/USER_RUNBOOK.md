@@ -26,6 +26,7 @@ settings without replacing their credentials.
 | `FLOW_ML_ENABLED=true` | Enable decision-time ML inference when a compatible model exists |
 | `FLOW_ML_FILTER_RESEARCH=false` | Keep ML acceptance from filtering research alerts |
 | `FLOW_DEEP_SYMBOLS` | Concurrent deep subscription capacity; default 8, maximum 30 |
+| `FLOW_EXECUTION_WINDOW_SECONDS` | Required complete executed-flow window; default 900, set 60 for minute-by-minute confirmation |
 
 `examples/ml-top30.env` provides non-secret settings for broader coverage.
 [Asset facts](ASSET_FACTS.md) describes the dated research pack and symbol selection.
@@ -57,7 +58,15 @@ A configured webhook or passing offline test does not establish external deliver
 
 Eligible contracts require sufficient history and turnover. Spread qualification
 requires at least 12 observed five-minute buckets and coverage checks. Execution
-confirmation requires a complete closed 15-minute trade window and a fresh book.
+confirmation requires a complete closed trade window and a fresh book. With
+`FLOW_EXECUTION_WINDOW_SECONDS=60`, the scanner evaluates a new immutable candidate
+each minute using the preceding complete minute of executed trades. The 4H/1H/15M
+price setup, required family-specific order-flow trigger, entry zone and risk gates
+still apply. Missing or interrupted flow cannot confirm a signal. A prior minute's
+failed confirmation does not prevent the next minute from qualifying. Fast decisions
+must be evaluated within two minutes of window close. Discord cooldowns still apply.
+This policy has a separate strategy version; incompatible ML models abstain until
+trained on that version. Lower latency does not establish predictive accuracy.
 The spread baseline additionally requires at least 12 valid five-minute samples
 and 80% observation coverage. Initial liquidity warm-up therefore takes about an
 hour; recent collection gaps can extend it. A healthy process alone does not
