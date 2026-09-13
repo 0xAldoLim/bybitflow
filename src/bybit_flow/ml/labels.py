@@ -168,6 +168,11 @@ def label_recordings(store, rows, settings, stage="decision", max_active=2000):
                     p.data_gaps.append("recording continuity lost")
         if source.startswith("ws/publicTrade."):
             source_symbol = (venue, symbol)
+            if retained_after and source_symbol not in last:
+                # Old subscription messages may have been pruned. Establish fresh
+                # observed coverage at the first retained print, never retroactively
+                # for a decision already activated above or across a later feed gap.
+                subscribed.add(source_symbol)
             if source_symbol in last and now - last[source_symbol] > settings.trade_stale_ms:
                 for s, p in active.values():
                     if (p.signal.source, p.signal.symbol) == source_symbol:

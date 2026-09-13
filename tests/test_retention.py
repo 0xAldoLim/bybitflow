@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from bybit_flow.ml.labels import label_recordings
 from bybit_flow.ml.recordings import worker_rows
 from bybit_flow.ml.store import FeatureStore
 from bybit_flow.retention import prune_recordings
@@ -64,4 +65,25 @@ def test_retention_rejects_paths_outside_segments(settings, tmp_path):
     with pytest.raises(ValueError, match="outside managed"):
         prune_recordings(store, cfg, now)
     assert outside.read_text() == "keep"
+    store.close()
+
+
+def test_labels_restart_observed_coverage_after_pruned_subscription(settings, signal):
+    store = Store(settings.data_dir)
+    store.put("recording_retention", dict(through_ms=1000))
+    FeatureStore(store).capture(signal, 2000, "decision")
+    rows = [
+        dict(
+            source="ws/publicTrade.TESTUSDT",
+            symbol="TESTUSDT",
+            event_ms=at,
+            receipt_ms=at,
+            complete=True,
+            payload=json.dumps({"data": [dict(T=at, p=str(price), v="1000", i=str(at), S="Buy")]}),
+        )
+        for at, price in ((1500, 100), (2500, 100), (5000, 116))
+    ]
+    result = label_recordings(store, rows, settings)
+    assert result["complete"] == 1
+    assert result["outcomes"][0]["data_gaps"] == []
     store.close()
