@@ -88,6 +88,18 @@ data without a model. See [ML research](ML_RESEARCH.md) for readiness and approv
 
 ## Stop, restart, and update
 
+### Recording retention
+
+`FLOW_RECORDING_RETENTION_ENABLED=true` enables raw-data cleanup in the ML worker
+after successful outcome processing. At 80% of `FLOW_MAX_STORAGE_GB`, it removes
+the oldest raw, normalized and sidecar segment files toward 60% usage. At least
+six recent hours are protected for active four-hour outcomes. The database,
+feature snapshots, labels, training datasets, models and segment hashes remain.
+Removed raw history cannot be replayed again; unlabelled decisions before the
+retention boundary are excluded rather than assigned invented outcomes. The
+worker must remain enabled. If protected history or preserved ML artifacts alone
+fill the budget, recording stops explicitly rather than deleting those records.
+
 Run commands from the repository directory.
 
 ```sh

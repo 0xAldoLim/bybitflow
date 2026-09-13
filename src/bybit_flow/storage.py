@@ -134,6 +134,7 @@ class Recorder:
         self.pending_bytes = 0
         self.running = True
         self.disk_bytes = sum(p.stat().st_size for p in store.root.rglob("*") if p.is_file())
+        self.retention_freed = store.get("recording_retention", {}).get("total_freed_bytes", 0)
 
     def offer(self, source, symbol, event_ms, payload, receipt_ms=None, complete=True):
         row = dict(
@@ -159,6 +160,9 @@ class Recorder:
             raise RuntimeError(self.reason) from None
 
     def flush(self, batch):
+        freed = self.store.get("recording_retention", {}).get("total_freed_bytes", 0)
+        self.disk_bytes = max(0, self.disk_bytes - max(0, freed - self.retention_freed))
+        self.retention_freed = freed
         if self.disk_bytes >= self.settings.max_storage_gb * 1e9:
             raise StorageBudgetExceeded("Configured recording storage limit reached")
         ident = f"{now_ms()}-{uuid.uuid4().hex[:8]}"

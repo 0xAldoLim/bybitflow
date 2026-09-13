@@ -43,6 +43,9 @@ def monitor(settings, store):
 
             asyncio.run(Notifier(settings, store).send_operational("drift", result["drift"]))
     store.put("ml_monitor", result)
+    from ..retention import prune_recordings
+
+    result["retention"] = prune_recordings(store, settings)
     return result
 
 

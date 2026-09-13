@@ -44,6 +44,7 @@ class Settings(BaseSettings):
     queue_byte_limit: int = Field(32_000_000, ge=1_000_000, le=128_000_000)
     tape_max_trades: int = Field(50_000, ge=1000, le=200_000)
     max_storage_gb: float = Field(10, gt=0.1)
+    recording_retention_enabled: bool = False
     raw_retention_days: int = Field(14, ge=1)
     rest_requests_per_second: float = Field(3, gt=0, le=10)
     research_alerts: bool = False

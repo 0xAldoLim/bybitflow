@@ -17,6 +17,8 @@ from ..storage import now_ms
 def worker_rows(store):
     # SQLite publication happens after gzip, parquet and manifest have closed.
     manifests = [json.loads(r[0]) for r in store.db.execute("SELECT payload FROM segments")]
+    retained_after = store.get("recording_retention", {}).get("through_ms", 0)
+    manifests = [m for m in manifests if m["max_receipt_ms"] > retained_after]
     spans = []
     for manifest in manifests:
         path = Path(manifest["raw"])

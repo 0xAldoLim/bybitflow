@@ -59,7 +59,10 @@ def label_chart(store, events_path, candles_path, settings, symbol):
 
 def label_recordings(store, rows, settings, stage="decision", max_active=2000):
     fs = FeatureStore(store)
-    pending = iter(fs.snapshots(stage))
+    retained_after = store.get("recording_retention", {}).get("through_ms", 0)
+    # Previously frozen labels stay available for learning. Unlabelled decisions
+    # before the retained boundary cannot be reconstructed from newer prints.
+    pending = (s for s in fs.snapshots(stage) if s["decision_ms"] > retained_after)
     next_snapshot = next(pending, None)
     active, results, subscribed, last, seen = {}, [], set(), {}, set()
     now, previous = 0, -1
