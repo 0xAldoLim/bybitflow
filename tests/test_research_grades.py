@@ -50,9 +50,11 @@ async def test_all_research_grades_send_without_claiming_validation(settings, si
     notifier = Notifier(cfg, store, httpx.MockTransport(handle))
     assert await notifier.send_research(signal) == "sent"
     card = payloads[0]["embeds"][0]
-    assert card["title"].startswith(f"{grade} RESEARCH · UNCALIBRATED")
+    assert card["title"].startswith("NEW SETUP")
+    assert f"{grade} · {points:.1f}/100" in card["description"]
+    assert "score is not win probability" in card["footer"]["text"]
     fields = {f["name"]: f["value"] for f in card["fields"]}
-    assert "Stop" in fields["Entry zone / invalidation"]
+    assert fields["Stop loss"] == f"{signal.stop:g}"
     assert "TP1" in fields["Targets"] and "TP2" in fields["Targets"]
     assert (await notifier.send_public(signal)).startswith("blocked")
     store.close()

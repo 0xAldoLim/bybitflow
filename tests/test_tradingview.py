@@ -195,7 +195,7 @@ def test_auth_http_queue_discord_invalidation_journal(cfg, instrument, monkeypat
         client.portal.call(client.app.state.gateway.process_one)
         signals = client.get("/api/overview").json()["signals"]
         assert signals[0]["state"] == "ALERTED" and len(delivered) == 1
-        assert "SSS RESEARCH · UNCALIBRATED" in delivered[0]["embeds"][0]["title"]
+        assert "SSS ·" in delivered[0]["embeds"][0]["description"]
         ident = signals[0]["id"]
         base = {k: v for k, v in payload().items() if k != "observation"}
         event = base | {"event": "invalidate", "event_id": "synthetic-invalidate-1", "price": 94}

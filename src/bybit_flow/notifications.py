@@ -12,131 +12,72 @@ def iso(ms):
 
 
 def embed(signal, dashboard_url):
-    s, f, d, r = signal, signal.evidence.get("flow", {}), signal.evidence.get("derivatives", {}), signal.risk
     from .scoring import tier
 
-    title_tier = (
-        s.final_tier
-        if s.final_tier.startswith("SSS RESEARCH") or s.validation_status == "validated"
-        else f"{tier(s.quality)} RESEARCH · UNCALIBRATED"
-    )
+    s = signal
+    terminal = s.state in {"INVALIDATED", "EXPIRED", "RESOLVED"}
+    status = {
+        "CONFIRMED": "NEW SETUP",
+        "ALERTED": "ACTIVE",
+        "EXPIRED": "ENTRY EXPIRED",
+        "INVALIDATED": "SETUP WITHDRAWN",
+        "RESOLVED": "CLOSED",
+    }.get(s.state, s.state)
     fields = []
 
     def field(name, value, inline=False):
-        remaining = 5000 - sum(len(f["name"]) + len(f["value"]) for f in fields) - len(name)
-        if remaining > 0:
-            fields.append(
-                {
-                    "name": name,
-                    "value": (str(value) or "Unavailable")[: min(850, remaining)],
-                    "inline": inline,
-                }
-            )
+        fields.append(dict(name=name, value=str(value)[:850], inline=inline))
 
-    field(
-        "Quality / probability",
-        f"{s.final_tier} · {s.quality:.1f}/100 (raw {s.raw_tier})\n"
-        + (
-            f"p {s.calibrated_probability:.1%} · cohort interval {s.probability_uncertainty}"
-            if s.validation_status == "validated" and s.calibrated_probability is not None
-            else "Uncalibrated"
-        ),
-        True,
-    )
-    if s.model_version:
-        field(
-            "ML evidence",
-            f"{s.model_version[:12]} · {s.validation_status}\n"
-            f"Research ML ranking {s.evidence.get('ml', {}).get('research_score', 'Unavailable')}/100 (unvalidated)\n"
-            f"Net EV {s.expected_net_r if s.expected_net_r is not None else 'Unavailable'}R · "
-            f"interval {s.expected_net_r_uncertainty or 'Unavailable'}\n"
-            f"n {s.qualification.get('samples', 'N/A')} · clusters {s.qualification.get('effective_samples', 'N/A')}\n"
-            f"{s.evidence.get('ml', {}).get('explanation', 'No qualified model evidence')}",
-        )
-    elif s.qualification.get("ml_reason"):
-        field("ML status", s.qualification["ml_reason"])
-    field("Setup / regime", f"{s.family}\n{s.regime}", True)
-    field("Entry zone / invalidation", f"{s.zone[0]:g} – {s.zone[1]:g}\nStop {s.stop:g}", True)
-    field(
-        "Targets", f"TP1 {s.tp1:g} · TP2 {s.tp2:g}\n{s.evidence.get('target_method', 'defined plan')}", True
-    )
-    field("Reward:risk", f"Gross {r.get('gross_rr', 0):.2f}R · net {r.get('net_rr', 0):.2f}R", True)
-    field(
-        "Hypothetical risk",
-        f"{100 * r.get('risk_fraction', 0.0025):.2f}% · qty {r.get('quantity') or 'equity not set'}\n"
-        f"Margin {r.get('estimated_margin') or 'N/A'} · leverage ceiling {r.get('illustrative_leverage', 3):g}×",
-        True,
-    )
-    field(
-        "TradingView classified volume · 15M"
-        if s.source == "tradingview"
-        else f"Executed flow · {s.evidence.get('execution_window_ms', 900_000) // 1000}s window",
-        f"Delta {f.get('delta_pct', 'N/A')}% · CVD {f.get('cvd', 'N/A')} base\n"
-        f"Stack buy/sell {f.get('stacked_buy', 'N/A')}/{f.get('stacked_sell', 'N/A')} · "
-        f"absorption L/S {f.get('absorption_long', 'N/A')}/{f.get('absorption_short', 'N/A')}\n"
-        f"Window PoC {f.get('poc', 'N/A')} · VA {f.get('val', 'N/A')} – {f.get('vah', 'N/A')}",
-    )
-    smc = s.evidence.get("h1", {})
-    field(
-        "Structure",
-        f"Sweep L/S {smc.get('sweep_long')}/{smc.get('sweep_short')} · BOS {smc.get('bos')} · "
-        f"CHoCH {smc.get('choch')}\nLiquidity {smc.get('low')} / {smc.get('high')} · "
-        f"FVG {len(smc.get('fvg', []))} · order blocks {len(smc.get('order_blocks', []))}",
-    )
-    field(
-        "Derivatives",
-        f"OI change {d.get('oi_change_pct', 'N/A')}% · funding {d.get('funding_rate', 'N/A')}\n"
-        f"Liquidations: {d.get('liquidations') if d.get('liquidations') is not None else 'Unavailable'}\n"
-        f"{d.get('liquidation_feed', 'Venue semantics in details')}",
-    )
-    cross = s.evidence.get("cross_exchange", {})
-    cross_summary = (
-        f"Venues {', '.join(cross.get('exchanges', []))} · delta agreement {cross.get('delta_agreement')} · "
-        f"dislocation {cross.get('price_dislocation_bps')} bps (informational, zero predictive weight)"
-        if cross.get("available")
-        else "Cross-venue evidence unavailable"
-    )
-    field(
-        "Cross-market / fundamentals",
-        f"BTC/ETH: {s.evidence.get('cross_market', 'Unavailable')}\n"
-        f"{cross_summary} · {len(s.evidence.get('fundamentals', []))} source-attributed asset facts",
-    )
-    field("Data / why / invalidation", f"{s.coverage}\n{s.reason}\n{s.invalidation}")
-    if s.source != "tradingview":
-        field(
-            "Potential trapped participants · heuristic",
-            f"Buyers: {f.get('potential_trapped_buyers', 'Unavailable')} · sellers: {f.get('potential_trapped_sellers', 'Unavailable')}\nPublic prints do not reveal actual inventory.",
-        )
-    if s.source == "tradingview":
-        field(
-            "Potential trapped participants · heuristic",
-            s.evidence.get("trapped_participants", "Unavailable"),
-        )
-        field("Research limitations", s.risk.get("warning", "Uncalibrated; no profitability claim"))
-        native = s.evidence.get("optional_native", {})
-        if native.get("available"):
-            nf, nd = native.get("flow", {}), native.get("derivatives", {})
-            field(
-                "Optional actual Bybit evidence",
-                f"Executed delta {nf.get('delta_pct')}% · CVD {nf.get('cvd')}\n"
-                f"Absorption L/S {nf.get('absorption_long')}/{nf.get('absorption_short')}\n"
-                f"OI change {nd.get('oi_change_pct', 'N/A')}% · funding {nd.get('funding_rate', 'N/A')}\n"
-                f"Actual liquidation events: {len(native.get('liquidations', []))}",
+    if terminal:
+        reason = (
+            s.invalidation
+            if s.state == "INVALIDATED"
+            else (
+                "The entry window has ended."
+                if s.state == "EXPIRED"
+                else "Tracking has ended; see the recorded outcome."
             )
-    if s.gates:
-        field("Rejections", "; ".join(s.gates))
+        )
+        if s.state == "INVALIDATED" and s.coverage.get("reasons"):
+            reason += " · " + "; ".join(s.coverage["reasons"])
+        field("Update", reason)
+        field("Original plan", f"Entry {s.entry:g} · SL {s.stop:g} · TP1 {s.tp1:g} · TP2 {s.tp2:g}")
+    else:
+        field("Entry", f"{s.entry:g}\nZone {s.zone[0]:g}–{s.zone[1]:g}", True)
+        field("Stop loss", f"{s.stop:g}", True)
+        field("Targets", f"TP1 {s.tp1:g}\nTP2 {s.tp2:g}", True)
+        deadline = min(s.expires_ms, s.trigger_expires_ms or s.expires_ms)
+        timing = f"Entry valid until <t:{deadline // 1000}:t> · expires <t:{deadline // 1000}:R>"
+        if s.holding_deadline_ms:
+            timing += f"\nTracking ends <t:{s.holding_deadline_ms // 1000}:t> at the latest"
+        field("Timing", timing)
+        flow = s.evidence.get("flow", {})
+        summary = s.family.replace("_", " ").capitalize()
+        if s.source == "tradingview":
+            summary += " · chart-volume confirmation (not executed order flow)"
+        elif flow.get("available"):
+            seconds = s.evidence.get("execution_window_ms", 900_000) // 1000
+            delta = flow.get("delta_pct")
+            summary += f" · {seconds}s executed-flow confirmation"
+            if delta is not None:
+                summary += f" · delta {delta:+.1f}%"
+        if s.risk.get("net_rr") is not None:
+            summary += f"\nNet reward:risk {s.risk['net_rr']:.2f}R to TP1"
+        field("Setup", summary)
+
     return {
         "allowed_mentions": {"parse": []},
         "embeds": [
             {
-                "title": f"{title_tier} · {s.symbol} · {s.direction}",
-                "description": f"Linear perpetual · source {s.source} · 4H / 1H / 15M · UTC · {s.state}",
+                "title": f"{status} · {s.symbol} {s.direction}",
+                "description": f"**INTRADAY · up to 4 hours**\n{tier(s.quality)} · {s.quality:.1f}/100 quality · {s.source.capitalize()}"
+                + ("\nUpdate only · no new entry" if terminal else ""),
                 "url": f"{dashboard_url.rstrip('/')}/#signal/{s.id}",
-                "color": 0x4CC9A4 if s.direction == "LONG" else 0xEF7F86,
-                "timestamp": iso(s.created_ms),
+                "color": 0x8B949E if terminal else (0x4CC9A4 if s.direction == "LONG" else 0xEF7F86),
+                "timestamp": iso(now_ms() if terminal else s.created_ms),
                 "fields": fields,
                 "footer": {
-                    "text": f"{s.id} · {s.version} · expires {iso(s.expires_ms)} · alerts only; no execution"
+                    "text": f"Research · score is not win probability · no automatic execution · {s.id}"
                 },
             }
         ],

@@ -229,7 +229,7 @@ async def test_tv_to_ml_snapshot_discord_invalidation_and_journal(settings, inst
     snapshot = next(FeatureStore(store).snapshots())
     assert snapshot["values"]["tv_buy_volume"] == 700
     assert snapshot["values"]["buy_base"] is None
-    assert "SSS RESEARCH" in cards[0]["embeds"][0]["title"]
+    assert "SSS ·" in cards[0]["embeds"][0]["description"]
     clock[0] += 30_000
     invalidation = event.model_copy(
         update={

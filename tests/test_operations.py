@@ -131,7 +131,7 @@ async def test_discord_deduplicates_and_omits_mentions(settings, signal):
     assert len(calls) == 1
     payload = json.loads(calls[0].content)
     assert payload["allowed_mentions"] == {"parse": []}
-    assert "Uncalibrated" in json.dumps(payload)
+    assert "score is not win probability" in json.dumps(payload)
     assert (await n.send_public(signal)).startswith("blocked")
     store.close()
 

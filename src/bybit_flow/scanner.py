@@ -251,6 +251,7 @@ class Scanner:
         async with self.scan_lock:
             await self.select_source()
             self.status.update(state="scanning", started_ms=now_ms())
+            self.status.pop("error_type", None)
             body = await self.api.get("time")
             asof = int(body["time"])
             if abs(asof - now_ms()) > 2000:
@@ -494,6 +495,7 @@ class Scanner:
                 s.invalidation = "Primary exchange changed; source continuity cannot be transferred"
             elif mid and (mid <= s.stop if s.direction == "LONG" else mid >= s.stop):
                 s.state = "INVALIDATED"
+                s.invalidation = "Observed price crossed the planned stop level; no account fill is verified"
             elif was_alerted and (
                 not c
                 or not book
@@ -553,7 +555,14 @@ class Scanner:
                 )["eligible"]
                 if not healthy or not supportive or not spread_ok or any(f["major_event"] for f in facts):
                     s.state = "INVALIDATED"
-                    s.invalidation = "Required coverage, supportive regime or known-event assumptions lost"
+                    if not healthy:
+                        s.invalidation = "Live evidence unavailable; setup withdrawn. This does not establish a stop-loss hit"
+                    elif not supportive:
+                        s.invalidation = "Higher-timeframe market regime no longer supports the setup"
+                    elif not spread_ok:
+                        s.invalidation = "Observed spread no longer meets the liquidity requirement"
+                    else:
+                        s.invalidation = "A known major asset event invalidated the setup assumptions"
                     self.store.signal(s)
                     await self.notifier.send_research(s, update=True)
                 continue
