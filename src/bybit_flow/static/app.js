@@ -49,7 +49,7 @@ function signalTable(rows) {
           `<a href="#signal/${encodeURIComponent(s.id)}">${escape(s.symbol)} <span class="${s.direction === "LONG" ? "green" : "red"}">${escape(s.direction)}</span></a>`,
           escape(s.family),
           `${number(s.quality, 1)} <span class="tag">${escape(s.final_tier)}</span>`,
-          escape(s.state),
+          escape(s.state === "ALERTED" && s.coverage?.monitoring === "paused" ? "MONITORING PAUSED" : s.state),
           utc(s.created_ms),
         ]),
       )

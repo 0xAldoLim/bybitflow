@@ -91,6 +91,16 @@ class Store:
             for r in self.db.execute("SELECT payload FROM signals ORDER BY created_ms DESC LIMIT ?", (limit,))
         ]
 
+    def active_signals(self, limit=2000):
+        return [
+            json.loads(r[0])
+            for r in self.db.execute(
+                "SELECT payload FROM signals WHERE state NOT IN ('INVALIDATED','EXPIRED','RESOLVED') "
+                "ORDER BY CASE WHEN state='ALERTED' THEN 0 ELSE 1 END, created_ms DESC LIMIT ?",
+                (limit,),
+            )
+        ]
+
     def rows(self, table, limit=200):
         if table not in {"journal", "experiments", "segments", "facts"}:
             raise ValueError("Unknown table")

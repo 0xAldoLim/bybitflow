@@ -494,15 +494,92 @@ class Scanner:
             self.store.put("scanner", self.status)
             return self.status
 
+    async def monitor_alerted(self, s, now):
+        previous = dict(s.coverage)
+        same_source = s.source == self.exchange
+        book = self.streams.books.get(s.symbol) if same_source else None
+        tape = self.streams.tapes.get(s.symbol) if same_source else None
+        context = self.context.get(s.symbol) if same_source else None
+        fresh_book = bool(book and book.fresh(now, self.settings.book_stale_ms))
+        fresh_tape = bool(
+            tape
+            and 0 <= now - tape.last_receipt <= self.settings.trade_stale_ms
+            and -1000 <= now - tape.last_event <= self.settings.trade_stale_ms
+        )
+        context_fresh = bool(
+            context and 0 <= now - context["asof"] <= self.settings.scan_seconds * 1000 + 60_000
+        )
+        reasons = []
+        if not same_source:
+            reasons.append("Original exchange feed unavailable")
+        if not fresh_book or not fresh_tape:
+            reasons.append("Live prices unavailable or stale")
+        if not context_fresh:
+            reasons.append("Market context unavailable or stale")
+        if not self.recorder.healthy:
+            reasons.append("Recording unavailable")
+        s.coverage = previous | dict(
+            checked_ms=now,
+            monitoring="paused" if reasons else "active",
+            monitoring_reasons=reasons,
+            monitoring_event=None,
+        )
+        if now >= (s.holding_deadline_ms or s.expires_ms):
+            s.state = "EXPIRED"
+            s.coverage["monitoring_event"] = "ended"
+            s.invalidation = "Tracking period ended; no account outcome is inferred"
+        elif (
+            fresh_book
+            and self.recorder.healthy
+            and (
+                float(max(book.bids)) <= s.stop
+                if s.direction == "LONG"
+                else float(min(book.asks)) >= s.stop
+            )
+        ):
+            s.state = "INVALIDATED"
+            s.invalidation = "Fresh observed price crossed the planned stop; no account fill is verified"
+        elif reasons:
+            since = previous.get("pause_since_ms") or now
+            s.coverage["pause_since_ms"] = since
+            if now - since >= 60_000 and not previous.get("pause_notice_sent"):
+                s.coverage["monitoring_event"] = "paused"
+                result = await self.notifier.send_research(s, update=True)
+                s.coverage["pause_notice_sent"] = result in {"sent", "already-attempted"}
+            self.store.signal(s, "Monitoring paused; setup outcome unknown")
+            return
+        else:
+            facts = facts_asof(self.store, context["instrument"].base, now)
+            regime = candle_features(context["h4"], now)["regime"]
+            supportive = regime in {"range", "trending up" if s.direction == "LONG" else "trending down"}
+            if not supportive or any(f["major_event"] for f in facts):
+                s.state = "INVALIDATED"
+                s.invalidation = (
+                    "Higher-timeframe market regime no longer supports the setup"
+                    if not supportive
+                    else "A known major asset event invalidated the setup"
+                )
+            elif previous.get("pause_since_ms"):
+                s.coverage["monitoring_event"] = "resumed" if previous.get("pause_notice_sent") else None
+                if s.coverage["monitoring_event"]:
+                    await self.notifier.send_research(s, update=True)
+                s.coverage.pop("pause_since_ms", None)
+                s.coverage.pop("pause_notice_sent", None)
+        self.store.signal(s, s.invalidation if s.state in TERMINAL else "Monitoring active")
+        if s.state in TERMINAL:
+            await self.notifier.send_research(s, update=True)
+
     async def evaluate(self):
         now = now_ms()
-        for payload in self.store.signals(2000):
+        for payload in self.store.active_signals():
             s = Signal.model_validate(payload)
             if s.source == "tradingview":
                 continue  # TradingView has its own source freshness and lifecycle worker.
             if s.state in TERMINAL:
                 continue
-            was_alerted = s.state == "ALERTED"
+            if s.state == "ALERTED":
+                await self.monitor_alerted(s, now)
+                continue
             c = self.context.get(s.symbol)
             book, tape = self.streams.books.get(s.symbol), self.streams.tapes.get(s.symbol)
             connected = (
@@ -514,8 +591,7 @@ class Scanner:
             if now >= s.expires_ms:
                 s.state = "EXPIRED"
             elif (
-                not was_alerted
-                and s.evidence.get("execution_window_ms", 900_000) < 900_000
+                s.evidence.get("execution_window_ms", 900_000) < 900_000
                 and now > s.evidence.get("execution_window_end_ms", now) + 120_000
             ):
                 s.state = "EXPIRED"
@@ -525,28 +601,14 @@ class Scanner:
             elif mid and (mid <= s.stop if s.direction == "LONG" else mid >= s.stop):
                 s.state = "INVALIDATED"
                 s.invalidation = "Observed price crossed the planned stop level; no account fill is verified"
-            elif was_alerted and (
-                not c
-                or not book
-                or not book.fresh(now, self.settings.book_stale_ms)
-                or not self.recorder.healthy
-                or not connected
-            ):
-                s.state = "INVALIDATED"
-                s.invalidation = "Required live feed lost; the published setup is no longer supported"
             if s.state in TERMINAL:
                 self.store.signal(s, s.invalidation if s.state == "INVALIDATED" else "entry window expired")
-                if was_alerted:
-                    await self.notifier.send_research(s, update=True)
                 continue
             if not c or not tape or not book:
                 continue
             candle_end = c["m15"][-1].end
             window_ms = s.evidence.get("execution_window_ms", 900_000)
             end = s.evidence.get("execution_window_end_ms", candle_end) if window_ms < 900_000 else candle_end
-            if was_alerted and window_ms < 900_000:
-                # Monitor current coverage without ageing the published decision's frozen window.
-                end = now // 60_000 * 60_000
             start = end - window_ms
             checks = {
                 "recorder unavailable": self.recorder.healthy,
@@ -575,26 +637,6 @@ class Scanner:
                 retained_from_ms=tape.coverage_start,
                 reasons=coverage_reasons,
             )
-            if was_alerted:
-                facts = facts_asof(self.store, c["instrument"].base, now)
-                regime = candle_features(c["h4"], now)["regime"]
-                supportive = regime in {"range", "trending up" if s.direction == "LONG" else "trending down"}
-                spread_ok = self.spread_history(s.symbol).assess(
-                    now, self.settings.max_spread_bps, self.settings.spread_min_samples
-                )["eligible"]
-                if not healthy or not supportive or not spread_ok or any(f["major_event"] for f in facts):
-                    s.state = "INVALIDATED"
-                    if not healthy:
-                        s.invalidation = "Live evidence unavailable; setup withdrawn. This does not establish a stop-loss hit"
-                    elif not supportive:
-                        s.invalidation = "Higher-timeframe market regime no longer supports the setup"
-                    elif not spread_ok:
-                        s.invalidation = "Observed spread no longer meets the liquidity requirement"
-                    else:
-                        s.invalidation = "A known major asset event invalidated the setup assumptions"
-                    self.store.signal(s)
-                    await self.notifier.send_research(s, update=True)
-                continue
             # One immutable first-covered execution decision per setup ID. Re-evaluating
             # changed flow against yesterday's frozen ML vector would corrupt meta-labels.
             if s.evidence.get("score_components"):

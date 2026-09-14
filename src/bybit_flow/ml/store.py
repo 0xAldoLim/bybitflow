@@ -40,6 +40,12 @@ def migrate(db):
       PRIMARY KEY(snapshot_id,model_id));
     INSERT OR IGNORE INTO schema_version VALUES(3);
     INSERT OR IGNORE INTO schema_version VALUES(4);
+    CREATE INDEX IF NOT EXISTS ml_snapshot_identity
+      ON ml_snapshots(signal_id,stage,schema_version);
+    CREATE INDEX IF NOT EXISTS ml_sequence_lookup ON ml_snapshots(
+      json_extract(payload,'$.source'), json_extract(payload,'$.signal.symbol'),
+      json_extract(payload,'$.signal.family'), json_extract(payload,'$.signal.direction'), decision_ms DESC
+    ) WHERE stage='decision';
     """)
     db.commit()
 

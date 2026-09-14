@@ -203,3 +203,9 @@ For the one-minute signal configuration, set `FLOW_SPREAD_BUCKET_SECONDS=60` and
 Order-flow confirmation still uses a fully observed closed minute. Setups whose confirmation window has expired are marked expired, while new minutes create independent decisions. ML training and research scores do not bypass flow, entry, spread, or risk requirements.
 
 Selected live feeds continue generating fresh minute candidates after older candidates expire. Transient refresh errors retain the last observed context for retry; existing candle and context-age checks prevent stale data from qualifying. Refresh activity and errors are recorded under `refresh_health` for diagnostics.
+
+### Feed interruptions after a signal
+
+A temporary feed interruption pauses monitoring; it does not establish a stop-loss hit or invalidate the price setup. The dashboard shows **MONITORING PAUSED** immediately. An interruption lasting at least one minute produces one Discord pause notice, followed by a recovery notice when fresh data returns. These updates are not new entry signals. Prices during a gap remain unverified, and new signals still require complete order-flow evidence.
+
+Published setups are monitored until their holding deadline, independently of the shorter entry window. Fresh observed stop crossings, a changed market regime, or a known major asset event can invalidate a setup. At the holding deadline, **TRACKING ENDED** reports the end of monitoring without claiming an account result. Previously withdrawn messages are historical records and are not reactivated.

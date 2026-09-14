@@ -15,6 +15,8 @@ def embed(signal, dashboard_url):
     from .scoring import tier
 
     s = signal
+    monitoring_event = s.coverage.get("monitoring_event")
+    monitoring_update = monitoring_event in {"paused", "resumed", "ended"}
     terminal = s.state in {"INVALIDATED", "EXPIRED", "RESOLVED"}
     status = {
         "CONFIRMED": "NEW SETUP",
@@ -23,12 +25,26 @@ def embed(signal, dashboard_url):
         "INVALIDATED": "SETUP WITHDRAWN",
         "RESOLVED": "CLOSED",
     }.get(s.state, s.state)
+    if monitoring_update:
+        status = {"paused": "MONITORING PAUSED", "resumed": "MONITORING RESUMED", "ended": "TRACKING ENDED"}[
+            monitoring_event
+        ]
     fields = []
 
     def field(name, value, inline=False):
         fields.append(dict(name=name, value=str(value)[:850], inline=inline))
 
-    if terminal:
+    if monitoring_update:
+        field(
+            "Update",
+            {
+                "paused": "Live data interrupted. Monitoring is paused; this is not a stop-loss hit or setup invalidation. Do not open a new entry while data is unavailable.",
+                "resumed": "Live data is available again. Monitoring resumed; prices during the gap are unverified. This is not a new entry signal.",
+                "ended": "The tracking period has ended. This does not establish a profit, loss, or account fill.",
+            }[monitoring_event],
+        )
+        field("Original plan", f"Entry {s.entry:g} · SL {s.stop:g} · TP1 {s.tp1:g} · TP2 {s.tp2:g}")
+    elif terminal:
         reason = (
             s.invalidation
             if s.state == "INVALIDATED"
@@ -71,10 +87,12 @@ def embed(signal, dashboard_url):
             {
                 "title": f"{status} · {s.symbol} {s.direction}",
                 "description": f"**INTRADAY · up to 4 hours**\n{tier(s.quality)} · {s.quality:.1f}/100 quality · {s.source.capitalize()}"
-                + ("\nUpdate only · no new entry" if terminal else ""),
+                + ("\nUpdate only · no new entry" if terminal or monitoring_update else ""),
                 "url": f"{dashboard_url.rstrip('/')}/#signal/{s.id}",
-                "color": 0x8B949E if terminal else (0x4CC9A4 if s.direction == "LONG" else 0xEF7F86),
-                "timestamp": iso(now_ms() if terminal else s.created_ms),
+                "color": 0x8B949E
+                if terminal or monitoring_update
+                else (0x4CC9A4 if s.direction == "LONG" else 0xEF7F86),
+                "timestamp": iso(now_ms() if terminal or monitoring_update else s.created_ms),
                 "fields": fields,
                 "footer": {
                     "text": f"Research · score is not win probability · no automatic execution · {s.id}"
@@ -103,6 +121,8 @@ class Notifier:
         if u.scheme != "https" or u.hostname != "discord.com" or not u.path.startswith("/api/webhooks/"):
             raise ValueError("Expected official Discord HTTPS webhook")
         key = f"research:{signal.id}:{signal.state if update else 'initial'}"
+        if update and signal.coverage.get("monitoring_event"):
+            key = f"research:{signal.id}:monitoring:{signal.coverage['monitoring_event']}:{signal.coverage.get('pause_since_ms', 0)}"
         if self.store.db.execute("SELECT 1 FROM outbox WHERE key=?", (key,)).fetchone():
             return "already-attempted"
         if not update:
