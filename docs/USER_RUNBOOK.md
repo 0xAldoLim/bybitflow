@@ -1,5 +1,8 @@
 # Operator guide
 
+For everyday Windows start/stop commands, begin with the [README](../README.md).
+This guide covers configuration and recovery in more detail.
+
 ## Requirements
 
 - Docker Desktop on Windows, or Docker Engine with Compose on Linux.
@@ -24,6 +27,7 @@ settings without replacing their credentials.
 | `FLOW_SCAN_ENABLED=true` | Enable public-data collection and scanning |
 | `FLOW_MARKET_SOURCE=auto` | Probe Binance, Bybit, then OKX and retain a working primary |
 | `FLOW_ML_ENABLED=true` | Enable decision-time ML inference when a compatible model exists |
+| `FLOW_ML_TWO_STAGE=true` | Collect LSTM sequences and compare the two-stage research models |
 | `FLOW_ML_FILTER_RESEARCH=false` | Keep ML acceptance from filtering research alerts |
 | `FLOW_DEEP_SYMBOLS` | Concurrent deep subscription capacity; default 8, maximum 30 |
 | `FLOW_EXECUTION_WINDOW_SECONDS` | Required complete executed-flow window; default 900, set 60 for minute-by-minute confirmation |
@@ -82,13 +86,12 @@ Cards include direction, setup, quality, entry zone, stop, TP1, TP2, and risk
 information. Grades do not override confirmation or freshness checks. A quiet
 channel can indicate warmup, unavailable data, or no qualifying setup.
 
-The model worker monitors labels every 15 minutes, retries unsuccessful training
-daily, and runs successful challenger cycles weekly. A new installation can collect
+The model worker monitors labels every 15 minutes. Two-stage mode checks training
+readiness every 15 minutes; the original tabular mode retries daily. Successful
+research-model cycles run weekly. A new installation can collect
 data without a model. See [ML research](ML_RESEARCH.md) for readiness and approval.
 
-## Stop, restart, and update
-
-### Recording retention
+## Recording retention
 
 `FLOW_RECORDING_RETENTION_ENABLED=true` enables raw-data cleanup in the ML worker
 after successful outcome processing. At 80% of `FLOW_MAX_STORAGE_GB`, it removes
@@ -100,16 +103,24 @@ retention boundary are excluded rather than assigned invented outcomes. The
 worker must remain enabled. If protected history or preserved ML artifacts alone
 fill the budget, recording stops explicitly rather than deleting those records.
 
-Run commands from the repository directory.
+## Stop, restart, and update
 
-```sh
-# Stop both services; preserve data.
+In Windows CMD, first enter the repository directory:
+
+```bat
+cd /d "%USERPROFILE%\Documents\Codex\bybitflow"
+```
+
+Use these commands for everyday operation:
+
+```bat
+REM Stop both services; preserve data.
 docker compose --profile ml stop
 
-# Resume.
+REM Resume.
 docker compose --profile ml up -d
 
-# Inspect recent logs.
+REM Inspect recent logs.
 docker compose --profile ml logs --tail 100
 ```
 

@@ -101,3 +101,32 @@ automatically imported into training.
 
 Datasets, recordings, models, audit files, and failed experiments belong in persistent
 research storage, outside Git. See [operations](OPERATIONS.md) for backup and restore.
+
+## Two-stage outcome models
+
+Set `FLOW_ML_ENABLED=true` and `FLOW_ML_TWO_STAGE=true` to collect causal sequences
+and run the two-stage research pipeline. Stage one uses LightGBM, Random Forest
+and a CPU LSTM. Stage two compares Logistic Regression, an RBF SVM, and Random
+Forest probabilities. The SVM uses separate chronological probability calibration.
+LightGBM is the selected boosting implementation; XGBoost is not installed.
+
+Each LSTM input has 16 timestamped observations from the same venue, symbol,
+direction and setup family within two hours. Missing history is not padded with
+invented observations. Existing snapshots and labels remain immutable and available
+to the original tabular models. Only sequence-complete outcomes enter two-stage
+training. Base-model labels must be available at least four hours before the meta
+training period. Independent calibration, validation and untouched holdout periods
+follow. At least 500 usable sequence outcomes are needed overall, with additional
+partition and class requirements; this is a software minimum, not proof of edge.
+
+The worker checks training readiness every 15 minutes until a challenger exists.
+Successful cycles remain weekly. LSTM training is confined to the CPU worker; live
+inference reads JSON weights using NumPy, without loading PyTorch or pickle files.
+`FLOW_ML_FILTER_RESEARCH=false` keeps incomplete or abstaining models from blocking
+otherwise confirmed research signals. Model rankings are not validated win rates;
+there is no automatic promotion. The 10 GB recording budget and retention policy
+remain independent of model choice.
+
+Implementation references: [PyTorch LSTM](https://docs.pytorch.org/docs/2.14/generated/torch.nn.LSTM.html),
+[scikit-learn SVC](https://scikit-learn.org/stable/modules/generated/sklearn.svm.SVC.html),
+and [Random Forest probabilities](https://scikit-learn.org/stable/modules/generated/sklearn.ensemble.RandomForestClassifier.html).

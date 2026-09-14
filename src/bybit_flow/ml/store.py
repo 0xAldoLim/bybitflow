@@ -63,6 +63,23 @@ class FeatureStore:
             if details.get("exchange", "bybit") != signal.source:
                 membership = None  # Another venue's current liquidity is not this candidate's history.
         row = snapshot(signal, at_ms, stage, membership)
+        if stage == "decision":
+            from .stacking import SEQUENCE_KEYS
+
+            history = self.db.execute(
+                "SELECT payload FROM ml_snapshots WHERE stage='decision' AND decision_ms<? "
+                "AND decision_ms>=? AND json_extract(payload,'$.source')=? "
+                "AND json_extract(payload,'$.signal.symbol')=? "
+                "AND json_extract(payload,'$.signal.family')=? "
+                "AND json_extract(payload,'$.signal.direction')=? "
+                "ORDER BY decision_ms DESC LIMIT 15",
+                (at_ms, at_ms - 7_200_000, signal.source, signal.symbol, signal.family, signal.direction),
+            ).fetchall()
+            prior = [json.loads(r[0]) for r in reversed(history)]
+            row["sequence"] = [
+                dict(at_ms=r["decision_ms"], values={k: r["values"].get(k) for k in SEQUENCE_KEYS})
+                for r in prior + [row]
+            ]
         ident = digest(row)
         with self.db:
             self.db.execute(

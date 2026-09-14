@@ -19,6 +19,10 @@ def records(rows, excluded=()):
 
 
 def fit(rows, kind="logistic", excluded=(), seed=7):
+    if kind.startswith("two_stage_"):
+        from .stacking import fit_stack
+
+        return fit_stack(rows, kind.removeprefix("two_stage_"), excluded, seed), None
     from sklearn.feature_extraction import DictVectorizer
     from sklearn.impute import SimpleImputer
     from sklearn.linear_model import LogisticRegression
@@ -30,6 +34,17 @@ def fit(rows, kind="logistic", excluded=(), seed=7):
         raise ValueError("Need at least 50 complete training labels and both classes")
     if kind == "logistic":
         estimator = LogisticRegression(C=0.1, max_iter=2000, random_state=seed)
+    elif kind == "random_forest":
+        from sklearn.ensemble import RandomForestClassifier
+
+        estimator = RandomForestClassifier(
+            n_estimators=80, max_depth=4, min_samples_leaf=15, n_jobs=1, random_state=seed
+        )
+    elif kind == "svm":
+        from sklearn.svm import SVC
+
+        # External chronological calibration replaces SVC's internal random CV.
+        estimator = SVC(C=0.5, kernel="rbf", probability=False, max_iter=10000, random_state=seed)
     elif kind in {"lightgbm", "lightgbm_r"}:
         from lightgbm import LGBMClassifier, LGBMRegressor
 
@@ -78,6 +93,26 @@ def fit(rows, kind="logistic", excluded=(), seed=7):
     if kind == "logistic":
         artifact.update(coef=model.coef_[0].tolist(), intercept=float(model.intercept_[0]))
         importance = np.abs(model.coef_[0]).tolist()
+    elif kind == "svm":
+        artifact.update(
+            support=model.support_vectors_.tolist(),
+            dual=model.dual_coef_[0].tolist(),
+            intercept=float(model.intercept_[0]),
+            gamma=float(model._gamma),
+        )
+        importance = np.zeros(len(artifact["transformed_names"])).tolist()
+    elif kind == "random_forest":
+        artifact["forest"] = [
+            dict(
+                left=t.tree_.children_left.tolist(),
+                right=t.tree_.children_right.tolist(),
+                feature=t.tree_.feature.tolist(),
+                threshold=t.tree_.threshold.tolist(),
+                probability=(t.tree_.value[:, 0, 1] / t.tree_.value[:, 0].sum(axis=1)).tolist(),
+            )
+            for t in model.estimators_
+        ]
+        importance = model.feature_importances_.tolist()
     else:
         # LightGBM's documented JSON tree dump, evaluated without loading executable Python objects.
         artifact["trees"] = model.booster_.dump_model()["tree_info"]
@@ -120,9 +155,46 @@ def tree_value(tree, row):
 
 
 def margins(artifact, rows):
+    if artifact["kind"].startswith("two_stage_"):
+        from .stacking import meta_rows
+
+        return margins(artifact["meta_model"], meta_rows(artifact, rows))
     x = transform(artifact, rows)
     if artifact["kind"] == "logistic":
         return x @ np.array(artifact["coef"]) + artifact["intercept"]
+    if artifact["kind"] == "svm":
+        support = np.asarray(artifact["support"])
+        if len(support) > 10000:
+            raise ValueError("Oversized SVM")
+        return np.array(
+            [
+                np.exp(-artifact["gamma"] * np.sum((support - r) ** 2, axis=1)) @ np.asarray(artifact["dual"])
+                + artifact["intercept"]
+                for r in x
+            ]
+        )
+    if artifact["kind"] == "random_forest":
+        if len(artifact["forest"]) > 100:
+            raise ValueError("Oversized forest")
+        probabilities = []
+        for row in x.astype(np.float32):
+            values = []
+            for tree in artifact["forest"]:
+                node = 0
+                for _ in range(8):
+                    if tree["left"][node] == -1:
+                        values.append(tree["probability"][node])
+                        break
+                    node = (
+                        tree["left"][node]
+                        if row[tree["feature"][node]] <= tree["threshold"][node]
+                        else tree["right"][node]
+                    )
+                else:
+                    raise ValueError("Oversized forest depth")
+            probabilities.append(np.mean(values))
+        p = np.clip(probabilities, 1e-12, 1 - 1e-12)
+        return np.log(p / (1 - p))
     if artifact["kind"] not in {"lightgbm", "lightgbm_r"} or len(artifact["trees"]) > 100:
         raise ValueError("Unsupported or oversized model")
     return np.array([sum(tree_value(t["tree_structure"], r) for t in artifact["trees"]) for r in x])
@@ -164,10 +236,21 @@ def calibrate(artifact, rows, method="sigmoid"):
 
 
 def explain(artifact, row):
+    if artifact["kind"].startswith("two_stage_"):
+        from .stacking import meta_rows
+
+        return dict(
+            method="stage-one research probabilities supplied to the stage-two model; not causal attribution",
+            factors=list(meta_rows(artifact, [row])[0]["values"].items()),
+        )
     if artifact["kind"] == "logistic":
         contribution = transform(artifact, [row])[0] * np.array(artifact["coef"])
         values = dict(zip(artifact["transformed_names"], contribution.tolist(), strict=True))
         method = "standardized log-odds contributions; correlated features are not causal"
+    elif artifact["kind"] == "svm":
+        values, method = {}, "RBF SVM; no additive feature attribution"
+    elif artifact["kind"] == "random_forest":
+        values, method = artifact["importance"], "global impurity importance; not individual attribution"
     else:
         values, method = artifact["importance"], "global split gain, not individual attribution or causation"
     return dict(method=method, factors=sorted(values.items(), key=lambda x: abs(x[1]), reverse=True)[:6])

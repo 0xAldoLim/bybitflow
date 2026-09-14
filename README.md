@@ -1,63 +1,175 @@
 # BybitFlow
 
-A self-hosted research workstation for crypto perpetual markets. BybitFlow collects
-public exchange data, evaluates trading setups, and delivers Discord research
-alerts with an entry zone, stop-loss, and two targets. It does not execute orders.
+BybitFlow monitors crypto perpetual markets and sends Discord alerts when a setup
+passes price-action, order-flow, liquidity and risk checks. Each alert includes a
+direction, entry zone, stop loss and two targets. It does not place orders.
 
-## Quick start
+The current setups are **intraday trades, tracked for up to four hours**. A
+60-second order-flow window is an entry-confirmation window, not a one-minute
+holding period. Setup grades run from SSS to D; the score is not a win probability.
 
-Requires Docker Desktop on Windows, or Docker Engine with Compose on Linux.
+## Start and stop on Windows
 
-1. Copy `.env.example` to `.env`.
-2. Set `FLOW_ADMIN_TOKEN` and `FLOW_RESEARCH_WEBHOOK`.
-3. Set `FLOW_RESEARCH_ALERTS=true` to enable SSS–D research alerts.
-4. Start the services:
+Open **Docker Desktop** and wait for its engine to be ready. Then open **Command
+Prompt (CMD)**. These examples assume the project is in the folder below; change
+the path if it is installed elsewhere.
 
-```sh
-docker compose --profile ml up -d --build
+**Start or resume the scanner and ML worker:**
+
+```bat
+cd /d "%USERPROFILE%\Documents\Codex\bybitflow"
+docker compose --profile ml up -d
+```
+
+Open [the dashboard](http://127.0.0.1:8000). Sign in with username `research` and
+the password stored in `FLOW_ADMIN_TOKEN` in the private `.env` file.
+
+**Stop both services and keep recorded data and ML state:**
+
+```bat
+cd /d "%USERPROFILE%\Documents\Codex\bybitflow"
+docker compose --profile ml stop
+```
+
+**Check whether the services are running:**
+
+```bat
+docker compose --profile ml ps
 docker compose exec desk bybit-flow doctor
+```
+
+**View recent logs:**
+
+```bat
+docker compose --profile ml logs --tail 50
+```
+
+Closing CMD or the dashboard does not stop the services. Keep Docker running and
+the computer awake for continuous monitoring. Use the stop command before shutting
+down when possible. Do not delete Docker's data volume to restart the program.
+
+## First-time setup
+
+Requirements: Docker Desktop, access to public exchange endpoints, and a Discord
+channel webhook. No exchange trading keys or paid chart subscription are required.
+
+From the project folder in CMD:
+
+```bat
+if not exist .env copy .env.example .env
+notepad .env
+```
+
+Set a long private dashboard password in `FLOW_ADMIN_TOKEN` and the Discord webhook
+URL in `FLOW_RESEARCH_WEBHOOK`. Never commit `.env` or share its contents.
+
+For confirmed alerts, minute-by-minute order flow, two-stage ML research and bounded
+recording storage, use these settings in `.env`:
+
+```dotenv
+FLOW_SCAN_ENABLED=true
+FLOW_RESEARCH_ALERTS=true
+FLOW_EXECUTION_WINDOW_SECONDS=60
+FLOW_ML_ENABLED=true
+FLOW_ML_TWO_STAGE=true
+FLOW_ML_FILTER_RESEARCH=false
+FLOW_MAX_STORAGE_GB=10
+FLOW_RECORDING_RETENTION_ENABLED=true
+```
+
+Build and start both services:
+
+```bat
+docker compose --profile ml up -d --build
+```
+
+The first build downloads dependencies, including CPU-only PyTorch for LSTM
+training. Later starts can use `up -d` without rebuilding. For a connectivity check:
+
+```bat
 docker compose exec desk bybit-flow test-market
+```
+
+To send an explicitly labelled Discord connection test:
+
+```bat
 docker compose exec desk bybit-flow test-discord
 ```
 
-Open [the dashboard](http://127.0.0.1:8000). HTTP Basic credentials are username
-`research` and the configured admin token. Store credentials only in the private
-environment configuration.
+A connection test confirms webhook access; it is not a trade signal. Settings are
+read at startup. Apply `.env` changes with `docker compose --profile ml up -d`.
 
-[Operator guide](docs/USER_RUNBOOK.md) covers configuration, startup, maintenance,
-backups, and connectivity. [Contributor guide](CONTRIBUTING.md) covers development
-and verification.
+## What to expect from alerts
 
-## Processing pipeline
+A new card shows LONG or SHORT, grade, entry, SL, TP1, TP2 and the entry deadline.
+Updates identify expired or withdrawn setups and say **no new entry**. A withdrawal
+caused by unavailable data does not establish that the stop loss was hit.
 
-Public REST and WebSocket data → source-specific normalization and recording →
-closed 4H/1H/15M features → setup detection → execution confirmation and risk
-checks → quality scoring and optional ML ranking → Discord and paper outcomes.
+Signals require actual order-flow confirmation even when the grade is low. They
+are not sent on a fixed schedule. Initial spread-history collection takes about
+an hour, and interrupted feeds can extend it. With the 60-second setting, a failed
+confirmation gets a new opportunity in the next minute while the price setup is valid.
 
-- **Sources:** Binance, Bybit, and OKX; automatic selection, fixed-source, and
-  bounded multi-source modes.
-- **Strategies:** liquidity sweep, trend pullback, range rejection, breakout retest.
-- **Signals:** SSS–D research grades, entry zone, stop, TP1/TP2, evidence, and lifecycle.
-- **Storage:** SQLite metadata; immutable compressed JSONL and Parquet recordings.
-- **ML:** frozen candidate features, recorded-outcome labels, offline challenger
-  training, drift monitoring, and reviewed model promotion.
+If alerts stop, check the dashboard and `doctor`. Common causes include clock skew,
+exchange connection failures, incomplete market history and the storage limit.
+Restarting repeatedly discards live flow history and can prolong warm-up.
 
-A quality score describes setup evidence. It is not a win probability. Research
-alerts require confirmation, fresh data, and accepted risk checks regardless of
-grade. ML ranking remains separate from deterministic scoring. Current print-based
-labels use cost assumptions and do not satisfy verified-cost promotion requirements.
+## How machine learning works
 
-## Documentation
+The optional two-stage pipeline compares these algorithms:
 
-| Audience | Reference |
-|---|---|
-| Operators | [Runbook](docs/USER_RUNBOOK.md), [operations](docs/OPERATIONS.md), [asset facts](docs/ASSET_FACTS.md) |
-| Researchers | [Scoring](docs/SCORING.md), [research protocol](docs/RESEARCH.md), [ML](docs/ML_RESEARCH.md) |
-| Contributors | [Architecture](docs/SELF_HOSTED_ORDERFLOW.md), [exchange adapters](docs/MULTI_EXCHANGE.md), [source definitions](docs/DATA_SOURCES.md) |
-| Reviewers | [Feature status](docs/STATUS.md), [verification](docs/VERIFICATION.md) |
+| Stage | Models | Purpose |
+|---|---|---|
+| 1 | LightGBM, Random Forest, LSTM | Estimate a setup's outcome from its recorded evidence |
+| 2 | Logistic Regression, SVM, Random Forest probabilities | Combine stage-one estimates and produce a separately calibrated ranking |
 
-Exchange availability depends on the deployment network. Use the health endpoints
-and diagnostic commands to establish current connectivity.
+LightGBM is the selected boosting implementation; XGBoost is not installed.
+Stage two trains on later observations that stage one did not train on. Separate
+calibration, validation and untouched test periods follow. LSTM inputs contain
+16 past observations for the same venue, symbol, direction and setup family.
 
-The optional [chart-event compatibility API](docs/TRADINGVIEW_SETUP.md) is disabled
-by default. Exchange-native operation requires no chart subscription or public ingress.
+Learning uses saved candidate snapshots, including rejected setups, and simulated
+outcomes from later recorded trades. A win means positive simulated profit after
+assumed costs, using TP1, SL or the four-hour time limit. Missing data and incomplete
+fills are excluded. It does not read a personal trading account or know actual fills.
+
+**Enabling ML starts collection and background processing, not an instantly trained
+model.** Two-stage training requires at least 500 complete sequence-labelled outcomes,
+plus enough data and both outcome classes in each partition. Readiness is checked
+every 15 minutes; successful training cycles remain weekly. New models remain research
+candidates until reviewed. There is no automatic promotion to validated probability.
+
+With `FLOW_ML_FILTER_RESEARCH=false`, an unavailable or untrained model does not
+block otherwise confirmed Discord research signals. See [ML research](docs/ML_RESEARCH.md)
+for the training policy and validation requirements.
+
+## Local storage
+
+Market recordings and ML data are stored **locally in Docker's `research-data`
+volume**. `FLOW_MAX_STORAGE_GB=10` sets the application data budget; it does not
+include Docker images or installed training software.
+
+With retention enabled and the ML worker running, cleanup starts at 8 GB and aims
+back toward 6 GB after outcome processing. It removes the oldest raw recording
+files while protecting at least six recent hours. Saved feature snapshots, labels,
+training datasets, models and audit hashes are kept. Deleted raw history cannot be
+replayed later. If protected data alone fills the budget, recording stops explicitly.
+
+## Updating the program
+
+Back up important data first, then run from the project folder:
+
+```bat
+docker compose --profile ml stop
+git pull --ff-only
+docker compose --profile ml up -d --build
+```
+
+## Further reading
+
+- [Operator guide](docs/USER_RUNBOOK.md): configuration, troubleshooting and backups.
+- [ML research](docs/ML_RESEARCH.md): outcome labels, algorithms and validation.
+- [Scoring](docs/SCORING.md): evidence scoring and grades.
+- [Asset facts](docs/ASSET_FACTS.md): reviewed research and asset selection.
+- [Contributing](CONTRIBUTING.md): development setup and tests.
+- [Architecture](docs/SELF_HOSTED_ORDERFLOW.md) and [exchange adapters](docs/MULTI_EXCHANGE.md): technical design.

@@ -182,6 +182,7 @@ class Registry:
                 }
             )
         return dict(
+            pipeline=self.store.get("ml_pipeline"),
             champion=self.store.get("ml_champion"),
             models=models,
             drift=self.store.get("ml_degraded"),
@@ -194,5 +195,13 @@ class Registry:
                 "SELECT COUNT(*) FROM ml_snapshots WHERE stage='decision'"
             ).fetchone()[0],
             labels=self.db.execute("SELECT COUNT(*) FROM ml_labels").fetchone()[0],
+            complete_labels=self.db.execute(
+                "SELECT COUNT(*) FROM ml_labels WHERE json_extract(payload,'$.complete')=1"
+            ).fetchone()[0],
+            sequence_outcomes=self.db.execute(
+                "SELECT COUNT(*) FROM ml_snapshots s JOIN ml_labels l ON l.snapshot_id=s.id "
+                "WHERE s.stage='decision' AND l.policy='prints-v1' AND json_extract(l.payload,'$.complete')=1 "
+                "AND json_array_length(s.payload,'$.sequence')=16"
+            ).fetchone()[0],
             history=[dict(r) for r in self.db.execute("SELECT * FROM ml_history ORDER BY id DESC LIMIT 100")],
         )

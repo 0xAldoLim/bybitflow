@@ -59,6 +59,15 @@ def read_dataset(path, max_rows=10_000):
 
 def train(store, path, kinds=("logistic", "lightgbm"), calibration="sigmoid"):
     rows = read_dataset(path)
+    sequence_excluded = 0
+    if all(k.startswith("two_stage_") for k in kinds):
+        eligible = [r for r in rows if len(r.get("sequence", [])) == 16]
+        sequence_excluded = len(rows) - len(eligible)
+        rows = eligible
+        if len(rows) < 500:
+            raise ValueError(
+                f"Two-stage models need >=500 complete outcomes with 16-observation sequences; available {len(rows)}"
+            )
     previous_end = store.db.execute("SELECT MAX(end_ms) FROM ml_holdouts").fetchone()[0]
     train_rows, cal_rows, validation, holdout = next_cycle_partitions(rows, previous_end)
     if len(train_rows) < 200 or len(cal_rows) < 100 or len(validation) < 100 or len(holdout) < 100:
@@ -91,7 +100,9 @@ def train(store, path, kinds=("logistic", "lightgbm"), calibration="sigmoid"):
     if candidates:
         _, winner, parameters, chosen = max(candidates, key=lambda x: (x[0], -x[3]))
     else:
-        winner, _ = fit(train_rows, "logistic")
+        winner, _ = fit(
+            train_rows, kinds[0] if all(k.startswith("two_stage_") for k in kinds) else "logistic"
+        )
         calibrate(winner, cal_rows, calibration)
         parameters, chosen = dict(min_probability=0.7, min_quality=95), None
     # Record reservation BEFORE reading holdout labels for performance. A crash does not refund it.
@@ -151,6 +162,7 @@ def train(store, path, kinds=("logistic", "lightgbm"), calibration="sigmoid"):
         )
         context_groups[key].append(row)
     report = dict(
+        sequence_excluded=sequence_excluded,
         out_of_sample=True,
         holdout=final,
         all_holdout=metrics(holdout, p),
@@ -198,7 +210,11 @@ def train(store, path, kinds=("logistic", "lightgbm"), calibration="sigmoid"):
         dataset_hash=digest(rows),
         code_commit=commit,
         code_dirty=dirty,
-        packages={name: version(name) for name in ("numpy", "scipy", "scikit-learn", "lightgbm")},
+        packages={
+            name: version(name)
+            for name in ("numpy", "scipy", "scikit-learn", "lightgbm")
+            + (("torch",) if winner["kind"].startswith("two_stage_") else ())
+        },
         training_spec=dict(
             seed=7,
             logistic_C=0.1,

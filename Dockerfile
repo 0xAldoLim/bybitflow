@@ -16,6 +16,8 @@ USER root
 RUN apt-get update && apt-get install -y --no-install-recommends libgomp1 && rm -r /var/lib/apt/lists/*
 COPY requirements-ml.lock ./
 RUN --mount=type=cache,target=/root/.cache/pip pip install --timeout 60 --retries 5 -r requirements-ml.lock
+COPY requirements-lstm.lock ./
+RUN --mount=type=cache,target=/root/.cache/pip pip install --timeout 60 --retries 5 -r requirements-lstm.lock
 USER researcher
 CMD ["bybit-flow", "ml", "worker"]
 

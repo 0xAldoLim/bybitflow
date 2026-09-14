@@ -41,7 +41,7 @@ def dataset(signal, n=1600):
     return rows
 
 
-@pytest.mark.parametrize("kind", ["logistic", "lightgbm"])
+@pytest.mark.parametrize("kind", ["logistic", "lightgbm", "random_forest"])
 def test_safe_json_prediction_parity_and_calibration(signal, kind):
     if kind == "lightgbm":
         pytest.importorskip("lightgbm")

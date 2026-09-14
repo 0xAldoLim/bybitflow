@@ -18,10 +18,26 @@ def cycle(settings, store):
 
     if not store.db.execute("SELECT 1 FROM segments LIMIT 1").fetchone():
         raise ValueError("No verified real recording segments; weekly training abstains")
+    source = store.get("active_exchange", {}).get("current") or store.get("scanner", {}).get("exchange")
+    if source not in {"bybit", "binance", "okx"}:
+        raise ValueError("No recorded active venue for source-specific training")
+    if settings.ml_two_stage:
+        ready = store.db.execute(
+            "SELECT COUNT(*) FROM ml_snapshots s JOIN ml_labels l ON l.snapshot_id=s.id "
+            "WHERE s.stage='decision' AND l.policy='prints-v1' "
+            "AND json_extract(l.payload,'$.complete')=1 AND json_array_length(s.payload,'$.sequence')=16 "
+            "AND json_extract(s.payload,'$.source')=?",
+            (source,),
+        ).fetchone()[0]
+        if ready < 500:
+            raise ValueError(
+                f"Two-stage training collecting data: {ready}/500 complete outcomes with 16-observation sequences"
+            )
     label_recordings(store, worker_rows(store), settings)
-    source = store.get("runtime_health", {}).get("source")
     path = FeatureStore(store).export(now_ms(), source=source)
-    return train(store, path)["id"]
+    from .stacking import KINDS
+
+    return train(store, path, kinds=KINDS if settings.ml_two_stage else ("logistic", "lightgbm"))["id"]
 
 
 def monitor(settings, store):
@@ -32,6 +48,16 @@ def monitor(settings, store):
 
     paths = store.db.execute("SELECT 1 FROM segments LIMIT 1").fetchone()
     result = dict(at_ms=now_ms(), status="no-recordings")
+    if settings.ml_two_stage:
+        store.put(
+            "ml_pipeline",
+            dict(
+                stage1=["LightGBM", "Random Forest", "LSTM"],
+                stage2=["Logistic Regression", "SVM", "Random Forest probability"],
+                status="collecting outcomes and 16-observation sequences",
+                filtering_research=settings.ml_filter_research,
+            ),
+        )
     if paths:
         labels = label_recordings(store, worker_rows(store), settings)
         result.update(status="observed", complete=labels["complete"])
@@ -65,7 +91,11 @@ def run(arguments, settings, store):
     sub.add_parser("chart-export")
     train = sub.add_parser("train")
     train.add_argument("dataset", type=Path)
-    train.add_argument("--model", choices=("both", "logistic", "lightgbm"), default="both")
+    train.add_argument(
+        "--model",
+        choices=("both", "logistic", "lightgbm", "random_forest", "svm", "two-stage"),
+        default="both",
+    )
     train.add_argument("--calibration", choices=("sigmoid", "isotonic"), default="sigmoid")
     infer = sub.add_parser("infer")
     infer.add_argument("model_id")
@@ -96,12 +126,15 @@ def run(arguments, settings, store):
     elif args.command == "export":
         result = str(FeatureStore(store).export(now_ms(), stage=args.stage, source=args.source))
     elif args.command == "train":
+        from .stacking import KINDS
         from .training import train
 
         model = train(
             store,
             args.dataset,
-            kinds=("logistic", "lightgbm") if args.model == "both" else (args.model,),
+            kinds=KINDS
+            if args.model == "two-stage"
+            else (("logistic", "lightgbm") if args.model == "both" else (args.model,)),
             calibration=args.calibration,
         )
         result = dict(
@@ -161,7 +194,11 @@ def run(arguments, settings, store):
                 previous_cycle = store.get("ml_cycle", {})
                 previous = previous_cycle.get("at_ms", 0)
                 # Recheck data readiness daily; successful fits remain weekly.
-                cadence = (7 if previous_cycle.get("status") == "challenger" else 1) * 86_400_000
+                cadence = (
+                    7 * 86_400_000
+                    if previous_cycle.get("status") == "challenger"
+                    else (900_000 if settings.ml_two_stage else 86_400_000)
+                )
                 if args.command == "cycle" or now_ms() - previous >= cadence:
                     try:
                         result = dict(at_ms=now_ms(), status="challenger", model_id=cycle(settings, store))
