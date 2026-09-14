@@ -173,3 +173,25 @@ docker compose --profile ml up -d --build
 - [Asset facts](docs/ASSET_FACTS.md): reviewed research and asset selection.
 - [Contributing](CONTRIBUTING.md): development setup and tests.
 - [Architecture](docs/SELF_HOSTED_ORDERFLOW.md) and [exchange adapters](docs/MULTI_EXCHANGE.md): technical design.
+
+## Optional encrypted DNS for Docker
+
+If exchange domains resolve incorrectly on the local network, BybitFlow can use a project-local DNS-over-HTTPS relay. It forwards DNS wire queries to [Google Public DNS](https://developers.google.com/speed/public-dns/docs/doh) using verified HTTPS. It does not fall back to unencrypted upstream DNS. Only the project containers use it; Windows and browser DNS settings stay unchanged.
+
+After building the normal project images, enable it in Windows CMD:
+
+```cmd
+copy compose.doh.yaml compose.override.yaml
+docker compose --profile ml up -d --no-build
+```
+
+The local override is ignored by Git. The relay uses the existing `bybitflow-desk:latest` image, exposes no host ports, and reserves Docker subnet `172.30.53.0/24`. Choose an unused subnet and update the DNS addresses in the override if that subnet conflicts with another network. Google receives the containers' DNS queries. DNS latency includes an HTTPS request; established exchange connections are unaffected by that lookup overhead.
+
+The usual start and stop commands also manage the DNS service. Check it with `docker compose ps`. To disable the override without deleting it:
+
+```cmd
+ren compose.override.yaml compose.override.yaml.disabled
+docker compose --profile ml up -d --no-build --remove-orphans
+```
+
+Do not disable certificate verification or pin exchange IP addresses as a workaround. The relay pins only Google's DNS bootstrap address; exchange addresses are resolved dynamically.

@@ -1,0 +1,44 @@
+# Optional encrypted DNS: copy this file to compose.override.yaml to enable.
+services:
+  dns:
+    image: bybitflow-desk:latest
+    pull_policy: never
+    command: [python, /dns_proxy.py]
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    sysctls:
+      net.ipv4.ip_unprivileged_port_start: 0
+    extra_hosts:
+      - "dns.google:8.8.8.8"
+    volumes:
+      - ./deploy/dns_proxy.py:/dns_proxy.py:ro
+    networks:
+      encrypted-dns:
+        ipv4_address: 172.30.53.2
+    mem_limit: 128m
+    cpus: 0.25
+    healthcheck:
+      test: [CMD, python, -c, "import socket; s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM); s.settimeout(10); s.sendto(bytes.fromhex('1234010000010000000000000361706905627962697403636f6d0000010001'),('127.0.0.1',53)); r=s.recv(4096); assert r[3]&15==0 and int.from_bytes(r[6:8],'big')>0"]
+      interval: 30s
+      timeout: 12s
+      retries: 3
+      start_period: 10s
+  desk:
+    dns: [172.30.53.2]
+    networks: [default, encrypted-dns]
+    depends_on:
+      dns:
+        condition: service_healthy
+  trainer:
+    dns: [172.30.53.2]
+    networks: [default, encrypted-dns]
+    depends_on:
+      dns:
+        condition: service_healthy
+networks:
+  encrypted-dns:
+    ipam:
+      config:
+        - subnet: 172.30.53.0/24
