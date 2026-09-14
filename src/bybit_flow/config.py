@@ -24,6 +24,8 @@ class Settings(BaseSettings):
     max_spread_bps: float = Field(5, gt=0, le=50)
     quote_sample_seconds: int = Field(60, ge=30, le=300)
     spread_min_samples: int = Field(12, ge=12, le=72)
+    spread_bucket_seconds: int = Field(300, ge=60, le=300)
+    spread_window_minutes: int = Field(360, ge=15, le=360)
     hypothetical_notional: float = Field(1000, gt=0)
     equity: float | None = Field(None, gt=0)
     risk_fraction: float = Field(0.0025, gt=0, le=0.01)

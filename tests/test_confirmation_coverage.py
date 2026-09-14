@@ -93,3 +93,24 @@ async def test_stale_other_symbol_does_not_block_confirmation_evidence(
         scanner.notifier.send_research.assert_not_called()
         assert store.signals()[0]["state"] == "ALERTED"
     store.close()
+
+
+async def test_elapsed_fast_window_expires_instead_of_remaining_pending(settings, signal, monkeypatch):
+    now = 2_000_000
+    monkeypatch.setattr("bybit_flow.scanner.now_ms", lambda: now)
+    store = Store(settings.data_dir)
+    signal.source = "binance"
+    signal.state = "PENDING CONFIRMATION"
+    signal.expires_ms = now + 900_000
+    signal.evidence = {"execution_window_ms": 60_000, "execution_window_end_ms": now - 120_001}
+    store.signal(signal)
+    scanner = Scanner.__new__(Scanner)
+    scanner.settings, scanner.store = settings, store
+    scanner.api = SimpleNamespace(name="binance")
+    scanner.context = {}
+    scanner.streams = SimpleNamespace(books={}, tapes={}, connected=False)
+    scanner.notifier = SimpleNamespace(send_research=AsyncMock())
+    await scanner.evaluate()
+    assert store.signals()[0]["state"] == "EXPIRED"
+    scanner.notifier.send_research.assert_not_called()
+    store.close()

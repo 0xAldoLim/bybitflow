@@ -106,8 +106,8 @@ Updates identify expired or withdrawn setups and say **no new entry**. A withdra
 caused by unavailable data does not establish that the stop loss was hit.
 
 Signals require actual order-flow confirmation even when the grade is low. They
-are not sent on a fixed schedule. Initial spread-history collection takes about
-an hour, and interrupted feeds can extend it. With the 60-second setting, a failed
+are not sent on a fixed schedule. With the recommended minute-spread configuration, initial liquidity collection takes about
+12–15 minutes; interrupted feeds can extend it. With the 60-second setting, a failed
 confirmation gets a new opportunity in the next minute while the price setup is valid.
 
 If alerts stop, check the dashboard and `doctor`. Common causes include clock skew,
@@ -195,3 +195,9 @@ docker compose --profile ml up -d --no-build --remove-orphans
 ```
 
 Do not disable certificate verification or pin exchange IP addresses as a workaround. The relay pins only Google's DNS bootstrap address; exchange addresses are resolved dynamically.
+
+### Signal liquidity warm-up
+
+For the one-minute signal configuration, set `FLOW_SPREAD_BUCKET_SECONDS=60` and `FLOW_SPREAD_WINDOW_MINUTES=30`. The scanner requires at least 12 distinct valid minute observations, at least 80% coverage, and acceptable median and tail spreads. Repeated quotes in one minute count once. A fresh start normally needs about 12–15 minutes of uninterrupted quotes; gaps may extend this. Older six-hour/five-minute histories remain separate and are not treated as minute observations. The legacy defaults remain available when these settings are omitted.
+
+Order-flow confirmation still uses a fully observed closed minute. Setups whose confirmation window has expired are marked expired, while new minutes create independent decisions. ML training and research scores do not bypass flow, entry, spread, or risk requirements.

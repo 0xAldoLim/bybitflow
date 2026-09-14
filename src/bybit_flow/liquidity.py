@@ -12,7 +12,7 @@ class SpreadHistory:
     def add(self, event_ms, receipt_ms, bid, ask):
         bucket = receipt_ms // self.bucket_ms
         # One observation per time bucket, not a trade/message-frequency-weighted mean.
-        if bucket in self.rows:
+        if bucket in self.rows and self.rows[bucket]["bps"] is not None:
             return
         valid = (
             all(math.isfinite(v) for v in (bid, ask))
@@ -51,7 +51,8 @@ class SpreadHistory:
             "median_bps": med,
             "p90_bps": p90,
             "reasons": reasons,
-            "method": "first observed quote per five-minute bucket; rolling six-hour median and p90",
+            "method": f"first valid quote per {self.bucket_ms // 1000}-second bucket; rolling {self.window_ms // 60_000}-minute median and p90",
+            "bucket_ms": self.bucket_ms,
             "asof": asof,
             "window_ms": self.window_ms,
         }

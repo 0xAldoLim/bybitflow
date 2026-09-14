@@ -71,10 +71,7 @@ failed confirmation does not prevent the next minute from qualifying. Fast decis
 must be evaluated within two minutes of window close. Discord cooldowns still apply.
 This policy has a separate strategy version; incompatible ML models abstain until
 trained on that version. Lower latency does not establish predictive accuracy.
-The spread baseline additionally requires at least 12 valid five-minute samples
-and 80% observation coverage. Initial liquidity warm-up therefore takes about an
-hour; recent collection gaps can extend it. A healthy process alone does not
-prove that a signal has enough evidence to confirm.
+With FLOW_SPREAD_BUCKET_SECONDS=60 and FLOW_SPREAD_WINDOW_MINUTES=30, the spread baseline requires at least 12 distinct valid minute samples and 80% coverage. Initial warm-up normally takes 12–15 minutes; gaps can extend it. The legacy five-minute/six-hour defaults remain available when these settings are omitted. A healthy process alone does not prove that a signal has enough evidence to confirm.
 
 The Compose setup uses a five-minute delay between broad scans. Each closed
 15-minute execution window receives a distinct candidate ID under rules-0.2.0,

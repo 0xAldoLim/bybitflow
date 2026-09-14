@@ -62,3 +62,26 @@ def test_omitted_segment_becomes_explicit_replay_gap(settings):
     assert len(missing) == 3
     assert missing[1]["source"] == "control/gap" and not missing[1]["complete"]
     store.close()
+
+
+def test_minute_spread_requires_real_distinct_samples_and_recovers_from_old_gap():
+    history = SpreadHistory(bucket_ms=60_000, window_ms=1_800_000)
+    history.add(60_000, 60_000, 99.99, 100.01)
+    for i in range(40, 52):
+        ts = i * 60_000
+        history.add(ts, ts, 99.99, 100.01)
+        history.add(ts + 1, ts + 1, 99.99, 100.01)
+    assert not history.assess(50 * 60_000)["eligible"]
+    result = history.assess(51 * 60_000)
+    assert result["eligible"] and result["samples"] == 12
+    assert not history.assess(60 * 60_000)["eligible"]
+
+
+def test_valid_later_quote_can_repair_invalid_bucket_without_backdating():
+    history = SpreadHistory(bucket_ms=60_000)
+    history.add(1, 60_000, 99.99, 100.01)
+    history.add(70_000, 70_000, 99.99, 100.01)
+    assert history.assess(65_000)["samples"] == 0
+    assert history.assess(70_000)["samples"] == 1
+    history.add(80_000, 80_000, 99, 101)
+    assert history.export()[0]["known_ms"] == 70_000

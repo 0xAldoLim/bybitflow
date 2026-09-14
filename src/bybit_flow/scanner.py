@@ -48,7 +48,16 @@ class Scanner:
         return getattr(self.api, "name", "bybit")
 
     def spread_key(self, symbol):
+        if self.settings.spread_bucket_seconds != 300 or self.settings.spread_window_minutes != 360:
+            return f"spreads:{self.settings.spread_bucket_seconds}s:{self.settings.spread_window_minutes}m:{self.exchange}:{symbol}"
         return "spreads:" + ("" if self.exchange == "bybit" else self.exchange + ":") + symbol
+
+    def spread_history(self, symbol):
+        return SpreadHistory(
+            self.store.get(self.spread_key(symbol), []),
+            bucket_ms=self.settings.spread_bucket_seconds * 1000,
+            window_ms=self.settings.spread_window_minutes * 60_000,
+        )
 
     def market_context(self, now):
         """Never score cached BTC/ETH context from a prior venue or future receipt."""
@@ -179,7 +188,7 @@ class Scanner:
                             ticker.get("funding_observed_ms", ticker.get("observed_ms", body["time"]))
                         ),
                     )
-            history = SpreadHistory(self.store.get(self.spread_key(symbol), []))
+            history = self.spread_history(symbol)
             history.add(
                 int(ticker.get("observed_ms", body["time"])),
                 receipt,
@@ -386,7 +395,7 @@ class Scanner:
                         "continuous_daily_bars": len(daily),
                         "available_ms": evaluated,
                     }
-                    normal_spread = SpreadHistory(self.store.get(self.spread_key(inst.symbol), [])).assess(
+                    normal_spread = self.spread_history(inst.symbol).assess(
                         now_ms(), self.settings.max_spread_bps, self.settings.spread_min_samples
                     )
                     point["normal_spread"] = normal_spread
@@ -492,6 +501,12 @@ class Scanner:
             mid = float((max(book.bids) + min(book.asks)) / 2) if book and book.valid else None
             if now >= s.expires_ms:
                 s.state = "EXPIRED"
+            elif (
+                not was_alerted
+                and s.evidence.get("execution_window_ms", 900_000) < 900_000
+                and now > s.evidence.get("execution_window_end_ms", now) + 120_000
+            ):
+                s.state = "EXPIRED"
             elif s.source != self.exchange:
                 s.state = "INVALIDATED"
                 s.invalidation = "Primary exchange changed; source continuity cannot be transferred"
@@ -552,7 +567,7 @@ class Scanner:
                 facts = facts_asof(self.store, c["instrument"].base, now)
                 regime = candle_features(c["h4"], now)["regime"]
                 supportive = regime in {"range", "trending up" if s.direction == "LONG" else "trending down"}
-                spread_ok = SpreadHistory(self.store.get(self.spread_key(s.symbol), [])).assess(
+                spread_ok = self.spread_history(s.symbol).assess(
                     now, self.settings.max_spread_bps, self.settings.spread_min_samples
                 )["eligible"]
                 if not healthy or not supportive or not spread_ok or any(f["major_event"] for f in facts):
@@ -587,7 +602,7 @@ class Scanner:
             flow = footprint(trades, c["instrument"].tick, s.evidence["m15"]["atr"], window_book)
             flow_ok = confirm(s, flow, c["m15"])
             s.gates = []
-            normal_spread = SpreadHistory(self.store.get(self.spread_key(s.symbol), [])).assess(
+            normal_spread = self.spread_history(s.symbol).assess(
                 now, self.settings.max_spread_bps, self.settings.spread_min_samples
             )
             s.evidence["normal_spread"] = normal_spread
