@@ -6,7 +6,6 @@ Raw wire records and normalized scanner-v1 records have distinct source prefixes
 """
 
 import asyncio
-import contextlib
 import json
 import random
 import uuid
@@ -91,20 +90,27 @@ class NativeStreams:
 
     def connected_for(self, symbol):
         now = now_ms()
+        book, tape = self.books.get(symbol), self.tapes.get(symbol)
         return (
             symbol in self.selected
-            and self.books[symbol].fresh(now, self.settings.book_stale_ms)
-            and 0 <= now - self.tapes[symbol].last_receipt <= self.settings.trade_stale_ms
+            and book is not None
+            and tape is not None
+            and book.fresh(now, self.settings.book_stale_ms)
+            and 0 <= now - tape.last_receipt <= self.settings.trade_stale_ms
         )
 
     async def select(self, symbols):
         selected = tuple(dict.fromkeys(symbols))[: self.settings.deep_symbols]
         removed, added = set(self.selected) - set(selected), set(selected) - set(self.selected)
-        for s in removed:
-            task = self.tasks.pop(s)
+        # Publish removals before awaiting shutdown so health readers never access
+        # half-removed state. Close all sockets concurrently, not one timeout each.
+        self.selected = tuple(s for s in self.selected if s not in removed)
+        stopping = [self.tasks.pop(s) for s in removed]
+        for task in stopping:
             task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await task
+        if stopping:
+            await asyncio.gather(*stopping, return_exceptions=True)
+        for s in removed:
             for mapping in (
                 self.books,
                 self.tapes,

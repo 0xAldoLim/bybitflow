@@ -119,3 +119,34 @@ async def test_selected_feed_gets_new_minutes_after_pending_expires():
     previous = scanner.context["BTCUSDT"].copy()
     await scanner.refresh_once()
     assert scanner.context["BTCUSDT"] == previous
+
+
+@pytest.mark.asyncio
+async def test_native_removal_cancels_all_feeds_before_waiting():
+    streams = NativeStreams.__new__(NativeStreams)
+    streams.settings = SimpleNamespace(deep_symbols=30)
+    streams.selected = ("A", "B")
+    streams.books = {"A": Mock(), "B": Mock()}
+    streams.tapes = {"A": Mock(), "B": Mock()}
+    streams.liquidations, streams.sessions, streams.last_sample, streams.frames = {}, {}, {}, {}
+    streams.record = Mock()
+    cancelled = set()
+    both = asyncio.Event()
+
+    async def feed(symbol):
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            cancelled.add(symbol)
+            assert streams.selected == ()
+            if len(cancelled) == 2:
+                both.set()
+            await both.wait()
+            raise RuntimeError("already-failed connection during shutdown")
+
+    streams.tasks = {s: asyncio.create_task(feed(s)) for s in streams.selected}
+    await asyncio.sleep(0)
+    await asyncio.wait_for(streams.select([]), timeout=1)
+    assert cancelled == {"A", "B"}
+    assert not streams.tasks and not streams.books and not streams.tapes
+    assert not streams.connected_for("A")

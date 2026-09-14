@@ -532,9 +532,7 @@ class Scanner:
             fresh_book
             and self.recorder.healthy
             and (
-                float(max(book.bids)) <= s.stop
-                if s.direction == "LONG"
-                else float(min(book.asks)) >= s.stop
+                float(max(book.bids)) <= s.stop if s.direction == "LONG" else float(min(book.asks)) >= s.stop
             )
         ):
             s.state = "INVALIDATED"
@@ -742,6 +740,12 @@ class Scanner:
                 await self.scan_once()
             except Exception as exc:
                 self.status = dict(state="error", error_type=type(exc).__name__, at_ms=now_ms())
+                if isinstance(exc, ValueError):
+                    self.status["reason"] = (
+                        "Local/exchange clock skew exceeds two seconds"
+                        if str(exc) == "Local/exchange clock skew exceeds two seconds"
+                        else "Public market data validation failed"
+                    )
                 self.store.put("scanner", self.status)
                 # REST outages must not erase independent, healthy live history.
                 feed_available = (
@@ -757,9 +761,13 @@ class Scanner:
                 )
                 if not preserve_feed:
                     self.context.clear()
-                    await self.streams.select([])
-                    if self.settings.market_source in {"auto", "multi"}:
-                        self.source_ready = False
+                    try:
+                        await self.streams.select([])
+                    except Exception as cleanup_error:
+                        self.status["cleanup_error"] = type(cleanup_error).__name__
+                    finally:
+                        if self.settings.market_source in {"auto", "multi"}:
+                            self.source_ready = False
                 self.status["live_feed_preserved"] = preserve_feed
                 self.store.put("scanner", self.status)
                 log.warning("scan_failed", extra={"error_type": type(exc).__name__})
