@@ -125,23 +125,35 @@ class Scanner:
             )
         )
 
+    async def refresh_once(self):
+        # Selected feeds must keep generating minutes even after the prior one expires.
+        symbols = list(dict.fromkeys(self.pending_symbols() + list(self.streams.selected)))
+        refreshed, errors = 0, 0
+        for symbol in symbols:
+            c = self.context.get(symbol)
+            if not c:
+                continue
+            try:
+                now = now_ms()
+                h4 = await self.cached_candles(symbol, "240", now, 160)
+                h1 = await self.cached_candles(symbol, "60", now, 200)
+                m15 = await self.cached_candles(symbol, "15", now, 120)
+                self.context[symbol] = c | {"h4": h4, "h1": h1, "m15": m15, "asof": now}
+                if self.settings.execution_window_seconds < 900:
+                    self.save_candidates(c["instrument"], h4, h1, m15, now)
+                refreshed += 1
+            except Exception as exc:
+                # Keep the last observed context; evaluate still enforces its age.
+                errors += 1
+                log.warning("refresh_failed", extra={"symbol": symbol, "error_type": type(exc).__name__})
+        self.store.put("refresh_health", dict(at_ms=now_ms(), refreshed=refreshed, errors=errors))
+
     async def refresh_pending(self):
-        # Fast lane: a broad-universe sweep must not age pending setups silently.
         while True:
-            for symbol in self.pending_symbols():
-                c = self.context.get(symbol)
-                if not c:
-                    continue
-                try:
-                    now = now_ms()
-                    h4 = await self.cached_candles(symbol, "240", now, 160)
-                    h1 = await self.cached_candles(symbol, "60", now, 200)
-                    m15 = await self.cached_candles(symbol, "15", now, 120)
-                    self.context[symbol] = c | {"h4": h4, "h1": h1, "m15": m15, "asof": now}
-                    if self.settings.execution_window_seconds < 900:
-                        self.save_candidates(c["instrument"], h4, h1, m15, now)
-                except Exception:
-                    self.context.pop(symbol, None)
+            try:
+                await self.refresh_once()
+            except Exception as exc:
+                self.store.put("refresh_health", dict(at_ms=now_ms(), error_type=type(exc).__name__))
             await asyncio.sleep(30)
 
     def save_candidates(self, instrument, h4, h1, m15, evaluated):

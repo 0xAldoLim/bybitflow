@@ -99,3 +99,23 @@ async def test_rest_failure_preserves_live_confirmation_history(monkeypatch, fai
         streams.select.assert_not_awaited()
     else:
         streams.select.assert_awaited_once_with([])
+
+
+@pytest.mark.asyncio
+async def test_selected_feed_gets_new_minutes_after_pending_expires():
+    scanner = Scanner.__new__(Scanner)
+    scanner.settings = SimpleNamespace(execution_window_seconds=60)
+    scanner.store = Mock()
+    scanner.pending_symbols = lambda: []
+    scanner.streams = SimpleNamespace(selected=("BTCUSDT",))
+    scanner.context = {"BTCUSDT": {"instrument": "instrument", "asof": 1}}
+    scanner.cached_candles = AsyncMock(return_value=["bars"])
+    scanner.save_candidates = Mock()
+    await scanner.refresh_once()
+    scanner.save_candidates.assert_called_once()
+    assert scanner.context["BTCUSDT"]["asof"] > 1
+    # A failed refresh cannot discard the known context and kill subsequent retries.
+    scanner.cached_candles.side_effect = TimeoutError
+    previous = scanner.context["BTCUSDT"].copy()
+    await scanner.refresh_once()
+    assert scanner.context["BTCUSDT"] == previous
