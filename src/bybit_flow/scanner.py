@@ -4,6 +4,8 @@ import json
 import logging
 from statistics import median
 
+import httpx
+
 from .exchanges import VenueAPI, market_probe
 from .features import candle_features, validate_bars
 from .fundamentals import facts_asof
@@ -672,10 +674,25 @@ class Scanner:
             except Exception as exc:
                 self.status = dict(state="error", error_type=type(exc).__name__, at_ms=now_ms())
                 self.store.put("scanner", self.status)
-                self.context.clear()
-                await self.streams.select([])
-                if self.settings.market_source in {"auto", "multi"}:
-                    self.source_ready = False
+                # REST outages must not erase independent, healthy live history.
+                feed_available = (
+                    any(self.streams.connected_for(s) for s in self.streams.selected)
+                    if isinstance(self.streams, NativeStreams)
+                    else getattr(self.streams, "connected", False)
+                )
+                preserve_feed = (
+                    isinstance(exc, (httpx.TransportError, ConnectionError, TimeoutError))
+                    and feed_available
+                    and self.source_ready
+                    and self.recorder.healthy
+                )
+                if not preserve_feed:
+                    self.context.clear()
+                    await self.streams.select([])
+                    if self.settings.market_source in {"auto", "multi"}:
+                        self.source_ready = False
+                self.status["live_feed_preserved"] = preserve_feed
+                self.store.put("scanner", self.status)
                 log.warning("scan_failed", extra={"error_type": type(exc).__name__})
                 # A transient outage should not suspend collection for a full scan interval.
                 delay = min(delay, 60)
