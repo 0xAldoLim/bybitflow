@@ -30,8 +30,11 @@ class PaperPosition:
     funding_timestamps: set = field(default_factory=set)
 
     def __post_init__(self):
-        if self.requested_qty <= 0 or not 0 < self.horizon_ms <= 14_400_000:
-            raise ValueError("Positive quantity and at most four-hour paper horizon required")
+        maximum = (
+            14_400_000 if self.signal.horizon_profile == "LEGACY" else self.signal.expected_hold_max * 60_000
+        )
+        if self.requested_qty <= 0 or not 0 < self.horizon_ms <= maximum:
+            raise ValueError("Positive quantity and horizon within frozen profile required")
 
     @property
     def sign(self):

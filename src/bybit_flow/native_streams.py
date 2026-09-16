@@ -206,7 +206,7 @@ class NativeStreams:
                 if self.api.name == "binance":
                     async with asyncio.TaskGroup() as group:
                         group.create_task(self.binance_market(symbol))
-                        group.create_task(self.binance_depth(symbol))
+                        group.create_task(self.binance_depth_recovery(symbol))
                 else:
                     await self.okx(symbol)
             except asyncio.CancelledError:
@@ -260,6 +260,27 @@ class NativeStreams:
                         )
                         self.liquidations[symbol].append(liquidation)
                         self.record("liquidation", symbol, int(o["T"]), liquidation)
+
+    async def binance_depth_recovery(self, symbol):
+        """Resnapshot depth independently while the separate trade socket stays intact."""
+        while True:
+            try:
+                await self.binance_depth(symbol)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self.books[symbol].reset()
+                self.frames[symbol].clear()
+                if not self.recorder.healthy:
+                    raise
+                # This is a depth gap, not missing executed trades. Fresh book
+                # qualification remains blocked until the new snapshot bridges.
+                self.record("control/book_gap", symbol, now_ms(), {"reason": type(exc).__name__})
+                self.store.put(
+                    f"depth_recovery:{self.api.name}:{symbol}",
+                    {"at_ms": now_ms(), "error_type": type(exc).__name__},
+                )
+                await asyncio.sleep(1 + random.random())
 
     async def binance_depth(self, symbol):
         url = f"wss://fstream.binance.com/public/ws/{symbol.lower()}@depth@100ms"

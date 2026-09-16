@@ -5,35 +5,78 @@ past clock jumps without sorting events or learning outcomes across missing tape
 Integrity failures remain fatal and preflight finishes before any label is written.
 """
 
-import gzip
 import hashlib
 import json
 from pathlib import Path
 
+from ..packing import manifest_for, packed_record, raw_bytes, raw_stream
 from ..replay import segment_rows
 from ..storage import now_ms
 
 
 def worker_rows(store):
+    import uuid
+
+    lease = uuid.uuid4().hex
+    with store.db:
+        store.db.execute(
+            "INSERT INTO storage_leases VALUES(?,?,?,?,?)",
+            (
+                lease,
+                store.get("recording_retention", {}).get("through_ms", 0),
+                now_ms(),
+                now_ms() + 86_400_000,
+                "ML replay in progress",
+            ),
+        )
+    try:
+        yield from _worker_rows(store)
+    finally:
+        with store.db:
+            store.db.execute("DELETE FROM storage_leases WHERE id=?", (lease,))
+
+
+def committed_manifests(store, retained_after):
+    """Bound memory without retaining a WAL read cursor across worker writes."""
+    last_id, boundary = "", now_ms()
+    while True:
+        batch = store.db.execute(
+            "SELECT id,payload FROM segments WHERE id>? AND at_ms<=? "
+            "AND json_extract(payload,'$.max_receipt_ms')>? ORDER BY id LIMIT 1000",
+            (last_id, boundary, retained_after),
+        ).fetchall()
+        if not batch:
+            return
+        last_id = batch[-1][0]
+        for _, payload in batch:
+            yield json.loads(payload)
+
+
+def _worker_rows(store):
     # SQLite publication happens after gzip, parquet and manifest have closed.
-    manifests = [json.loads(r[0]) for r in store.db.execute("SELECT payload FROM segments")]
     retained_after = store.get("recording_retention", {}).get("through_ms", 0)
-    manifests = [m for m in manifests if m["max_receipt_ms"] > retained_after]
+    pending = store.db.execute(
+        "SELECT min(s.decision_ms) FROM ml_snapshots s WHERE s.stage='decision' AND s.decision_ms>? AND NOT EXISTS "
+        "(SELECT 1 FROM ml_labels l WHERE l.snapshot_id=s.id AND l.policy='prints-v1')",
+        (retained_after,),
+    ).fetchone()
+    if pending and pending[0] is not None:
+        retained_after = max(retained_after, pending[0] - 900_000)
+    manifests = committed_manifests(store, retained_after)
     spans = []
     for manifest in manifests:
         path = Path(manifest["raw"])
         start, end = manifest["min_receipt_ms"], manifest["max_receipt_ms"]
         reason = None
-        if not path.exists():
+        if not path.exists() and not packed_record(path):
             reason = "committed recording missing from active storage"
         else:
-            if hashlib.sha256(path.read_bytes()).hexdigest() != manifest["sha256"]:
+            if hashlib.sha256(raw_bytes(path)).hexdigest() != manifest["sha256"]:
                 raise ValueError("Raw segment integrity mismatch")
-            sidecar = path.with_name(path.name.removesuffix(".jsonl.gz") + ".manifest.json")
-            if not sidecar.exists() or json.loads(sidecar.read_text()) != manifest:
+            if manifest_for(path) != manifest:
                 raise ValueError("Committed recording manifest mismatch")
             previous, low, high, count = -1, None, None, 0
-            with gzip.open(path, "rt") as stream:
+            with raw_stream(path) as stream:
                 for line in stream:
                     receipt = json.loads(line)["receipt_ms"]
                     if receipt < previous:
@@ -45,6 +88,11 @@ def worker_rows(store):
             if (low, high, count) != (start, end, manifest["rows"]):
                 raise ValueError("Committed recording bounds mismatch")
         spans.append(dict(start=start, end=end, manifest=manifest, reason=reason))
+        if len(spans) % 1000 == 0:
+            store.put(
+                "ml_replay_progress",
+                dict(phase="integrity preflight", segments=len(spans), receipt_ms=end, at_ms=now_ms()),
+            )
     spans.sort(key=lambda s: (s["start"], s["manifest"]["id"]))
     groups = []
     for span in spans:
@@ -79,7 +127,18 @@ def worker_rows(store):
         "ml_recordings", dict(at_ms=now_ms(), segments=len(spans), excluded=len(excluded), audit=str(target))
     )
     previous = None
-    for group in groups:
+    for index, group in enumerate(groups):
+        if index % 1000 == 0:
+            store.put(
+                "ml_replay_progress",
+                dict(
+                    phase="paper outcomes",
+                    segments=index,
+                    total=len(groups),
+                    receipt_ms=group["start"],
+                    at_ms=now_ms(),
+                ),
+            )
         if group["bad"]:
             for at in sorted({group["start"], group["end"]}):
                 yield dict(
@@ -108,5 +167,25 @@ def worker_rows(store):
                 complete=False,
                 payload='{"reason":"unchained recording"}',
             )
-        yield from segment_rows([manifest["raw"]])
+        last_row = last_emitted = None
+        for row in segment_rows([manifest["raw"]]):
+            last_row = row
+            source = row["source"]
+            if source.startswith("native/"):
+                source = source.split("/", 2)[2]
+            # The prints-v1 policy consumes trades and continuity controls, not DOM.
+            # Integrity preflight above still verifies every recorded envelope.
+            if not row.get("complete", True) or source.startswith(("control/", "ws/publicTrade.")):
+                last_emitted = row
+                yield row
+        if last_row is not None and last_row is not last_emitted:
+            yield dict(
+                source="control/clock",
+                symbol="ALL",
+                event_ms=last_row["event_ms"],
+                receipt_ms=last_row["receipt_ms"],
+                schema_version=1,
+                complete=True,
+                payload="{}",
+            )
         previous = manifest

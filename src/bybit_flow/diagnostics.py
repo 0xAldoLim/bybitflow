@@ -41,6 +41,20 @@ async def doctor(settings, store, network=True):
         for name in names:
             checks[name] = store.get("probe:" + name, {"status": "NOT_TESTED"})
     checks["scanner"] = store.get("scanner", {"state": "NOT_OBSERVED"})
+    from .horizons import session_context
+
+    active = store.active_signals()
+    checks["session"] = session_context(now_ms())
+    checks["setups"] = dict(
+        active=len(active),
+        legacy_active=sum(s.get("horizon_profile", "LEGACY") == "LEGACY" for s in active),
+        current_active=sum(s.get("horizon_profile", "LEGACY") != "LEGACY" for s in active),
+    )
+    checks["post_terminal"] = dict(
+        store.db.execute("SELECT status,count(*) FROM observations GROUP BY status")
+    )
+    checks["storage_budget"] = store.get("storage_status", {"status": "run storage status for measurement"})
+    checks["cleanup"] = store.get("storage_health", {})
     runtime = store.get("runtime_health", {})
     checks["runtime"] = runtime | {
         "status": "FRESH" if 0 <= now_ms() - runtime.get("at_ms", 0) <= 90_000 else "NOT_OBSERVED_OR_STALE"
@@ -63,6 +77,7 @@ async def doctor(settings, store, network=True):
         "champion": summary.get("champion"),
         "snapshots": store.db.execute("SELECT count(*) FROM ml_snapshots").fetchone()[0],
         "labels": store.db.execute("SELECT count(*) FROM ml_labels").fetchone()[0],
+        "late_labels": store.db.execute("SELECT count(*) FROM research_labels").fetchone()[0],
     }
     warnings = []
     if not settings.scan_enabled:

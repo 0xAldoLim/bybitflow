@@ -64,4 +64,6 @@ def test_excursions_funding_dedup_and_grades(signal):
     assert result["actual_entry_ms"] == 1500
     assert result["mfe_r"] == 3.2 and result["mae_r"] == -0.4
     assert result["classification"] == "win"
-    assert tier(0) == tier(19) == tier(20) == tier(35) == "D"
+    assert tier(0) == tier(19) == "F"
+    assert tier(20) == tier(34) == "E"
+    assert tier(35) == "D"

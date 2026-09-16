@@ -98,6 +98,20 @@ class Signal(BaseModel):
     created_ms: int
     expires_ms: int
     source: Literal["bybit", "binance", "okx", "tradingview"] = "bybit"
+    horizon_profile: Literal["LEGACY", "SHORT_INTRADAY", "CORE_INTRADAY", "SWING", "EXTENDED_SWING"] = (
+        "LEGACY"
+    )
+    context_timeframe: str = "240"
+    setup_timeframe: str = "60"
+    execution_timeframe: str = "15"
+    expected_hold_min: int = 60
+    expected_hold_max: int = 240
+    primary_tracking_deadline: int | None = None
+    lifecycle_version: str = "legacy"
+    setup_thesis_id: str | None = None
+    session: dict = Field(default_factory=dict)
+    entry_session: str | None = None
+    synthetic: bool = False
     trigger_expires_ms: int | None = None
     holding_deadline_ms: int | None = None
     state: State = "WATCHLIST"
@@ -135,3 +149,23 @@ class Signal(BaseModel):
     @property
     def rejection_reasons(self) -> list[str]:
         return self.gates
+
+    @computed_field
+    @property
+    def quality_score(self) -> float:
+        return self.quality
+
+    @computed_field
+    @property
+    def quality_tier(self) -> str:
+        return self.raw_tier
+
+    @computed_field
+    @property
+    def score_components(self) -> dict:
+        return self.evidence.get("score_components", {})
+
+    @computed_field
+    @property
+    def score_reasons(self) -> list:
+        return self.evidence.get("score_reasons", [])

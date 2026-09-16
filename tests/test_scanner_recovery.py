@@ -104,6 +104,8 @@ async def test_rest_failure_preserves_live_confirmation_history(monkeypatch, fai
 @pytest.mark.asyncio
 async def test_selected_feed_gets_new_minutes_after_pending_expires():
     scanner = Scanner.__new__(Scanner)
+    scanner.recorder = SimpleNamespace(healthy=True)
+    scanner.discover_horizons = AsyncMock()
     scanner.settings = SimpleNamespace(execution_window_seconds=60)
     scanner.store = Mock()
     scanner.pending_symbols = lambda: []
@@ -150,3 +152,43 @@ async def test_native_removal_cancels_all_feeds_before_waiting():
     assert cancelled == {"A", "B"}
     assert not streams.tasks and not streams.books and not streams.tapes
     assert not streams.connected_for("A")
+
+@pytest.mark.asyncio
+async def test_depth_recovery_preserves_executed_trade_window(monkeypatch):
+    from collections import deque
+
+    from bybit_flow.orderflow import Book, BookGap, Tape
+
+    streams = NativeStreams.__new__(NativeStreams)
+    streams.api = SimpleNamespace(name="binance")
+    streams.books = {"BTCUSDT": Book()}
+    tape = Tape()
+    tape.reset(1234)
+    streams.tapes = {"BTCUSDT": tape}
+    streams.frames = {"BTCUSDT": deque([{"old": True}])}
+    streams.recorder = SimpleNamespace(healthy=True)
+    streams.store, streams.record = Mock(), Mock()
+    streams.binance_depth = AsyncMock(side_effect=[BookGap("resnapshot"), asyncio.CancelledError()])
+    monkeypatch.setattr("bybit_flow.native_streams.asyncio.sleep", AsyncMock())
+    with pytest.raises(asyncio.CancelledError):
+        await streams.binance_depth_recovery("BTCUSDT")
+    assert streams.binance_depth.await_count == 2
+    assert streams.tapes["BTCUSDT"] is tape and tape.coverage_start == 1234
+    assert not streams.frames["BTCUSDT"] and not streams.books["BTCUSDT"].valid
+    assert streams.record.call_args.args[0] == "control/book_gap"
+
+
+@pytest.mark.asyncio
+async def test_depth_recovery_cannot_hide_recording_failure():
+    from collections import deque
+
+    from bybit_flow.orderflow import Book
+
+    streams = NativeStreams.__new__(NativeStreams)
+    streams.books = {"BTCUSDT": Book()}
+    streams.frames = {"BTCUSDT": deque()}
+    streams.recorder = SimpleNamespace(healthy=False)
+    streams.binance_depth = AsyncMock(side_effect=RuntimeError("recording failed"))
+    with pytest.raises(RuntimeError):
+        await streams.binance_depth_recovery("BTCUSDT")
+    assert streams.binance_depth.await_count == 1

@@ -96,6 +96,8 @@ class Bybit:
     async def candles(self, symbol, interval, asof, limit=200, start=None):
         width = 86_400_000 if interval == "D" else int(interval) * 60_000
         end, rows = asof - 1, {}
+        if start is not None:
+            end = min(end, start + limit * width - 1)
         while len(rows) < limit:
             params = dict(
                 category="linear",

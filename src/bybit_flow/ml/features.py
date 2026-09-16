@@ -83,7 +83,75 @@ CATALOG = {
         }.items()
     },
 }
-CONTEXT = ("family", "direction", "regime", "source", "liquidity_bucket", "score_profile")
+CONTEXT = (
+    "family",
+    "direction",
+    "regime",
+    "source",
+    "liquidity_bucket",
+    "score_profile",
+    "horizon_profile",
+    "entry_session",
+)
+for _group, _fields in {
+    "range": ("location", "width_atr", "compression", "boundary_interactions", "breakout_distance_atr"),
+    "auction": ("poc_shift", "value_overlap"),
+    "flow": (
+        "buy_efficiency",
+        "sell_efficiency",
+        "delta_persistence",
+        "cvd_slope",
+        "cvd_acceleration",
+        "same_side_run",
+    ),
+    "book": ("obi_touch", "obi_5bps", "obi_10bps", "obi_25bps", "obi_persistence", "microprice_minus_mid"),
+    "market_factor": (
+        "beta_to_btc",
+        "beta_to_eth",
+        "correlation_to_btc",
+        "correlation_to_eth",
+        "residual_return",
+    ),
+    "execution": ("stop_noise_ratio", "depth_consumed", "volatility_ratio"),
+    "derivatives": (
+        "price_up_oi_up",
+        "price_up_oi_down",
+        "price_down_oi_up",
+        "price_down_oi_down",
+        "crowding_score",
+        "deleveraging_score",
+        "basis",
+    ),
+    "session_metrics": (
+        "baseline_samples",
+        "spread_relative",
+        "depth_relative",
+        "trade_intensity_relative",
+        "turnover_relative",
+        "delta_relative",
+    ),
+}.items():
+    for _field in _fields:
+        CATALOG[_group + "_" + _field] = (
+            _group,
+            "evidence." + _group + "." + _field,
+            "Causal observed " + _group + " " + _field,
+        )
+CATALOG["quality_score"] = ("quality", "quality", "Frozen combined quality; never calibrated probability")
+for _category in (
+    "regime",
+    "structure",
+    "orderflow",
+    "derivatives",
+    "execution",
+    "fundamentals",
+    "cross_market",
+):
+    CATALOG["score_" + _category] = (
+        "quality",
+        "evidence.score_components." + _category + ".earned",
+        "Frozen earned category points",
+    )
 
 # Source-specific fields; TV classified volumes never populate native buy_base/sell_base.
 for _key in (

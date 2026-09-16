@@ -4,6 +4,7 @@ import asyncio
 import gzip
 import hashlib
 import json
+import os
 import sqlite3
 import time
 import uuid
@@ -15,6 +16,21 @@ import pyarrow.parquet as pq
 
 def now_ms():
     return time.time_ns() // 1_000_000
+
+
+def directory_bytes(root):
+    if not root.exists():
+        return 0
+    total = 0
+    pending = [root]
+    while pending:
+        with os.scandir(pending.pop()) as entries:
+            for entry in entries:
+                if entry.is_dir(follow_symlinks=False):
+                    pending.append(entry.path)
+                elif entry.is_file(follow_symlinks=False):
+                    total += entry.stat(follow_symlinks=False).st_size
+    return total
 
 
 class StorageBudgetExceeded(OSError):
@@ -50,12 +66,26 @@ class Store:
             received_ms INTEGER NOT NULL, payload TEXT NOT NULL, status TEXT NOT NULL,
             result TEXT);
         CREATE INDEX IF NOT EXISTS tv_pending ON tv_inbox(status,received_ms);
+        CREATE INDEX IF NOT EXISTS signals_recent ON signals(created_ms DESC);
         INSERT OR IGNORE INTO schema_version VALUES(2);
         """)
         self.db.commit()
         from .ml.store import migrate
 
         migrate(self.db)
+        from .observations import migrate as migrate_observations
+
+        migrate_observations(self)
+        from .packing import migrate as migrate_packing
+
+        migrate_packing(self)
+        if self.get("horizon_counts") is None:
+            counts = dict(
+                self.db.execute(
+                    "SELECT coalesce(json_extract(payload,'$.horizon_profile'),'LEGACY'),count(*) FROM signals GROUP BY 1"
+                ).fetchall()
+            )
+            self.put("horizon_counts", counts)
 
     def put(self, key, value):
         with self.db:
@@ -67,6 +97,10 @@ class Store:
 
     def signal(self, signal, reason="evaluation"):
         from .ml.store import FeatureStore
+        from .observations import preserve_origin, start
+
+        if signal.synthetic:
+            raise ValueError("Synthetic signals must never enter research storage")
 
         # Capture before lifecycle overwrites; both accepted and rejected decisions survive.
         features = FeatureStore(self)
@@ -75,6 +109,11 @@ class Store:
             features.capture(signal, max(now_ms(), signal.created_ms), "decision")
         old = self.db.execute("SELECT state FROM signals WHERE id=?", (signal.id,)).fetchone()
         with self.db:
+            preserve_origin(self, signal)
+            if not old:
+                counts = self.get("horizon_counts", {})
+                counts[signal.horizon_profile] = counts.get(signal.horizon_profile, 0) + 1
+                self.db.execute("INSERT OR REPLACE INTO kv VALUES('horizon_counts',?)", (json.dumps(counts),))
             self.db.execute(
                 "INSERT OR REPLACE INTO signals VALUES(?,?,?,?,?)",
                 (signal.id, signal.symbol, signal.created_ms, signal.state, signal.model_dump_json()),
@@ -84,6 +123,7 @@ class Store:
                     "INSERT INTO transitions(signal_id,at_ms,state,reason) VALUES(?,?,?,?)",
                     (signal.id, now_ms(), signal.state, reason),
                 )
+        start(self, signal, now_ms())
 
     def signals(self, limit=200):
         return [
@@ -135,6 +175,11 @@ class Store:
 
 
 class Recorder:
+    def metadata_size(self):
+        return sum(p.stat().st_size for p in self.store.root.iterdir() if p.is_file()) + sum(
+            directory_bytes(self.store.root / name) for name in ("ml", "quarantine")
+        )
+
     def __init__(self, store, settings):
         self.store, self.settings = store, settings
         self.queue = asyncio.Queue(maxsize=settings.queue_size)
@@ -143,7 +188,8 @@ class Recorder:
         self.written = 0
         self.pending_bytes = 0
         self.running = True
-        self.disk_bytes = sum(p.stat().st_size for p in store.root.rglob("*") if p.is_file())
+        self.disk_bytes = directory_bytes(store.root)
+        self.metadata_bytes = self.metadata_size()
         self.retention_freed = store.get("recording_retention", {}).get("total_freed_bytes", 0)
 
     def offer(self, source, symbol, event_ms, payload, receipt_ms=None, complete=True):
@@ -170,10 +216,14 @@ class Recorder:
             raise RuntimeError(self.reason) from None
 
     def flush(self, batch):
+        metadata = self.metadata_size()
+        self.disk_bytes += metadata - self.metadata_bytes
+        self.metadata_bytes = metadata
         freed = self.store.get("recording_retention", {}).get("total_freed_bytes", 0)
         self.disk_bytes = max(0, self.disk_bytes - max(0, freed - self.retention_freed))
         self.retention_freed = freed
-        if self.disk_bytes >= self.settings.max_storage_gb * 1e9:
+        reserve = 2 * sum(len(json.dumps(row).encode()) for row in batch) + 65536
+        if self.disk_bytes + reserve >= self.settings.max_storage_gb * 1e9:
             raise StorageBudgetExceeded("Configured recording storage limit reached")
         ident = f"{now_ms()}-{uuid.uuid4().hex[:8]}"
         directory = self.store.root / "segments"
@@ -212,7 +262,11 @@ class Recorder:
                 "INSERT INTO segments VALUES(?,?,?)", (ident, now_ms(), json.dumps(manifest))
             )
         self.store.put("last_segment", {"id": ident, "sha256": digest})
-        self.disk_bytes += raw.stat().st_size + normalized.stat().st_size
+        self.disk_bytes += (
+            raw.stat().st_size
+            + normalized.stat().st_size
+            + (directory / f"{ident}.manifest.json").stat().st_size
+        )
         self.written += len(batch)
 
     async def run(self):
@@ -226,14 +280,15 @@ class Recorder:
                     pass
                 # Drain buffered events before yielding to producers again. Awaiting
                 # every queued row lets websocket bursts outrun the single writer.
-                while len(batch) < 1000:
+                while len(batch) < self.settings.recorder_segment_rows:
                     try:
                         batch.append(self.queue.get_nowait())
                     except asyncio.QueueEmpty:
                         break
                 if batch and (
-                    len(batch) >= 100
-                    or time.monotonic() - last_flush >= 1
+                    len(batch) >= self.settings.recorder_segment_rows
+                    or self.pending_bytes >= self.settings.queue_byte_limit * 0.5
+                    or time.monotonic() - last_flush >= self.settings.recorder_segment_seconds
                     or (not self.running and self.queue.empty())
                 ):
                     self.flush(batch)
@@ -245,6 +300,6 @@ class Recorder:
             if isinstance(exc, StorageBudgetExceeded):
                 self.reason = (
                     f"Recording storage limit reached ({self.settings.max_storage_gb:g} GB); "
-                    "increase FLOW_MAX_STORAGE_GB within available disk space or archive recordings, then restart"
+                    "safe cleanup could not free sufficient evidence-independent space; inspect storage status"
                 )
             self.store.put("recorder_gap", {"at_ms": now_ms(), "reason": self.reason})

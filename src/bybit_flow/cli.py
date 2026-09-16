@@ -22,6 +22,10 @@ def main():
     market = sub.add_parser("test-market", help="Genuine public REST and trade WebSocket smoke test")
     market.add_argument("--exchange", choices=["binance", "bybit", "okx"])
     sub.add_parser("test-discord", help="Send a connection test, never a trade signal")
+    sub.add_parser("test-signal", help="Send an explicitly labeled synthetic pipeline test; no ML records")
+    storage = sub.add_parser("storage", help="Managed evidence budget")
+    storage.add_argument("operation", choices=["status", "cleanup", "compact"])
+    storage.add_argument("--dry-run", action="store_true")
     candles = sub.add_parser("download-candles")
     candles.add_argument("symbol")
     candles.add_argument("--exchange", choices=["binance", "bybit", "okx"], default="binance")
@@ -63,7 +67,23 @@ def main():
         return
     store = Store(settings.data_dir)
     try:
-        if args.command in {"doctor", "test-market", "test-discord"}:
+        if args.command == "test-signal":
+            from .synthetic import test_signal
+
+            print(json.dumps(asyncio.run(test_signal(settings, store)), indent=2))
+        elif args.command == "storage":
+            from .packing import compact
+            from .retention import prune_recordings, storage_status
+
+            result = (
+                storage_status(store, settings)
+                if args.operation == "status"
+                else compact(store, dry_run=args.dry_run)
+                if args.operation == "compact"
+                else prune_recordings(store, settings, dry_run=args.dry_run)
+            )
+            print(json.dumps(result, indent=2))
+        elif args.command in {"doctor", "test-market", "test-discord"}:
             asyncio.run(diagnostic_command(args, settings, store))
         elif args.command == "ml":
             from .ml.cli import run

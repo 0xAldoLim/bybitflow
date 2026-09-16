@@ -75,7 +75,7 @@ async def test_recording_storage_limit_reports_actionable_reason(settings):
     rec.running = False
     await rec.run()
     assert not rec.healthy
-    assert "FLOW_MAX_STORAGE_GB" in rec.reason
+    assert "storage status" in rec.reason
     assert "storage limit reached" in store.get("recorder_gap")["reason"]
     assert rec.written == 0
     store.close()

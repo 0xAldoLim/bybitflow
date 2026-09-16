@@ -30,7 +30,10 @@ def test_retention_preserves_learning_and_active_history(settings, signal):
             ]
         )
     manifests = sorted(store.rows("segments"), key=lambda m: m["max_receipt_ms"])
-    FeatureStore(store).capture(signal, 2000, "decision")
+    ident = FeatureStore(store).capture(signal, 2000, "decision")
+    FeatureStore(store).label(
+        ident, {"policy": "prints-v1", "complete": False, "classification": "incomplete"}, 3000
+    )
     before = store.db.execute("SELECT * FROM ml_snapshots").fetchall()
     model = store.root / "ml" / "models" / "preserved.json"
     model.parent.mkdir(parents=True, exist_ok=True)

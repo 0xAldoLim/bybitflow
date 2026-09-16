@@ -96,14 +96,13 @@ class FeatureStore:
 
     def snapshots(self, stage="decision", limit=10_000):
         rows = self.db.execute(
-            "SELECT id,payload FROM ml_snapshots WHERE stage=? ORDER BY decision_ms LIMIT ?",
-            (stage, limit + 1),
+            "SELECT id,payload FROM ml_snapshots WHERE stage=? ORDER BY decision_ms DESC,id DESC LIMIT ?",
+            (stage, limit),
         ).fetchall()
         # Close the bounded read cursor before yielding: the recorder may commit
         # while labeling, and an old WAL read snapshot cannot upgrade to a writer.
-        for i, row in enumerate(rows):
-            if i >= limit:
-                raise ValueError("Dataset exceeds configured bounded research capacity")
+        # Keep a rolling chronological training window without deleting older rows.
+        for row in reversed(rows):
             yield {"id": row[0], **json.loads(row[1])}
 
     def label(self, snapshot_id, result, available_ms):

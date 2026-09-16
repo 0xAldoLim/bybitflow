@@ -12,7 +12,9 @@ from bybit_flow.storage import Store
 @pytest.mark.parametrize(
     "points,grade",
     [
-        (0, "D"),
+        (0, "F"),
+        (20, "E"),
+        (35, "D"),
         (49.9, "D"),
         (50, "C"),
         (64.9, "C"),

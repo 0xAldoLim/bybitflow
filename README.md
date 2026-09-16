@@ -4,9 +4,18 @@ BybitFlow monitors crypto perpetual markets and sends Discord alerts when a setu
 passes price-action, order-flow, liquidity and risk checks. Each alert includes a
 direction, entry zone, stop loss and two targets. It does not place orders.
 
-The current setups are **intraday trades, tracked for up to four hours**. A
-60-second order-flow window is an entry-confirmation window, not a one-minute
-holding period. Setup grades run from SSS to D; the score is not a win probability.
+The engine evaluates **short intraday (15 minutes–2 hours), core intraday
+(1–4 hours), swing (4–48 hours), and extended swing (2–7 days)** profiles using
+shared market feeds. Extended swing initially runs as shadow research. Core
+intraday preserves the original 4H/1H/15M strategy. A 60-second flow window is an
+entry-confirmation window, not a one-minute holding period. Grades run from SSS
+to F; the combined hand-engineered quality score is not a win probability.
+
+Existing setups retain their original plan, score and lifecycle. Operationally
+expired signals can continue lightweight research observation, but a late target
+never changes an expired trade into a historical win. See the
+[horizon and expiry guide](docs/USER_RUNBOOK.md#multi-horizon-research) and
+[research references](docs/RESEARCH_REFERENCES.md).
 
 ## Start and stop on Windows
 
@@ -130,7 +139,8 @@ calibration, validation and untouched test periods follow. LSTM inputs contain
 
 Learning uses saved candidate snapshots, including rejected setups, and simulated
 outcomes from later recorded trades. A win means positive simulated profit after
-assumed costs, using TP1, SL or the four-hour time limit. Missing data and incomplete
+assumed costs, using TP1, SL or the frozen horizon's time limit (four hours for
+legacy/core intraday). Missing data and incomplete
 fills are excluded. It does not read a personal trading account or know actual fills.
 
 **Enabling ML starts collection and background processing, not an instantly trained

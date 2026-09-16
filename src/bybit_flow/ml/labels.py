@@ -57,22 +57,40 @@ def label_chart(store, events_path, candles_path, settings, symbol):
     )
 
 
-def label_recordings(store, rows, settings, stage="decision", max_active=2000):
+def label_recordings(store, rows, settings, stage="decision", max_active=2000, observed_until_ms=None):
+    import heapq
+    from collections import defaultdict
+
     fs = FeatureStore(store)
     retained_after = store.get("recording_retention", {}).get("through_ms", 0)
     # Previously frozen labels stay available for learning. Unlabelled decisions
     # before the retained boundary cannot be reconstructed from newer prints.
-    pending = (s for s in fs.snapshots(stage) if s["decision_ms"] > retained_after)
+    rows_pending = store.db.execute(
+        "SELECT s.id FROM ml_snapshots s WHERE s.stage=? AND s.decision_ms>? AND NOT EXISTS "
+        "(SELECT 1 FROM ml_labels l WHERE l.snapshot_id=s.id AND l.policy='prints-v1') ORDER BY s.decision_ms,s.id LIMIT 10000",
+        (stage, retained_after),
+    ).fetchall()
+    # Keep only IDs in memory and close the read cursor before writing labels.
+    pending = iter(
+        {
+            "id": r[0],
+            **json.loads(
+                store.db.execute("SELECT payload FROM ml_snapshots WHERE id=?", (r[0],)).fetchone()[0]
+            ),
+        }
+        for r in rows_pending
+    )
     next_snapshot = next(pending, None)
     active, results, subscribed, last, seen = {}, [], set(), {}, set()
+    by_market, deadlines = defaultdict(dict), []
     now, previous = 0, -1
 
     def finish(ident, snapshot, position, at_ms):
         outcome = position.outcome()
         # Liquidity participation may prevent a timely time-stop exit; do not label a later fill as 4H.
-        if outcome["exit_ms"] and outcome["exit_ms"] > position.signal.created_ms + 14_400_000:
+        if outcome["exit_ms"] and outcome["exit_ms"] > position.signal.created_ms + position.horizon_ms:
             outcome["complete"] = False
-            outcome["data_gaps"].append("exit beyond maximum four-hour policy")
+            outcome["data_gaps"].append("exit beyond maximum frozen horizon policy")
         reserve = position.entry_value * settings.funding_reserve_bps / 10000
         risk = position.quantity * abs(position.signal.entry - position.signal.stop)
         if outcome["complete"]:
@@ -95,18 +113,27 @@ def label_recordings(store, rows, settings, stage="decision", max_active=2000):
             funding_assumption_bps=settings.funding_reserve_bps,
             feature_schema_version=snapshot["schema_version"],
             model_version=snapshot["signal"].get("model_version"),
+            horizon_profile=position.signal.horizon_profile,
+            entry_session=position.signal.entry_session,
             input_event_hash=event_hash.hexdigest(),
-            outcome_definition="whole position TP1/stop/4H, 1% trade participation, fee/slip/funding assumptions",
+            outcome_definition="whole position TP1/stop/frozen horizon, 1% trade participation, fee/slip/funding assumptions",
         )
         # Unresolved outcomes remain reproducible reports, not frozen labels blocking later completion.
-        if position.exit_ms is not None:
-            fs.label(ident, outcome, at_ms)
+        if position.exit_ms is not None or at_ms > position.signal.created_ms + position.horizon_ms + 60_000:
+            if position.exit_ms is None:
+                outcome["data_gaps"].append(
+                    "horizon ended without sufficient observed prints to establish a completed exit"
+                )
+            # Exchange event time may lead local receipt by an accepted small skew.
+            # Label availability must not precede its exit event; future exports still exclude it.
+            fs.label(ident, outcome, max(at_ms, outcome.get("exit_ms") or 0, snapshot["decision_ms"]))
         results.append(dict(snapshot_id=ident, **outcome))
 
     import hashlib
 
     event_hash = hashlib.sha256()
     for row in rows:
+        done = set()
         now = row["receipt_ms"]
         if now < previous:
             raise ValueError("Labels require receipt-ordered records")
@@ -137,12 +164,15 @@ def label_recordings(store, rows, settings, stage="decision", max_active=2000):
                 settings.hypothetical_notional / signal.entry,
                 fee_bps=settings.taker_fee_bps,
                 slippage_bps=settings.slippage_bps,
+                horizon_ms=signal.expected_hold_max * 60_000,
             )
             if (signal.source, signal.symbol) not in subscribed or now - s[
                 "decision_ms"
             ] > settings.trade_stale_ms:
                 p.data_gaps.append("entry coverage not continuously observed")
             active[s["id"]] = (s, p)
+            by_market[(signal.source, signal.symbol)][s["id"]] = p
+            heapq.heappush(deadlines, (signal.created_ms + p.horizon_ms + 60_000, s["id"]))
         if source == "control/subscribed":
             subscribed.update((venue, s) for s in payload["symbols"])
         removed = {(venue, s) for s in payload.get("removed", [])} if source == "control/rotation" else set()
@@ -155,7 +185,7 @@ def label_recordings(store, rows, settings, stage="decision", max_active=2000):
         if source == "control/source_change":
             removed = set(subscribed)
         subscribed.difference_update(removed)
-        for s, p in active.values():
+        for s, p in active.values() if removed or not row.get("complete", True) else ():
             affected = (p.signal.source, p.signal.symbol) in removed
             if affected or (
                 not row.get("complete", True)
@@ -174,8 +204,8 @@ def label_recordings(store, rows, settings, stage="decision", max_active=2000):
                 # for a decision already activated above or across a later feed gap.
                 subscribed.add(source_symbol)
             if source_symbol in last and now - last[source_symbol] > settings.trade_stale_ms:
-                for s, p in active.values():
-                    if (p.signal.source, p.signal.symbol) == source_symbol:
+                for p in by_market[source_symbol].values():
+                    if "trade-feed stale interval" not in p.data_gaps:
                         p.data_gaps.append("trade-feed stale interval")
             last[source_symbol] = now
             for raw in payload["data"]:
@@ -196,17 +226,36 @@ def label_recordings(store, rows, settings, stage="decision", max_active=2000):
                     Decimal(raw["v"]),
                     venue,
                 )
-                for s, p in active.values():
-                    if p.signal.source == venue:
-                        p.on_trade(trade)
-        done = [
-            ident
-            for ident, (s, p) in active.items()
-            if p.exit_ms is not None or now > p.signal.created_ms + 14_460_000
-        ]
+                for ident, p in by_market[source_symbol].items():
+                    p.on_trade(trade)
+                    if p.exit_ms is not None:
+                        done.add(ident)
+        while deadlines and deadlines[0][0] < now:
+            _, ident = heapq.heappop(deadlines)
+            if ident in active:
+                done.add(ident)
         for ident in done:
             s, p = active.pop(ident)
+            del by_market[(p.signal.source, p.signal.symbol)][ident]
             finish(ident, s, p, now)
+    if observed_until_ms is not None and observed_until_ms > now:
+        now = observed_until_ms
+        for s, p in active.values():
+            p.data_gaps.append("recording ended before the live observation cutoff")
+        while next_snapshot and next_snapshot["decision_ms"] <= now:
+            s = next_snapshot
+            next_snapshot = next(pending, None)
+            signal = Signal.model_validate(s["signal"])
+            signal.created_ms = s["decision_ms"]
+            p = PaperPosition(
+                signal,
+                settings.hypothetical_notional / signal.entry,
+                fee_bps=settings.taker_fee_bps,
+                slippage_bps=settings.slippage_bps,
+                horizon_ms=signal.expected_hold_max * 60_000,
+            )
+            p.data_gaps.append("no recording covers this decision before the live observation cutoff")
+            finish(s["id"], s, p, now)
     for ident, (s, p) in active.items():
         finish(ident, s, p, now)
     return dict(

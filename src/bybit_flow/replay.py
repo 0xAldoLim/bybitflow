@@ -1,6 +1,5 @@
 """Replay actual recorder envelopes in receipt order using the live feature/strategy modules."""
 
-import gzip
 import hashlib
 import itertools
 import json
@@ -12,6 +11,7 @@ from .ingestion import parse_eligible_metadata
 from .liquidity import SpreadHistory
 from .models import Candle, Trade
 from .orderflow import Book, Tape, footprint
+from .packing import manifest_for, raw_bytes, raw_stream
 from .risk import evaluate_risk
 from .strategy import candidates, confirm
 
@@ -21,14 +21,11 @@ def segment_rows(paths):
         from pathlib import Path
 
         path = Path(path)
-        manifest_path = path.with_name(path.name.removesuffix(".jsonl.gz") + ".manifest.json")
-        if not manifest_path.exists():
-            raise ValueError("Raw segment lacks manifest; verify provenance before replay")
-        manifest = json.loads(manifest_path.read_text())
-        if hashlib.sha256(path.read_bytes()).hexdigest() != manifest["sha256"]:
+        manifest = manifest_for(path)
+        if hashlib.sha256(raw_bytes(path)).hexdigest() != manifest["sha256"]:
             raise ValueError("Raw segment integrity mismatch")
         previous = -1
-        with gzip.open(path, "rt") as f:
+        with raw_stream(path) as f:
             for line in f:
                 row = json.loads(line)
                 if row["receipt_ms"] < previous:
@@ -41,10 +38,7 @@ def segment_rows(paths):
     manifests = []
     for path in paths:
         path = Path(path)
-        manifest_path = path.with_name(path.name.removesuffix(".jsonl.gz") + ".manifest.json")
-        if not manifest_path.exists():
-            raise ValueError("Raw segment lacks manifest; verify provenance before replay")
-        manifests.append((json.loads(manifest_path.read_text()), path))
+        manifests.append((manifest_for(path), path))
     manifests.sort(key=lambda item: (item[0].get("min_receipt_ms", item[0]["collected_ms"]), item[0]["id"]))
     previous, last_receipt = None, -1
     for manifest, path in manifests:
@@ -100,6 +94,10 @@ def replay(rows, settings, families=None):
             source = "replay/evaluate"
         elif source == "features/signal":
             source = "replay/evaluate"
+        if source == "control/book_gap":
+            if symbol in books:
+                books[symbol].reset()
+            continue
         if source == "control/gap":
             gaps += 1
             for p in positions:

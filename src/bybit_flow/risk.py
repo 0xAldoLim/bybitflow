@@ -13,7 +13,7 @@ def evaluate_risk(signal, instrument, settings, book, portfolio=None, funding_ra
         reasons.append("entry outside planned zone")
     fee = settings.taker_fee_bps / 10000
     # Four-hour horizon: reserve for every possible settlement, with unknown schedule over-reserved.
-    settlements = math.ceil(240 / max(1, instrument.funding_interval_minutes))
+    settlements = math.ceil(signal.expected_hold_max / max(1, instrument.funding_interval_minutes))
     funding_bps = max(
         settings.funding_reserve_bps,
         abs(funding_rate) * 10000 * settlements if funding_rate is not None else 0,

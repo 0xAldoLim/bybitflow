@@ -48,6 +48,14 @@ class Settings(BaseSettings):
     max_storage_gb: float = Field(10, gt=0.1)
     recording_retention_enabled: bool = False
     ml_two_stage: bool = False
+    horizon_profiles: list[Literal["SHORT_INTRADAY", "CORE_INTRADAY", "SWING", "EXTENDED_SWING"]] = Field(
+        default_factory=lambda: ["CORE_INTRADAY", "SHORT_INTRADAY", "SWING", "EXTENDED_SWING"]
+    )
+    exploration_fraction: float = Field(0.125, ge=0.1, le=0.15)
+    post_terminal_enabled: bool = True
+    post_terminal_checkpoints: dict[str, list[int]] = Field(default_factory=dict)
+    recorder_segment_seconds: int = Field(15, ge=1, le=60)
+    recorder_segment_rows: int = Field(10000, ge=100, le=50000)
     raw_retention_days: int = Field(14, ge=1)
     rest_requests_per_second: float = Field(3, gt=0, le=10)
     research_alerts: bool = False
@@ -69,6 +77,18 @@ class Settings(BaseSettings):
     @classmethod
     def empty_equity(cls, value):
         return None if value == "" else value
+
+    @field_validator("post_terminal_checkpoints")
+    @classmethod
+    def valid_checkpoints(cls, value):
+        from .horizons import PROFILES
+
+        for profile, minutes in value.items():
+            if profile not in PROFILES or not minutes or any(m <= 0 or m > 43200 for m in minutes):
+                raise ValueError("Checkpoints require a known horizon and minutes within 1–43200")
+            if minutes != sorted(set(minutes)):
+                raise ValueError("Checkpoint minutes must be increasing and unique")
+        return value
 
     def public(self):
         return self.model_dump(

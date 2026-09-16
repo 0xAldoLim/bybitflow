@@ -19,7 +19,9 @@ def tier(score):
             (75, "A"),
             (65, "B"),
             (50, "C"),
-            (0, "D"),
+            (35, "D"),
+            (20, "E"),
+            (0, "F"),
         )
         if score >= cutoff
     )
@@ -87,6 +89,38 @@ def score(signal, flow_confirmed, derivatives_available, fundamental=None, cross
         "fundamentals": len(categories & required) / len(required),
         "cross_market": cross_fraction,
     }
+    if signal.horizon_profile != "LEGACY" and e.get("range"):
+        r, auction, execution = (e.get(k, {}) for k in ("range", "auction", "execution"))
+        # Original categories and weights stay intact; measured evidence refines each category.
+        location = (
+            unit(abs(r.get("location", 0.5) - 0.5) * 2)
+            if reversal
+            else unit(r.get("breakout_distance_atr", 0) + 0.5)
+        )
+        e["location_quality"] = location
+        fractions["structure"] *= 0.7 + 0.3 * location
+        persistence = unit(flow.get("delta_persistence", 0))
+        book = e.get("book", {})
+        dom = unit((1 + sign * book.get("obi_persistence", 0)) / 2)
+        dom *= unit(book.get("obi_samples", 0), 30)
+        short = signal.horizon_profile == "SHORT_INTRADAY"
+        fractions["orderflow"] *= (
+            (0.65 + 0.2 * persistence + 0.15 * dom) if short else (0.85 + 0.15 * persistence)
+        )
+        if auction.get("available"):
+            aligned = auction["state"] in (
+                {"DISCOVERY_UP", "REJECTION_LOW"} if sign > 0 else {"DISCOVERY_DOWN", "REJECTION_HIGH"}
+            )
+            fractions["structure"] *= 0.85 + 0.15 * int(aligned or auction["state"] == "BALANCE" and reversal)
+        fractions["execution"] *= unit(execution.get("stop_noise_ratio", 0), 1)
+        factor = e.get("market_factor", {})
+        if factor.get("available"):
+            fractions["cross_market"] *= 0.75 + 0.25 * int(sign * factor["residual_return"] >= 0)
+        if signal.horizon_profile in {"SWING", "EXTENDED_SWING"}:
+            fractions["derivatives"] *= unit(1 - max(0, same_funding) * signal.expected_hold_max / 480 / 0.01)
+        e["score_reasons"] = [
+            f"{k}: {v:.3f} of category weight from observed evidence" for k, v in fractions.items()
+        ]
     signal.quality = round(sum(WEIGHTS[k] * v for k, v in fractions.items()), 1)
     signal.raw_tier = "F" if signal.gates else tier(signal.quality)
     signal.evidence["score_components"] = {

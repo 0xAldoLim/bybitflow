@@ -44,10 +44,10 @@ function table(columns, rows) {
 function signalTable(rows) {
   return rows.length
     ? table(
-        ["Market / direction", "Setup", "Quality", "State", "Created"],
+        ["Market / direction", "Setup / horizon", "Quality", "State", "Created"],
         rows.map((s) => [
           `<a href="#signal/${encodeURIComponent(s.id)}">${escape(s.symbol)} <span class="${s.direction === "LONG" ? "green" : "red"}">${escape(s.direction)}</span></a>`,
-          escape(s.family),
+          escape(s.family) + "<br>" + escape(s.horizon_profile || "LEGACY"),
           `${number(s.quality, 1)} <span class="tag">${escape(s.final_tier)}</span>`,
           escape(s.state === "ALERTED" && s.coverage?.monitoring === "paused" ? "MONITORING PAUSED" : s.state),
           utc(s.created_ms),
@@ -168,12 +168,13 @@ async function render() {
           "Independent experimental families",
         ],
         ["RECORDED EVENTS", number(data.health.records_written), "This collector process"],
-        ["RESEARCH GRADES", "SSS–D", "Quality score, 0–100"],
+        ["RESEARCH GRADES", "SSS–F", "Quality score, 0–100"],
       ];
       body =
         `<div class="metrics">${metrics.map((m) => `<div class="metric"><label>${m[0]}</label><b>${m[1]}</b><small>${m[2]}</small></div>`).join("")}</div>` +
         panel("Priority watchlist", watchTable(data.watchlist.slice(0, 8)), "RESEARCH RANK ≠ PROBABILITY") +
-        panel("Recent setups", signalTable(data.signals.slice(0, 8)), "4H → 1H → 15M");
+        panel("Recent setups", signalTable(data.signals.slice(0, 8)), "Shared feeds · multiple horizons") +
+        panel("Storage budget", `<p>${number(data.storage?.used_bytes / 1e9)} / ${number(data.storage?.budget_bytes / 1e9)} GB · ${escape(data.storage?.pressure || "Measuring")}</p>`);
     } else if (page === "watchlist")
       body = panel(
         "Eligible markets",
@@ -185,6 +186,7 @@ async function render() {
     else if (page === "ml") {
       const ml = await api("ml"),
         latest = ml.models[0];
+      const horizons = await api("horizons");
       body = panel(
         "Champion and collection",
         json({
@@ -193,12 +195,18 @@ async function render() {
           decision_snapshots: ml.decision_snapshots,
           labels: ml.labels,
           monitoring: ml.monitoring,
+          replay_progress: ml.replay_progress,
           recording_audit: ml.recording_audit,
           learning_note: ml.learning_note,
           cycle: ml.cycle,
           drift: ml.drift,
         }),
       );
+      body += panel("Horizon and timing research",
+        table(["Profile", "Expected hold", "Research checkpoints"], Object.entries(horizons.profiles).map(([name,p]) =>
+          [escape(name), `${number(p.hold_min/60)}–${number(p.hold_max/60)} hours`, p.checkpoints.map(m => `${number(m/60)}h`).join(" · ")])) +
+        `<p>Current session: ${escape(horizons.session.primary)} · Late observations: ${escape(JSON.stringify(horizons.observations))}</p>` +
+        `<details><summary>Score buckets and research diagnostics</summary>${json(horizons.score_buckets)}</details>`);
       body += panel(
         "Model comparison",
         ml.models.length
@@ -388,11 +396,12 @@ async function render() {
         panel("Depth observations", json({ fresh: m.book_fresh, ...m.book }));
     } else if (page === "signal") {
       const { signal: s } = await api("signals/" + encodeURIComponent(id));
+      const observation = await api("observations/" + encodeURIComponent(id));
       const f = s.evidence.flow || {};
       body =
         panel(
           `${s.symbol} · ${s.direction} · ${s.final_tier}`,
-          `<p>${escape(s.reason)}</p>` +
+          `<p>${escape(s.horizon_profile || "LEGACY")} · ${escape(s.entry_session || "Legacy session not recorded")} · ${escape(s.version)}</p><p>${escape(s.reason)}</p>` +
             table(
               ["Entry zone", "Stop", "TP1 / TP2", "Quality / probability"],
               [
@@ -410,6 +419,8 @@ async function render() {
         panel("Executed footprint", profile(f.profile), "Window profile; not a full session") +
         panel("Cumulative volume delta", lineChart(f.cvd_path || []), "Base units · execution window") +
         `</div>` +
+        panel("Operational status and later research", `<p>${escape(s.state)} · ${escape(observation.research_observation_status || "No late observation")}</p>` +
+          (observation.primary_outcome ? `<p>Primary: ${escape(observation.primary_outcome)} · Extended same rules: ${escape(observation.extended_same_rules_outcome)} · Late target: ${escape(observation.late_target_hit)}</p><p>Later price movement does not rewrite the original result.</p>` : "")) +
         panel(
           "Evidence & risk",
           `<details open><summary>Risk and rejection gates</summary>${json({ risk: s.risk, gates: s.gates })}</details><details><summary>Complete reproducible evidence</summary>${json(s)}</details>`,

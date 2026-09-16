@@ -22,7 +22,7 @@ settings without replacing their credentials.
 |---|---|
 | `FLOW_ADMIN_TOKEN` | Required dashboard password; username is `research` |
 | `FLOW_RESEARCH_WEBHOOK` | Discord research-channel webhook |
-| `FLOW_RESEARCH_ALERTS=true` | Enable confirmed SSS–D research cards |
+| `FLOW_RESEARCH_ALERTS=true` | Enable confirmed SSS–F research cards; mandatory rejection still blocks delivery |
 | `FLOW_SSS_RESEARCH=true` | Enable SSS-only cards when broader research alerts are disabled |
 | `FLOW_SCAN_ENABLED=true` | Enable public-data collection and scanning |
 | `FLOW_MARKET_SOURCE=auto` | Probe Binance, Bybit, then OKX and retain a working primary |
@@ -49,6 +49,7 @@ docker compose --profile ml ps
 docker compose exec desk bybit-flow doctor
 docker compose exec desk bybit-flow test-market
 docker compose exec desk bybit-flow test-discord
+docker compose exec desk bybit-flow test-signal
 ```
 
 Open [the dashboard](http://127.0.0.1:8000). The Discord test is labelled as a
@@ -57,6 +58,142 @@ connection test and does not represent a trade setup.
 `doctor` reports configuration, storage, database, source probes, and recorded
 runtime health. `test-market` verifies REST and actual trade WebSocket reception.
 A configured webhook or passing offline test does not establish external delivery.
+
+## Multi-horizon research
+
+| Profile | Context / setup / execution | Expected holding | Publication |
+|---|---|---|---|
+| SHORT_INTRADAY | 1H / 15M / 5M | 15 minutes–2 hours | Confirmed research alerts |
+| CORE_INTRADAY | 4H / 1H / 15M | 1–4 hours | Original strategy remains supported |
+| SWING | 1D / 4H / 1H | 4–48 hours | Confirmed research alerts |
+| EXTENDED_SWING | 1D / 4H / 1H | 2–7 days | Shadow research initially; no automatic public SSS |
+| LEGACY | Original frozen configuration | Original deadline | Original lifecycle continues |
+
+The scanner evaluates each configured profile with its corresponding closed bars,
+using the same public streams and candle cache. A minute of executed flow remains
+the confirmation requirement when configured; it does not set the holding period.
+Each horizon receives its own immutable candidate and one combined quality score.
+Related plans have a thesis ID. Near-identical plans are suppressed at delivery;
+materially different entry/stop/target plans may receive separate alerts. The
+cooldown suppresses substantially repeated plans; legacy signals retain their
+original symbol cooldown. Longer holding periods reserve more funding.
+Extended-swing observations do not bypass validation by receiving a high score.
+
+`FLOW_HORIZON_PROFILES` accepts a JSON list of enabled profiles. Core intraday
+remains the baseline strategy. `FLOW_POST_TERMINAL_ENABLED` controls the lightweight
+worker. `FLOW_POST_TERMINAL_CHECKPOINTS` can override research checkpoint minutes
+from creation, for example `{"CORE_INTRADAY":[480,720,1440,2880]}`. Checkpoints are
+research policies, not optimized holding-time promises.
+
+Default research checkpoints are 4/8/24 hours for short intraday; 8/12/24/48 hours
+for core intraday; 72 hours/5 days/7 days for swing; 10/14 days for extended swing.
+The original operational deadline is stored separately and never extended by a
+research checkpoint.
+
+### Existing signal continuity
+
+Before the horizon schema is created, the application makes an SQLite backup.
+Original serialized signals and their checksums are preserved in `signal_origins`.
+Historical terminal payloads are not rewritten. Older active records load as
+LEGACY, retain their plan and score, and continue through their original lifecycle.
+Restart is not an invalidation event, and the persistent Discord outbox prevents
+resending the original entry alert. No account fills are inferred from public data.
+
+### WHAT IF A SIGNAL EXPIRES BUT PRICE LATER REACHES THE TARGET?
+
+The original trade remains expired. Operational status and research observation
+status are separate: an EXPIRED setup can be FOLLOWING_LATE_OUTCOME, then COMPLETE.
+Compact closed one-minute candles record later favorable/adverse excursions,
+target/stop visits, elapsed times, sessions and checkpoints. They do not reactivate
+the trade or send a late move as an ordinary target-hit alert.
+
+The extended same-rules policy ignores the original time deadline while retaining
+the original stop and target. Stop before target means STOP, even if the target
+is reached later. If a candle touches both, stop wins conservatively. Missing
+coverage cannot establish an extended winner. Directional afterlife separately
+records favorable movement even after a stop. Price observations are bounds,
+not verified account executions.
+
+Primary model labels remain separate from `research_labels`. Late results are
+labels available only after observation, never inputs at the original decision.
+The pooled horizon research summary initially abstains below 100 completed,
+coverage-qualified family observations; it does not change production horizons or
+old signals. Timing classifications use deterministic rules and retain UNCLEAR
+when the data cannot distinguish poor entry from an overly tight stop.
+
+### Sessions and one combined score
+
+UTC timestamps are classified through IANA zones: Asia/Singapore 08:00–16:00,
+Europe/London 08:00–16:00, America/New_York 08:00–17:00. London and New York DST
+changes are handled by timezone data; overlap and off-session periods are explicit.
+Moving into another session does not invalidate an active thesis.
+
+The original seven score categories remain. Location, auction/value, sustained
+order flow, book pressure, factor-adjusted residuals and execution noise refine
+their evidence. Short intraday places more emphasis on sustained book/flow timing;
+longer horizons penalize accumulated funding more. Missing data earns no invented
+evidence. Quality tiers are SSS 95+, SS 90+, S 85+, A 75+, B 65+, C 50+, D 35+,
+E 20+, F below 20 or mandatory rejection. Thresholds are absolute rather than
+daily ranks. High quality does not override risk, coverage or execution gates.
+
+ML retains the regularized logistic baseline and the configured two-stage
+LightGBM/Random Forest/LSTM → logistic/SVM/probability-forest research pipeline.
+Training uses chronological partitions, purging and embargo. The worker resolves
+paper labels independently of model fitting. A bounded rolling training window
+does not delete older records. Models are not automatically called validated just
+because training succeeds. Probability and expected R are shown as UNCALIBRATED
+until independent qualification passes. SSS RESEARCH remains distinct from a
+statistically validated SSS recommendation.
+
+## Managed storage
+
+The outcome worker checks recording integrity before replay. Its progress appears
+in ML diagnostics. Completed labels are immutable. If a recording gap covers the
+rest of an elapsed holding period, the worker records an incomplete outcome rather
+than waiting indefinitely or inventing an exit. Incomplete outcomes never become
+training wins or losses. Decisions still within their holding period remain pending.
+
+Replay dispatches prints by venue and symbol and processes deadlines in time order.
+Order-book envelopes remain integrity-checked but are not replayed as price fills.
+Historical feature snapshots and labels survive raw-recording cleanup.
+
+The application budget remains `FLOW_MAX_STORAGE_GB=10`. It includes application
+data and metadata backups, not Docker images or the Docker virtual-disk allocation.
+Do not raise the limit repeatedly or delete the volume to recover space.
+
+Permanent data includes signals, original plans, features, labels, models,
+experiments and provenance. Raw event/depth segments are temporary only after
+their evidence is no longer required. Active setups, unresolved primary labels,
+replay/training leases and unprocessed records block unsafe deletion. Post-terminal
+research uses compact candles/checkpoints and releases the need for full DOM.
+
+Normal operation is below 70%; 70–85% triggers lossless packing; 85–95% permits
+oldest-safe raw cleanup; above 95% requires aggressive *safe* cleanup. The recorder
+stops if the budget cannot be respected without losing required evidence. This
+condition is operational, not permission to fabricate missing confirmation.
+Segment packing preserves original compressed bytes, hashes and manifests inside
+verified archives; replay can read packed segments. New recordings rotate at
+15 seconds or 10,000 rows by default, with a memory-pressure flush, rather than
+creating a tiny segment for each hundred events.
+
+From CMD in the project directory:
+
+```bat
+docker compose exec desk bybit-flow storage status
+docker compose exec desk bybit-flow storage cleanup --dry-run
+docker compose exec desk bybit-flow storage cleanup
+docker compose exec desk bybit-flow storage compact
+```
+
+Dry-run reports candidate segment/archive IDs, the protection cutoff, the reason
+and bytes that would be freed. SQLite history and model state are not cleanup
+targets. A replay lease protects evidence while a worker is processing it.
+
+`test-discord` verifies external delivery with BYBITFLOW CONNECTION TEST / NOT A
+TRADE SIGNAL. `test-signal` exercises a synthetic candidate, score, horizon, risk
+and formatting before sending TEST SIGNAL / NOT A REAL TRADE. Neither enters the
+signal or ML datasets. Passing these tests is separate from receiving an actual
+market-confirmed setup, and neither proves profitable performance.
 
 ## Collection and alerts
 
@@ -91,9 +228,10 @@ data without a model. See [ML research](ML_RESEARCH.md) for readiness and approv
 ## Recording retention
 
 `FLOW_RECORDING_RETENTION_ENABLED=true` enables raw-data cleanup in the ML worker
-after successful outcome processing. At 80% of `FLOW_MAX_STORAGE_GB`, it removes
+after successful outcome processing. At 85% of `FLOW_MAX_STORAGE_GB`, it removes
 the oldest raw, normalized and sidecar segment files toward 60% usage. At least
-six recent hours are protected for active four-hour outcomes. The database,
+six recent hours are protected; older active plans, unresolved labels and replay
+leases can extend that protection. The database,
 feature snapshots, labels, training datasets, models and segment hashes remain.
 Removed raw history cannot be replayed again; unlabelled decisions before the
 retention boundary are excluded rather than assigned invented outcomes. The

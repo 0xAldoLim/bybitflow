@@ -45,6 +45,7 @@ def create_app(settings=None):
     @asynccontextmanager
     async def lifespan(app):
         store = Store(settings.data_dir)
+        store.put("post_terminal_checkpoints", settings.post_terminal_checkpoints)
         recorder = Recorder(store, settings)
         scanner = Scanner(settings, store, recorder)
         app.state.store, app.state.recorder, app.state.scanner = store, recorder, scanner
@@ -128,6 +129,30 @@ def create_app(settings=None):
         from .ml.registry import Registry
 
         return Registry(request.app.state.store).summary()
+
+    @app.get("/api/horizons")
+    async def horizon_research(request: Request):
+        from dataclasses import asdict
+
+        from .horizons import PROFILES, session_context
+        from .observations import metrics
+
+        store = request.app.state.store
+        return dict(
+            profiles={k: asdict(v) for k, v in PROFILES.items()},
+            session=session_context(now_ms()),
+            observations=dict(store.db.execute("SELECT status,count(*) FROM observations GROUP BY status")),
+            score_buckets=metrics(store),
+            storage=store.get("storage_status", {}),
+            selection=store.get("deep_selection", {}),
+        )
+
+    @app.get("/api/observations/{signal_id}")
+    async def observation(signal_id: str, request: Request):
+        row = request.app.state.store.db.execute(
+            "SELECT payload FROM observations WHERE signal_id=?", (signal_id,)
+        ).fetchone()
+        return json.loads(row[0]) if row else {"status": "No post-terminal observation"}
 
     @app.get("/api/exchanges")
     async def exchange_health(request: Request):
@@ -270,6 +295,8 @@ def create_app(settings=None):
                 quotes=store.get("quote_health"),
             ),
             qualification="Research alerts; model qualification evaluated per signal",
+            horizons=store.get("horizon_counts", {}),
+            storage=store.get("storage_status", {}),
             at_ms=now_ms(),
         )
 

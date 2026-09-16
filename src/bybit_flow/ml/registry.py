@@ -187,6 +187,7 @@ class Registry:
             models=models,
             drift=self.store.get("ml_degraded"),
             monitoring=self.store.get("ml_monitor"),
+            replay_progress=self.store.get("ml_replay_progress"),
             recording_audit=self.store.get("ml_recordings"),
             learning_note="Requires real resolved decisions and chronological train/calibration/validation/holdout partitions (at least 500 complete labels). No automatic model promotion.",
             cycle=self.store.get("ml_cycle"),

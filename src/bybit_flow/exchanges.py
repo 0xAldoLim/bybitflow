@@ -310,15 +310,19 @@ class VenueAPI:
     async def candles(self, symbol, interval, asof, limit=200, start=None):
         if self.bybit:
             return await self.bybit.candles(symbol, interval, asof, limit=limit, start=start)
-        minutes = {"D": 1440, "240": 240, "60": 60, "15": 15}[interval]
+        minutes = {"D": 1440, "240": 240, "60": 60, "15": 15, "5": 5, "1": 1}[interval]
         width, end, result = minutes * 60000, asof - 1, {}
+        if start is not None:
+            end = min(end, start + limit * width - 1)
         while len(result) < limit:
             count = min(100 if self.name == "okx" else 499, limit - len(result) + 1)
             if self.name == "binance":
                 rows = await self.request(
                     "/fapi/v1/klines",
                     symbol=symbol,
-                    interval={"D": "1d", "240": "4h", "60": "1h", "15": "15m"}[interval],
+                    interval={"D": "1d", "240": "4h", "60": "1h", "15": "15m", "5": "5m", "1": "1m"}[
+                        interval
+                    ],
                     limit=count,
                     endTime=end,
                 )
@@ -327,7 +331,9 @@ class VenueAPI:
                     await self.request(
                         "/api/v5/market/history-candles",
                         instId=symbol_id(symbol, self.name),
-                        bar={"D": "1Dutc", "240": "4H", "60": "1H", "15": "15m"}[interval],
+                        bar={"D": "1Dutc", "240": "4H", "60": "1H", "15": "15m", "5": "5m", "1": "1m"}[
+                            interval
+                        ],
                         limit=count,
                         after=end,
                     )

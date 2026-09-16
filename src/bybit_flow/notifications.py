@@ -12,8 +12,6 @@ def iso(ms):
 
 
 def embed(signal, dashboard_url):
-    from .scoring import tier
-
     s = signal
     monitoring_event = s.coverage.get("monitoring_event")
     monitoring_update = monitoring_event in {"paused", "resumed", "ended"}
@@ -80,13 +78,42 @@ def embed(signal, dashboard_url):
         if s.risk.get("net_rr") is not None:
             summary += f"\nNet reward:risk {s.risk['net_rr']:.2f}R to TP1"
         field("Setup", summary)
+        if s.horizon_profile != "LEGACY":
+            a, f, d, market, execution = (
+                s.evidence.get(k, {})
+                for k in ("auction", "flow", "derivatives", "market_factor", "execution")
+            )
+
+            def number(value, precision=2):
+                return f"{value:.{precision}f}" if isinstance(value, (float, int)) else "unavailable"
+
+            field(
+                "Context",
+                f"{s.entry_session or 'OFF_SESSION'} · {a.get('state', 'UNCLEAR')}\n"
+                f"Flow Δ {number(f.get('delta_pct'))}% · CVD {number(f.get('cvd'))} · OBI {number(s.evidence.get('book', {}).get('obi_persistence'))}\n"
+                f"OI {number(d.get('oi_change_pct'))}% · funding {number(d.get('funding_rate'), 5)}\n"
+                f"BTC β {number(market.get('beta_to_btc'))} · residual {number(market.get('residual_return'), 5)}\n"
+                f"Spread {number(s.evidence.get('book', {}).get('spread_bps'))} bps · stop/noise {number(execution.get('stop_noise_ratio'))}",
+            )
+            validated = s.validation_status == "validated" and s.calibrated_probability is not None
+            field(
+                "Model",
+                f"P {s.calibrated_probability:.1%} · expected {number(s.expected_net_r)}R"
+                if validated
+                else "UNCALIBRATED · quality is not win probability",
+            )
 
     return {
         "allowed_mentions": {"parse": []},
         "embeds": [
             {
                 "title": f"{status} · {s.symbol} {s.direction}",
-                "description": f"**INTRADAY · up to 4 hours**\n{tier(s.quality)} · {s.quality:.1f}/100 quality · {s.source.capitalize()}"
+                "description": (
+                    f"**{s.horizon_profile} · {s.expected_hold_min / 60:g}–{s.expected_hold_max / 60:g} hours**"
+                    if s.horizon_profile != "LEGACY"
+                    else "**INTRADAY · up to 4 hours**"
+                )
+                + f"\n{s.raw_tier} · {s.quality:.1f}/100 quality · {s.source.capitalize()}"
                 + ("\nUpdate only · no new entry" if terminal or monitoring_update else ""),
                 "url": f"{dashboard_url.rstrip('/')}/#signal/{s.id}",
                 "color": 0x8B949E
@@ -107,6 +134,10 @@ class Notifier:
         self.settings, self.store, self.transport = settings, store, transport
 
     async def send_research(self, signal, update=False):
+        if signal.synthetic:
+            return "blocked: use explicitly labeled test-signal delivery"
+        if not update and signal.horizon_profile == "EXTENDED_SWING":
+            return "shadow-only horizon"
         if signal.validation_status == "validated" and not self.settings.research_alerts:
             return await self.send_public(signal, update)
         if not (
@@ -126,13 +157,31 @@ class Notifier:
         if self.store.db.execute("SELECT 1 FROM outbox WHERE key=?", (key,)).fetchone():
             return "already-attempted"
         if not update:
+            from .horizons import same_thesis
+            from .models import Signal
+
+            if signal.horizon_profile != "LEGACY":
+                rows = self.store.db.execute(
+                    "SELECT s.payload FROM signals s JOIN outbox o ON o.signal_id=s.id WHERE s.symbol=? AND o.status IN ('sent','uncertain','sending') AND s.created_ms>?",
+                    (signal.symbol, signal.created_ms - 3_600_000),
+                )
+                if any(same_thesis(signal, Signal.model_validate_json(r[0])) for r in rows):
+                    return "thesis already delivered"
             cutoff = now_ms() - self.settings.cooldown_minutes * 60_000
             recent = self.store.db.execute(
-                "SELECT 1 FROM outbox o JOIN signals s ON s.id=o.signal_id "
-                "WHERE s.symbol=? AND o.updated_ms>? AND o.status IN ('sent','uncertain','sending') LIMIT 1",
+                "SELECT s.payload FROM outbox o JOIN signals s ON s.id=o.signal_id "
+                "WHERE s.symbol=? AND o.updated_ms>? AND o.status IN ('sent','uncertain','sending')",
                 (signal.symbol, cutoff),
-            ).fetchone()
-            if recent:
+            ).fetchall()
+            if recent and (
+                signal.horizon_profile == "LEGACY"
+                or any(
+                    same_thesis(
+                        signal, Signal.model_validate_json(r[0]), self.settings.cooldown_minutes * 60_000
+                    )
+                    for r in recent
+                )
+            ):
                 return "cooldown"
         payload = embed(signal, self.settings.dashboard_url)
         return await self.deliver(key, signal.id, payload, secret)

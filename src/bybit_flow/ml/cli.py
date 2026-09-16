@@ -59,7 +59,16 @@ def monitor(settings, store):
             ),
         )
     if paths:
-        labels = label_recordings(store, worker_rows(store), settings)
+        pending = store.db.execute(
+            "SELECT 1 FROM ml_snapshots s WHERE s.stage='decision' AND s.decision_ms>? AND NOT EXISTS "
+            "(SELECT 1 FROM ml_labels l WHERE l.snapshot_id=s.id AND l.policy='prints-v1') LIMIT 1",
+            (store.get("recording_retention", {}).get("through_ms", 0),),
+        ).fetchone()
+        labels = (
+            label_recordings(store, worker_rows(store), settings, observed_until_ms=now_ms())
+            if pending
+            else {"complete": 0}
+        )
         result.update(status="observed", complete=labels["complete"])
     ident = store.get("ml_champion")
     if ident:

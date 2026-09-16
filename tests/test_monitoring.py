@@ -11,7 +11,9 @@ from bybit_flow.scanner import Scanner
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("direction", ["LONG", "SHORT"])
-async def test_outage_pauses_recovers_and_fresh_stop_still_invalidates(settings, signal, monkeypatch, direction):
+async def test_outage_pauses_recovers_and_fresh_stop_still_invalidates(
+    settings, signal, monkeypatch, direction
+):
     scanner = Scanner.__new__(Scanner)
     scanner.settings = settings
     scanner.store = Mock()

@@ -23,6 +23,7 @@ class Book:
         self.valid = False
         self.update = self.seq = self.event_ms = self.receipt_ms = 0
         self.changes = deque(maxlen=5000)
+        self.pressure_samples = deque(maxlen=120)
 
     def apply(self, message, receipt_ms):
         d = message["data"]
@@ -54,6 +55,10 @@ class Book:
         self.valid = bool(self.bids and self.asks) and max(self.bids) < min(self.asks)
         if not self.valid:
             raise BookGap("Empty or crossed book")
+        if not self.pressure_samples or receipt_ms - self.pressure_samples[-1][0] >= 1000:
+            bid, ask = max(self.bids), min(self.asks)
+            pressure = float((self.bids[bid] - self.asks[ask]) / (self.bids[bid] + self.asks[ask]))
+            self.pressure_samples.append((receipt_ms, pressure))
 
     def fresh(self, now, max_age=5000):
         return (
@@ -111,6 +116,18 @@ class Book:
             receipt_ms=self.receipt_ms,
             spread_bps=float((ask - bid) / mid * 10000),
             mid=float(mid),
+            obi_touch=float((self.bids[bid] - self.asks[ask]) / (self.bids[bid] + self.asks[ask])),
+            obi_5bps=depth["5"]["imbalance"],
+            obi_10bps=depth["10"]["imbalance"],
+            obi_25bps=depth["25"]["imbalance"],
+            obi_persistence=(
+                sum(v for t, v in self.pressure_samples if now - 60_000 <= t <= now)
+                / max(1, sum(now - 60_000 <= t <= now for t, v in self.pressure_samples))
+            ),
+            obi_samples=sum(now - 60_000 <= t <= now for t, v in self.pressure_samples),
+            microprice_minus_mid=float(
+                (ask * self.bids[bid] + bid * self.asks[ask]) / (self.bids[bid] + self.asks[ask]) - mid
+            ),
             depth=depth,
             depth_concentration=concentration,
             book_slope_notional_per_bps={
