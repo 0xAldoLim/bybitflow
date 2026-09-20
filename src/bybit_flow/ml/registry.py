@@ -183,6 +183,18 @@ class Registry:
             )
         return dict(
             pipeline=self.store.get("ml_pipeline"),
+            score_profile_research=self.store.get("score_profile_research"),
+            swing_stop_study=self.store.get("swing_stop_study"),
+            withdrawal_research=self.store.get("withdrawal_research"),
+            horizon_model=self.store.get(
+                "horizon_model",
+                {
+                    "status": "INSUFFICIENT_EVIDENCE",
+                    "samples": 0,
+                    "production_enabled": False,
+                    "recommended_horizon": None,
+                },
+            ),
             champion=self.store.get("ml_champion"),
             models=models,
             drift=self.store.get("ml_degraded"),
@@ -200,7 +212,7 @@ class Registry:
                 "SELECT COUNT(*) FROM ml_labels WHERE json_extract(payload,'$.complete')=1"
             ).fetchone()[0],
             sequence_outcomes=self.db.execute(
-                "SELECT COUNT(*) FROM ml_snapshots s JOIN ml_labels l ON l.snapshot_id=s.id "
+                "SELECT COUNT(DISTINCT coalesce(c.candidate_identity,s.signal_id)) FROM ml_snapshots s JOIN ml_labels l ON l.snapshot_id=s.id LEFT JOIN candidate_identities c ON c.signal_id=s.signal_id "
                 "WHERE s.stage='decision' AND l.policy='prints-v1' AND json_extract(l.payload,'$.complete')=1 "
                 "AND json_array_length(s.payload,'$.sequence')=16"
             ).fetchone()[0],

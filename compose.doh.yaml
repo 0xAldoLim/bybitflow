@@ -27,13 +27,19 @@ services:
       start_period: 10s
   desk:
     dns: [172.30.53.2]
-    networks: [default, encrypted-dns]
+    networks:
+      default: {}
+      encrypted-dns:
+        ipv4_address: 172.30.53.3
     depends_on:
       dns:
         condition: service_healthy
   trainer:
     dns: [172.30.53.2]
-    networks: [default, encrypted-dns]
+    networks:
+      default: {}
+      encrypted-dns:
+        ipv4_address: 172.30.53.4
     depends_on:
       dns:
         condition: service_healthy

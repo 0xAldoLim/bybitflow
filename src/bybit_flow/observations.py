@@ -203,6 +203,16 @@ def advance(store, ident, bars, now):
         p["directional_recovery"] = p["post_terminal_mfe"] >= 1
         p["recovery_magnitude_r"] = p["post_terminal_mfe"]
         p["extended_policy_outcome"] = p["extended_same_rules_outcome"]
+        if s.evidence.get("withdrawal"):
+            stop_time, target_time = p["time_to_late_stop"], p["time_to_late_target"]
+            p["withdrawal_research"] = dict(
+                policy=s.evidence["withdrawal"]["policy"],
+                classification="WITHDRAWAL_AMBIGUOUS" if not p["coverage_complete"] else
+                "WITHDRAWAL_TOO_EARLY" if target_time is not None and (stop_time is None or target_time < stop_time) else
+                "WITHDRAWAL_SAVED_STOP" if stop_time is not None else "INCONCLUSIVE",
+                post_withdrawal_mfe=p["post_terminal_mfe"], post_withdrawal_mae=p["post_terminal_mae"],
+                original_stop_later_hit=p["late_stop_hit"], original_tp1_later_hit=p["late_target_hit"])
+
         with store.db:
             store.db.execute(
                 "INSERT OR IGNORE INTO research_labels VALUES(?,?,?)", (ident, now, json.dumps(p))
@@ -215,10 +225,22 @@ def advance(store, ident, bars, now):
     return p
 
 
+def advance_batch(root, identities, bars, at_ms):
+    """Late research uses its own connection away from live socket processing."""
+    from .storage import Store
+
+    store = Store(root)
+    try:
+        for ident in identities:
+            advance(store, ident, bars, at_ms)
+    finally:
+        store.close()
+
+
 def metrics(store):
     groups = defaultdict(list)
-    for row in store.db.execute("SELECT payload FROM research_labels ORDER BY available_ms DESC LIMIT 10000"):
-        p = json.loads(row[0])
+    for ident, in store.db.execute("SELECT signal_id FROM research_labels ORDER BY available_ms DESC LIMIT 10000").fetchall():
+        p = json.loads(store.db.execute("SELECT payload FROM research_labels WHERE signal_id=?", (ident,)).fetchone()[0])
         s = p["signal"]
         for dimension, value in (
             ("tier", s["raw_tier"]),

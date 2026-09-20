@@ -39,6 +39,7 @@ class Scanner:
         self.source_ready = settings.market_source not in {"auto", "multi"}
         self.notifier = Notifier(settings, store)
         self.context = {}
+        self.reconcile_pending = {s["id"] for s in store.active_signals() if s["source"] != "tradingview"}
         self.candle_cache = {}
         self.tasks = []
         self.scan_lock = asyncio.Lock()
@@ -160,16 +161,17 @@ class Scanner:
                 self.store.put("refresh_health", dict(at_ms=now_ms(), error_type=type(exc).__name__))
             await asyncio.sleep(30)
 
-    def save_candidates(self, instrument, h4, h1, m15, evaluated):
+    def save_candidates(self, instrument, context_bars, setup_bars, execution_bars, evaluated):
         if not self.recorder.healthy:
             return []
         plans = candidates(
             instrument,
-            h4,
-            h1,
-            m15,
+            context_bars,
+            setup_bars,
+            execution_bars,
             evaluated,
             execution_window_ms=self.settings.execution_window_seconds * 1000,
+            structural_targets=True,
         )
         for signal in plans:
             assign(signal, "CORE_INTRADAY")
@@ -189,7 +191,7 @@ class Scanner:
                 for tf in (profile.context, profile.setup, profile.execution)
             ]
             plans = candidates(
-                instrument, *bars, now, execution_window_ms=self.settings.execution_window_seconds * 1000
+                instrument, *bars, now, execution_window_ms=self.settings.execution_window_seconds * 1000, structural_targets=True
             )
             for signal in plans:
                 assign(signal, name)
@@ -297,29 +299,158 @@ class Scanner:
                     self.store.put("scanner", self.status)
                 failed_since = None
 
+    async def depth_context(self, inst, ticker, ticker_time, evaluated):
+        t = ticker
+        oi = await self.api.history("open-interest", inst.symbol, evaluated - 4 * 3_600_000, evaluated)
+        funding = await self.api.history("funding/history", inst.symbol, evaluated - 2 * DAY, evaluated)
+        if self.exchange == "okx":
+            current_funding = await self.api.funding_now(inst.symbol)
+            t = t | {
+                "fundingRate": current_funding.get("fundingRate"),
+                "nextFundingTime": current_funding.get("nextFundingTime"),
+                "observed_ms": int(current_funding["ts"]),
+            }
+        oi = sorted(oi, key=lambda x: int(x["timestamp"]))
+        f = sorted(funding, key=lambda x: int(x["fundingRateTimestamp"]))
+        # Current predicted funding is context only, never injected into historical decisions.
+        derivatives = {
+            "exchange": self.exchange,
+            "funding_rate": float(t["fundingRate"]) if t.get("fundingRate") else None,
+            "next_funding_ms": int(t.get("nextFundingTime") or 0),
+            "funding_interval_minutes": inst.funding_interval_minutes,
+            "funding_history": f,
+            "oi_history": oi,
+            "oi_change_pct": (float(oi[-1]["openInterest"]) / float(oi[0]["openInterest"]) - 1) * 100
+            if len(oi) >= 2 and float(oi[0]["openInterest"])
+            else None,
+            "oi_unit": "base coin, API openInterest field; see audited definition",
+            "oi_notional": float(t["openInterestValue"])
+            if t.get("openInterestValue")
+            else (float(oi[-1]["notional"]) if oi and oi[-1].get("notional") else None),
+            "mark": float(t["markPrice"]) if t.get("markPrice") else None,
+            "index": float(t["indexPrice"]) if t.get("indexPrice") else None,
+            "ticker_observed_ms": int(t.get("funding_observed_ms", t.get("observed_ms", ticker_time))),
+            "collected_ms": now_ms(),
+        }
+        return derivatives
+
     async def scan_once(self):
+        from .discovery import depth_shortlist, horizon_pre_ranks
+
         async with self.scan_lock:
             await self.select_source()
             self.status.update(state="scanning", started_ms=now_ms())
-            self.status.pop("error_type", None)
+            self.store.put("scanner", self.status)
             body = await self.api.get("time")
             asof = int(body["time"])
             if abs(asof - now_ms()) > 2000:
                 raise ValueError("Local/exchange clock skew exceeds two seconds")
             rows = await self.api.instruments()
-            priority_symbols = self.pending_symbols() + self.settings.core_watchlist
+            pinned = self.pending_symbols()
+            priority = list(dict.fromkeys(pinned + self.settings.core_watchlist))
             rows.sort(
                 key=lambda r: (
-                    priority_symbols.index(r["symbol"])
-                    if r["symbol"] in priority_symbols
-                    else len(priority_symbols),
+                    priority.index(r["symbol"]) if r["symbol"] in priority else len(priority),
                     r["symbol"],
                 )
             )
             ticker_body = await self.api.get("tickers", category="linear")
             self.record_quotes(ticker_body, now_ms())
-            tickers = {r["symbol"]: r for r in ticker_body["result"]["list"]}
-            ranked, new_context, errors = [], {}, 0
+            tickers = {t["symbol"]: t for t in ticker_body["result"]["list"]}
+            ranked, broad, errors = [], {}, 0
+            verified = []
+            requests = 0
+
+            async def admit(symbol):
+                nonlocal requests, errors
+                if symbol in verified:
+                    return
+                try:
+                    inst, context_bars, setup_bars, execution_bars = broad[symbol]
+                    requests += 1
+                    data = await self.api.get("orderbook", category="linear", symbol=symbol, limit=50)
+                    book = Book()
+                    book.apply(
+                        dict(
+                            type="snapshot",
+                            ts=data["time"],
+                            cts=data["result"].get("cts", data["time"]),
+                            data=data["result"],
+                        ),
+                        now_ms(),
+                    )
+                    if not book.fresh(now_ms(), self.settings.book_stale_ms) or not all(
+                        book.impact(side, self.settings.hypothetical_notional) for side in ("LONG", "SHORT")
+                    ):
+                        return
+                    evaluated = now_ms()
+                    derivatives = await self.depth_context(
+                        inst, tickers[symbol], ticker_body["time"], evaluated
+                    )
+                    self.context[symbol] = dict(
+                        instrument=inst,
+                        h4=context_bars,
+                        h1=setup_bars,
+                        m15=execution_bars,
+                        derivatives=derivatives,
+                        asof=evaluated,
+                    )
+                    normal = self.spread_history(symbol).assess(
+                        evaluated, self.settings.max_spread_bps, self.settings.spread_min_samples
+                    )
+                    self.record_membership(
+                        evaluated,
+                        symbol,
+                        normal["eligible"],
+                        dict(depth_verified=True, normal_spread=normal, metadata=inst.metadata),
+                    )
+                    self.save_candidates(inst, context_bars, setup_bars, execution_bars, evaluated)
+                    await self.discover_horizons(inst, evaluated)
+                    self.store.put(
+                        "market:" + symbol,
+                        dict(
+                            exchange=self.exchange,
+                            instrument=inst.model_dump(mode="json"),
+                            candles=candle_records(setup_bars),
+                            h4=candle_features(context_bars, evaluated),
+                            h1=candle_features(setup_bars, evaluated),
+                            derivatives=derivatives,
+                            normal_spread=normal,
+                            asof=evaluated,
+                        ),
+                    )
+                    verified.append(symbol)
+                    if symbol in priority:
+                        await self.streams.select(list(dict.fromkeys(list(self.streams.selected) + [symbol])))
+                except PermissionError:
+                    raise
+                except Exception as exc:
+                    if not self.recorder.healthy:
+                        raise RuntimeError("Recording unavailable; depth verification aborted") from exc
+                    errors += 1
+
+            # Restore existing opportunities before broad eligibility ranking. Admission
+            # verifies depth; it never changes their original plan or lifecycle state.
+            for raw in rows:
+                if raw["symbol"] not in pinned:
+                    continue
+                try:
+                    inst = (
+                        self.api.parse(raw, asof)
+                        if isinstance(self.api, VenueAPI)
+                        else parse_eligible_metadata(raw, self.settings, asof)
+                    )
+                    if inst is None:
+                        continue
+                    now = now_ms()
+                    bars = [
+                        await self.cached_candles(inst.symbol, tf, now, count)
+                        for tf, count in (("240", 160), ("60", 200), ("15", 120))
+                    ]
+                    broad[inst.symbol] = (inst, *bars)
+                    await admit(inst.symbol)
+                except Exception:
+                    errors += 1
             for raw in rows:
                 inst = (
                     self.api.parse(raw, asof)
@@ -327,204 +458,129 @@ class Scanner:
                     else parse_eligible_metadata(raw, self.settings, asof)
                 )
                 if not inst:
-                    self.record_membership(
-                        asof, raw["symbol"], False, {"reason": "instrument metadata gate", "metadata": raw}
-                    )
                     continue
-                t = tickers.get(inst.symbol, {})
-                reasons = []
                 try:
+                    t = tickers.get(inst.symbol, {})
                     bid, ask = float(t.get("bid1Price") or 0), float(t.get("ask1Price") or 0)
                     spread = (ask - bid) / ((ask + bid) / 2) * 10000 if ask > bid > 0 else float("inf")
                     if spread > self.settings.max_spread_bps:
-                        reasons.append("current spread")
-                    if reasons:
-                        self.record_membership(
-                            asof, inst.symbol, False, {"reasons": reasons, "metadata": raw}
-                        )
                         continue
-                    daily = await self.cached_candles(inst.symbol, "D", now_ms(), 31)
-                    validate_bars(daily, now_ms())
-                    if len(daily) < 30 or asof - daily[-1].end >= DAY:
-                        reasons.append("30 contiguous completed trading days not verified")
-                    turnover = median(c.turnover for c in daily[-7:]) if len(daily) >= 7 else 0
-                    if turnover < self.settings.min_daily_turnover or any(c.volume <= 0 for c in daily[-30:]):
-                        reasons.append("historical daily liquidity gate")
-                    if reasons:
-                        self.record_membership(
-                            asof,
-                            inst.symbol,
-                            False,
-                            {"reasons": reasons, "turnover": turnover, "metadata": raw},
-                        )
-                        continue
-                    # Actual depth, even for the broad stage; never synthesized from candles.
-                    book_data = await self.api.get(
-                        "orderbook", category="linear", symbol=inst.symbol, limit=50
-                    )
-                    book = Book()
-                    book.apply(
-                        {
-                            "type": "snapshot",
-                            "ts": book_data["time"],
-                            "cts": book_data["result"].get("cts", book_data["time"]),
-                            "data": book_data["result"],
-                        },
-                        now_ms(),
-                    )
-                    if not all(
-                        book.impact(side, self.settings.hypothetical_notional) for side in ("LONG", "SHORT")
+                    now = now_ms()
+                    daily = await self.cached_candles(inst.symbol, "D", now, 120)
+                    if (
+                        len(daily) < 30
+                        or now - daily[-1].end >= DAY
+                        or any(c.volume <= 0 for c in daily[-30:])
                     ):
-                        reasons.append("hypothetical order exceeds visible depth")
-                    if reasons:
-                        self.record_membership(
-                            asof, inst.symbol, False, {"reasons": reasons, "metadata": raw}
-                        )
                         continue
-                    # Refresh asof per instrument: a full-universe sweep can take several minutes.
-                    evaluated = now_ms()
-                    h4 = await self.cached_candles(inst.symbol, "240", evaluated, 160)
-                    h1 = await self.cached_candles(inst.symbol, "60", evaluated, 200)
-                    m15 = await self.cached_candles(inst.symbol, "15", evaluated, 120)
-                    f4, f1 = candle_features(h4, evaluated), candle_features(h1, evaluated)
-                    if evaluated - m15[-1].end > 960_000 or evaluated - h1[-1].end > 3_660_000:
-                        raise ValueError("Stale closed candles")
-                    oi = await self.api.history(
-                        "open-interest", inst.symbol, evaluated - 4 * 3_600_000, evaluated
+                    turnover = median(c.turnover for c in daily[-7:])
+                    if turnover < self.settings.min_daily_turnover:
+                        continue
+                    context_bars = await self.cached_candles(inst.symbol, "240", now, 160)
+                    setup_bars = await self.cached_candles(inst.symbol, "60", now, 200)
+                    execution_bars = await self.cached_candles(inst.symbol, "15", now, 120)
+                    if now - execution_bars[-1].end > 960_000 or now - setup_bars[-1].end > 3_660_000:
+                        continue
+                    pre = horizon_pre_ranks(
+                        daily,
+                        context_bars,
+                        setup_bars,
+                        execution_bars,
+                        now,
+                        spread,
+                        self.settings.max_spread_bps,
+                        t.get("openInterestValue") is not None,
                     )
-                    funding = await self.api.history(
-                        "funding/history", inst.symbol, evaluated - 2 * DAY, evaluated
+                    normal = self.spread_history(inst.symbol).assess(
+                        now, self.settings.max_spread_bps, self.settings.spread_min_samples
                     )
-                    if self.exchange == "okx":
-                        current_funding = await self.api.funding_now(inst.symbol)
-                        t = t | {
-                            "fundingRate": current_funding.get("fundingRate"),
-                            "nextFundingTime": current_funding.get("nextFundingTime"),
-                            "observed_ms": int(current_funding["ts"]),
-                        }
-                    oi = sorted(oi, key=lambda x: int(x["timestamp"]))
-                    f = sorted(funding, key=lambda x: int(x["fundingRateTimestamp"]))
-                    # Current predicted funding is context only, never injected into historical decisions.
-                    derivatives = {
-                        "exchange": self.exchange,
-                        "funding_rate": float(t["fundingRate"]) if t.get("fundingRate") else None,
-                        "next_funding_ms": int(t.get("nextFundingTime") or 0),
-                        "funding_interval_minutes": inst.funding_interval_minutes,
-                        "funding_history": f,
-                        "oi_history": oi,
-                        "oi_change_pct": (float(oi[-1]["openInterest"]) / float(oi[0]["openInterest"]) - 1)
-                        * 100
-                        if len(oi) >= 2 and float(oi[0]["openInterest"])
-                        else None,
-                        "oi_unit": "base coin, API openInterest field; see audited definition",
-                        "oi_notional": float(t["openInterestValue"])
-                        if t.get("openInterestValue")
-                        else (float(oi[-1]["notional"]) if oi and oi[-1].get("notional") else None),
-                        "mark": float(t["markPrice"]) if t.get("markPrice") else None,
-                        "index": float(t["indexPrice"]) if t.get("indexPrice") else None,
-                        "ticker_observed_ms": int(
-                            t.get("funding_observed_ms", t.get("observed_ms", ticker_body["time"]))
-                        ),
-                        "collected_ms": now_ms(),
-                    }
-                    point = {
-                        "metadata": raw,
-                        "turnover_median_7d": turnover,
-                        "spread_bps": spread,
-                        "continuous_daily_bars": len(daily),
-                        "available_ms": evaluated,
-                    }
-                    normal_spread = self.spread_history(inst.symbol).assess(
-                        now_ms(), self.settings.max_spread_bps, self.settings.spread_min_samples
-                    )
-                    point["normal_spread"] = normal_spread
-                    self.record_membership(evaluated, inst.symbol, normal_spread["eligible"], point)
-                    plans = self.save_candidates(inst, h4, h1, m15, evaluated)
-                    priority = (30 if plans else 0) + 20 * f1["efficiency"] + 10 * f1["volume_expansion"]
                     ranked.append(
-                        {
-                            "exchange": self.exchange,
-                            "symbol": inst.symbol,
-                            "regime_4h": f4["regime"],
-                            "regime_1h": f1["regime"],
-                            "rank_score": round(priority, 2),
-                            "turnover_7d": turnover,
-                            "spread_bps": spread,
-                            "normal_spread": normal_spread,
-                            "eligible": normal_spread["eligible"],
-                            "candidates": len(plans),
-                            "asof": evaluated,
-                        }
+                        dict(
+                            symbol=inst.symbol,
+                            exchange=self.exchange,
+                            eligible=True,
+                            normal_spread=normal,
+                            turnover_7d=turnover,
+                            spread_bps=spread,
+                            asof=now,
+                            **pre,
+                        )
                     )
-                    new_context[inst.symbol] = dict(
-                        instrument=inst, h4=h4, h1=h1, m15=m15, derivatives=derivatives, asof=evaluated
-                    )
-                    self.context[inst.symbol] = new_context[inst.symbol]
-                    # Start core/pending tape collection before a long universe sweep finishes.
-                    if inst.symbol in priority_symbols or plans:
-                        wanted = list(
-                            dict.fromkeys(
-                                [s for s in self.pending_symbols() if s in self.context]
-                                + [s for s in self.settings.core_watchlist if s in self.context]
-                                + list(self.streams.selected)
-                                + [inst.symbol]
-                            )
-                        )[: self.settings.deep_symbols]
-                        if tuple(wanted) != tuple(self.streams.selected):
-                            await self.streams.select(wanted)
-                    self.store.put(
-                        "market:" + inst.symbol,
-                        {
-                            "exchange": self.exchange,
-                            "instrument": inst.model_dump(mode="json"),
-                            "candles": candle_records(h1),
-                            "h4": f4,
-                            "h1": f1,
-                            "derivatives": derivatives,
-                            "normal_spread": normal_spread,
-                            "fundamentals": facts_asof(self.store, inst.base, evaluated),
-                            "asof": evaluated,
-                        },
-                    )
+                    broad[inst.symbol] = (inst, context_bars, setup_bars, execution_bars)
+                    if inst.symbol in priority:
+                        await admit(inst.symbol)
                 except PermissionError:
                     raise
                 except Exception as exc:
                     if not self.recorder.healthy:
                         raise RuntimeError("Recording unavailable; broad scan aborted") from exc
                     errors += 1
-                    self.record_membership(
-                        now_ms(), inst.symbol, False, {"reason": type(exc).__name__, "metadata": raw}
-                    )
-                    log.warning(
-                        "symbol_scan_failed", extra={"symbol": inst.symbol, "error_type": type(exc).__name__}
-                    )
-            ranked.sort(key=lambda x: x["rank_score"], reverse=True)
-            self.context = {s: c for s, c in self.context.items() if now_ms() - c["asof"] <= 960_000}
-            self.candle_cache = {k: v for k, v in self.candle_cache.items() if k[0] in tickers}
-            self.store.put("watchlist", ranked)
-            core = [s for s in self.settings.core_watchlist if s in new_context]
-            pinned = self.pending_symbols()
-            from .evidence import select_deep
-
-            selected, selection = select_deep(
+            ranked.sort(key=lambda r: r["best_pre_rank"], reverse=True)
+            available = {r["symbol"] for r in ranked}
+            core = [x for x in self.settings.core_watchlist if x in available]
+            capacity = self.settings.deep_symbols
+            if (
+                getattr(self.recorder, "state", "NORMAL") != "NORMAL"
+                or self.store.get("storage_maintenance", {}).get("state") == "STORAGE_BACKPRESSURE"
+            ):
+                capacity = max(len(pinned), len(core), capacity // 2)
+            shortlist, selection = depth_shortlist(
                 ranked,
                 core,
-                pinned,
-                self.settings.deep_symbols,
+                [x for x in pinned if x in available],
+                capacity,
+                self.settings.stage_a_depth_candidates,
                 now_ms() // 900_000,
                 self.settings.exploration_fraction,
             )
+            for symbol in shortlist:
+                if len(verified) >= max(capacity, len([x for x in priority if x in available])):
+                    break
+                await admit(symbol)
+            retained = [x for x in pinned if x in self.streams.selected]
+            selected = list(dict.fromkeys(retained + [x for x in shortlist if x in verified]))[
+                : max(capacity, len(retained))
+            ]
+            for symbol in selected:
+                selection.setdefault(
+                    symbol,
+                    dict(
+                        selection_reason="ACTIVE"
+                        if symbol in pinned
+                        else "CORE"
+                        if symbol in core
+                        else "EXPLOIT",
+                        selection_probability=1.0,
+                        preliminary_rank=None,
+                    ),
+                )
+            selection = {k: v for k, v in selection.items() if k in selected}
             self.store.put("deep_selection", selection)
+            self.store.put("watchlist", ranked)
             await self.streams.select(selected)
+            distribution = {
+                h: sum(r["best_pre_rank_horizon"] == h for r in ranked)
+                for h in ("SHORT_INTRADAY", "CORE_INTRADAY", "SWING")
+            }
             self.status = dict(
                 state="collecting",
                 at_ms=now_ms(),
                 discovered=len(rows),
-                eligible=sum(r["eligible"] for r in ranked),
-                provisional=sum(not r["eligible"] for r in ranked),
+                preeligible=len(ranked),
+                eligible=sum(r["normal_spread"]["eligible"] for r in ranked),
+                provisional=sum(not r["normal_spread"]["eligible"] for r in ranked),
+                depth_verified=len(verified),
+                deep_selected=len(selected),
+                retained_active=len(retained),
+                depth_requests=requests,
                 errors=errors,
                 deep_symbols=selected,
                 exchange=self.exchange,
+                best_horizon_distribution=distribution,
+                selection_counts={
+                    kind: sum(v["selection_reason"] == kind for v in selection.values())
+                    for kind in ("ACTIVE", "CORE", "EXPLOIT", "EXPLORE")
+                },
             )
             self.store.put("scanner", self.status)
             return self.status
@@ -590,6 +646,44 @@ class Scanner:
                 self.store.signal(s, s.invalidation)
                 await self.notifier.send_research(s, update=True)
                 return
+        if not reasons and s.horizon_profile != "LEGACY":
+            from .evidence import flow_response
+            from .thesis_health import evaluate as health_evaluate
+
+            setup = self.candle_cache.get((s.symbol, s.setup_timeframe), (None, []))[1]
+            feature = candle_features(setup, now) if len(setup) >= 60 else {}
+            recent = tape.window(now - 60_000, now)
+            observed = footprint(
+                recent, context["instrument"].tick, feature.get("atr", float(context["instrument"].tick) * 10)
+            )
+            observed.update(flow_response(recent, book.features(now)))
+            bf = book.features(now)
+            structure = (
+                feature.get("bos") == ("down" if s.direction == "LONG" else "up")
+                and bool(setup)
+                and (setup[-1].close < s.zone[0] if s.direction == "LONG" else setup[-1].close > s.zone[1])
+            )
+            observation = dict(
+                coverage_complete=bool(
+                    tape.coverage_start is not None
+                    and tape.coverage_start <= now - 60_000
+                    and observed.get("available")
+                ),
+                flow=observed,
+                obi=bf.get("obi_persistence", 0),
+                structural_failure=structure,
+                window_end_ms=now,
+            )
+            key = "thesis_health:" + s.id
+            health = health_evaluate(s, observation, self.store.get(key, {}), now)
+            self.store.put(key, health)
+            if health["withdraw"]:
+                s.state = "INVALIDATED"
+                s.coverage["terminal_reason"] = health["reason"]
+                s.evidence["withdrawal"] = health
+                self.store.signal(s, health["reason"])
+                await self.notifier.send_research(s, update=True)
+                return
         if now >= (s.holding_deadline_ms or s.expires_ms):
             s.state = "EXPIRED"
             s.coverage["monitoring_event"] = "ended"
@@ -638,18 +732,37 @@ class Scanner:
                     await self.notifier.send_research(s, update=True)
                 s.coverage.pop("pause_since_ms", None)
                 s.coverage.pop("pause_notice_sent", None)
+        if s.state not in TERMINAL and not reasons:
+            s.coverage["last_trustworthy_ms"] = now
         self.store.signal(s, s.invalidation if s.state in TERMINAL else "Monitoring active")
         if s.state in TERMINAL:
             await self.notifier.send_research(s, update=True)
 
     async def evaluate(self):
         now = now_ms()
+        self.recorder.critical_symbols = set(self.pending_symbols()) | {"BTCUSDT", "ETHUSDT"}
+        self.recorder.critical_symbols.update(
+            r[0]
+            for r in self.store.db.execute(
+                "SELECT DISTINCT json_extract(s.payload,'$.symbol') FROM ml_snapshots s WHERE s.stage='decision' "
+                "AND NOT EXISTS (SELECT 1 FROM ml_labels l WHERE l.snapshot_id=s.id AND l.policy='prints-v1') "
+                "AND s.decision_ms>?",
+                (now - 7 * DAY,),
+            )
+        )
         for payload in self.store.active_signals():
             s = Signal.model_validate(payload)
             if s.source == "tradingview":
                 continue  # TradingView has its own source freshness and lifecycle worker.
             if s.state in TERMINAL:
                 continue
+            if s.id in getattr(self, "reconcile_pending", set()) or (
+                s.state == "ALERTED" and s.coverage.get("pause_since_ms")
+            ):
+                from .reconciliation import reconcile
+
+                if not await reconcile(self, s, now):
+                    continue
             if s.state == "ALERTED":
                 await self.monitor_alerted(s, now)
                 continue
@@ -677,6 +790,16 @@ class Scanner:
             if s.state in TERMINAL:
                 self.store.signal(s, s.invalidation if s.state == "INVALIDATED" else "entry window expired")
                 continue
+            from .macro import state as macro_state
+
+            macro = macro_state(self.store, self.settings, now)
+            if not s.evidence.get("score_components"):
+                s.evidence["macro"] = macro
+            if macro["macro_pause_active"]:
+                s.evidence["macro"] = macro
+                s.coverage["macro_deferred_ms"] = now
+                self.store.signal(s, "High-impact USD entry pause; lifecycle continues")
+                continue
             if not c or not tape or not book:
                 continue
             if s.horizon_profile not in {"LEGACY", "CORE_INTRADAY"}:
@@ -684,7 +807,8 @@ class Scanner:
                 if not cached:
                     continue
                 c = c | {"m15": cached[1]}
-            candle_end = c["m15"][-1].end
+            execution_bars = c["m15"]
+            candle_end = execution_bars[-1].end
             window_ms = s.evidence.get("execution_window_ms", 900_000)
             end = s.evidence.get("execution_window_end_ms", candle_end) if window_ms < 900_000 else candle_end
             start = end - window_ms
@@ -703,6 +827,7 @@ class Scanner:
             }
             coverage_reasons = [reason for reason, passed in checks.items() if not passed]
             healthy = not coverage_reasons
+            macro_deferred_ms = s.coverage.get("macro_deferred_ms")
             s.coverage = dict(
                 book_fresh=book.fresh(now, self.settings.book_stale_ms),
                 trade_window_complete=healthy,
@@ -715,11 +840,21 @@ class Scanner:
                 retained_from_ms=tape.coverage_start,
                 reasons=coverage_reasons,
             )
+            if macro_deferred_ms is not None:
+                s.coverage["macro_deferred_ms"] = macro_deferred_ms
             # One immutable first-covered execution decision per setup ID. Re-evaluating
             # changed flow against yesterday's frozen ML vector would corrupt meta-labels.
             if s.state == "CONFIRMED" and not s.gates and healthy:
                 if s.horizon_profile == "EXTENDED_SWING":
                     continue
+                if s.coverage.get("macro_deferred_ms"):
+                    current_flow = footprint(
+                        tape.window(start, end),
+                        c["instrument"].tick,
+                        candle_features(execution_bars, now)["atr"],
+                    )
+                    if end <= s.coverage["macro_deferred_ms"] or not confirm(s, current_flow, execution_bars):
+                        continue
                 # A deferred last-mile send must not silently strand an immutable decision.
                 if await self.notifier.send_research(s) == "sent":
                     s.state = "ALERTED"
@@ -732,7 +867,8 @@ class Scanner:
             if not healthy:
                 continue
             trades = tape.window(start, end)
-            s.evidence["m15"] = candle_features(c["m15"], now)
+            execution_features = candle_features(execution_bars, now)
+            s.evidence["m15" if s.horizon_profile == "LEGACY" else "execution_features"] = execution_features
             s.trigger_expires_ms = end + (120_000 if window_ms < 900_000 else 900_000)
             s.holding_deadline_ms = now + s.expected_hold_max * 60_000
             if s.horizon_profile != "LEGACY":
@@ -741,8 +877,8 @@ class Scanner:
             window_book = Book()
             window_book.valid = book.valid
             window_book.changes.extend(x for x in book.changes if x[0] <= end)
-            flow = footprint(trades, c["instrument"].tick, s.evidence["m15"]["atr"], window_book)
-            flow_ok = confirm(s, flow, c["m15"])
+            flow = footprint(trades, c["instrument"].tick, execution_features["atr"], window_book)
+            flow_ok = confirm(s, flow, execution_bars)
             s.gates = []
             normal_spread = self.spread_history(s.symbol).assess(
                 now, self.settings.max_spread_bps, self.settings.spread_min_samples
@@ -809,29 +945,53 @@ class Scanner:
                 response = flow_response(trades, bf, flow_response(prior_trades, bf))
                 flow.update(response)
                 previous_flow = footprint(
-                    tape.window(start - window_ms, start), c["instrument"].tick, s.evidence["m15"]["atr"]
+                    tape.window(start - window_ms, start), c["instrument"].tick, execution_features["atr"]
                 )
 
                 def factor_bars(symbol):
+                    if symbol == s.symbol:
+                        return []
                     return self.candle_cache.get((symbol, s.setup_timeframe), (None, []))[1]
 
                 s.evidence.update(
                     range=range_context(setup_bars, now),
                     auction=auction_context(flow, previous_flow, mid),
                     market_factor=factor_context(setup_bars, factor_bars("BTCUSDT"), factor_bars("ETHUSDT")),
-                    execution=execution_context(s, c["m15"], book, self.settings),
+                    execution=execution_context(s, execution_bars, book, self.settings),
                     selection=self.store.get("deep_selection", {}).get(s.symbol, {}),
                     horizon_suitability=recommend(self.store, s, now),
                     derivatives=derivatives_context(d, setup_bars),
                     session_metrics=session_baseline(self.store, s, flow, bf, now),
                 )
+                if ":autonomy-v1" in s.version:
+                    from .thesis_health import market_gate
+
+                    alignment = market_gate(
+                        s,
+                        candle_features(factor_bars("BTCUSDT"), now)
+                        if len(factor_bars("BTCUSDT")) >= 60
+                        else {},
+                        candle_features(factor_bars("ETHUSDT"), now)
+                        if len(factor_bars("ETHUSDT")) >= 60
+                        else {},
+                    )
+                    s.evidence["market_alignment"] = alignment
+                    if alignment["blocked"]:
+                        s.gates.append(alignment["reason"])
+                    if s.family in {"liquidity_sweep", "range_rejection"}:
+                        sign = 1 if s.direction == "LONG" else -1
+                        participation = (
+                            sign * flow.get("delta_pct", 0) >= 10 and flow.get("delta_persistence", 0) >= 0.5
+                        )
+                        if not flow_ok or not participation:
+                            s.gates.append("UNCONFIRMED_LIQUIDITY_SWEEP")
                 if s.evidence["execution"]["stop_noise_ratio"] < 0.5:
                     s.gates.append("stop is inside half the observed execution-bar noise")
                 if s.evidence["execution"]["volatility_regime"] == "VOLATILITY_SHOCK":
                     s.gates.append("volatility shock; execution assumptions require requalification")
                 if s.horizon_profile == "EXTENDED_SWING":
                     s.evidence["publication_policy"] = "shadow research until horizon-specific validation"
-            score(s, flow_ok, rate is not None)
+            score(s, flow_ok, rate is not None, preserve_original=":hardening-v1" not in s.version)
             if self.settings.sss_research and s.quality >= 95 and not s.gates and s.risk.get("accepted"):
                 s.final_tier = "SSS RESEARCH · UNCALIBRATED"
             from .ml.inference import apply as apply_ml
@@ -916,7 +1076,7 @@ class Scanner:
 
     async def research_loop(self):
         """Compact late observations use shared REST candles, never additional DOM streams."""
-        from .observations import advance
+        from .observations import advance_batch
 
         while True:
             try:
@@ -938,8 +1098,9 @@ class Scanner:
                         api = self.api if source == self.exchange else VenueAPI(source, self.settings)
                         try:
                             bars = await api.candles(symbol, "1", now_ms(), limit=300, start=start)
-                            for ident, p in group:
-                                advance(self.store, ident, bars, now_ms())
+                            await asyncio.to_thread(
+                                advance_batch, self.settings.data_dir, [ident for ident, _ in group], bars, now_ms()
+                            )
                         finally:
                             if api is not self.api:
                                 await api.close()
@@ -949,17 +1110,16 @@ class Scanner:
             await asyncio.sleep(60)
 
     async def storage_loop(self):
-        from .packing import compact
-        from .retention import prune_recordings, storage_status
+        from .retention import maintain as storage_maintain
+        from .retention import storage_status
         from .storage import Store
 
         def maintain():
             store = Store(self.settings.data_dir)
             try:
-                result = prune_recordings(store, self.settings)
-                status = storage_status(store, self.settings)
-                if 0.7 <= status["usage_fraction"] < 0.98:
-                    result["compaction"] = compact(store)
+                result = storage_maintain(store, self.settings)
+                if now_ms() - store.get("storage_status", {}).get("at_ms", 0) >= 300_000:
+                    storage_status(store, self.settings)
                 store.put("storage_health", result)
                 return result
             finally:
@@ -971,21 +1131,29 @@ class Scanner:
                 self.store.put("storage_health", result)
             except Exception as exc:
                 self.store.put("storage_health", dict(error_type=type(exc).__name__, at_ms=now_ms()))
-            await asyncio.sleep(300)
+            await asyncio.sleep(60)
 
     def start(self):
-        self.tasks = [asyncio.create_task(self.evaluation_loop())]
-        self.tasks.append(asyncio.create_task(self.research_loop()))
-        self.tasks.append(asyncio.create_task(self.storage_loop()))
+        from .supervision import supervise
+
+        def start_task(name, factory):
+            self.tasks.append(asyncio.create_task(supervise(self.store, name, factory)))
+
+        self.tasks = []
+        start_task("lifecycle", self.evaluation_loop)
+        start_task("post_terminal", self.research_loop)
+        start_task("storage", self.storage_loop)
         if self.settings.scan_enabled:
-            self.tasks.append(asyncio.create_task(self.scan_loop()))
-            self.tasks.append(asyncio.create_task(self.quote_loop()))
-            self.tasks.append(asyncio.create_task(self.refresh_pending()))
-            self.tasks.append(asyncio.create_task(self.source_watchdog()))
+            if self.settings.macro_news_enabled:
+                from .macro import run as macro_run
+                start_task("macro", lambda: macro_run(self))
+            start_task("scanner", self.scan_loop)
+            start_task("quotes", self.quote_loop)
+            start_task("pending", self.refresh_pending)
+            start_task("source", self.source_watchdog)
             if self.settings.market_source == "multi":
                 from .cross_venue import CrossVenue
-
-                self.tasks.append(asyncio.create_task(CrossVenue(self).run()))
+                start_task("cross_venue", CrossVenue(self).run)
 
     async def stop(self):
         for task in self.tasks:

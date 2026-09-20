@@ -42,6 +42,10 @@ def migrate(db):
     INSERT OR IGNORE INTO schema_version VALUES(4);
     CREATE INDEX IF NOT EXISTS ml_snapshot_identity
       ON ml_snapshots(signal_id,stage,schema_version);
+    CREATE INDEX IF NOT EXISTS ml_snapshot_stage_time
+      ON ml_snapshots(stage,decision_ms,id);
+    CREATE INDEX IF NOT EXISTS ml_snapshot_signal_time
+      ON ml_snapshots(signal_id,stage,decision_ms);
     CREATE INDEX IF NOT EXISTS ml_sequence_lookup ON ml_snapshots(
       json_extract(payload,'$.source'), json_extract(payload,'$.signal.symbol'),
       json_extract(payload,'$.signal.family'), json_extract(payload,'$.signal.direction'), decision_ms DESC
@@ -63,6 +67,10 @@ class FeatureStore:
         ).fetchone()
         if old:
             return old[0]
+        from ..identity import register_candidate
+
+        with self.db:
+            register_candidate(self.store, signal)
         membership = self.store.membership_asof(signal.symbol, at_ms)
         if membership:
             details = json.loads(membership["payload"])
@@ -78,8 +86,17 @@ class FeatureStore:
                 "AND json_extract(payload,'$.signal.symbol')=? "
                 "AND json_extract(payload,'$.signal.family')=? "
                 "AND json_extract(payload,'$.signal.direction')=? "
+                "AND coalesce(json_extract(payload,'$.signal.horizon_profile'),'LEGACY')=? "
                 "ORDER BY decision_ms DESC LIMIT 15",
-                (at_ms, at_ms - 7_200_000, signal.source, signal.symbol, signal.family, signal.direction),
+                (
+                    at_ms,
+                    at_ms - 7_200_000,
+                    signal.source,
+                    signal.symbol,
+                    signal.family,
+                    signal.direction,
+                    signal.horizon_profile,
+                ),
             ).fetchall()
             prior = [json.loads(r[0]) for r in reversed(history)]
             row["sequence"] = [
@@ -123,7 +140,15 @@ class FeatureStore:
 
     def dataset(self, asof_ms, policy="prints-v1", stage="decision", limit=10_000):
         result = []
+        seen = set()
         for s in self.snapshots(stage, limit):
+            identity = self.db.execute(
+                "SELECT candidate_identity FROM candidate_identities WHERE signal_id=?", (s["signal_id"],)
+            ).fetchone()
+            opportunity = identity[0] if identity else s["signal_id"]
+            if opportunity in seen:
+                continue
+            seen.add(opportunity)
             row = self.db.execute(
                 "SELECT available_ms,payload FROM ml_labels WHERE snapshot_id=? "
                 "AND policy=? AND available_ms<=?",
@@ -134,7 +159,9 @@ class FeatureStore:
             label = json.loads(row[1])
             if not label.get("complete") or label.get("net_r") is None or label["exit_ms"] > asof_ms:
                 continue
-            result.append({**s, "label": label, "label_available_ms": row[0]})
+            result.append(
+                {**s, "candidate_identity": opportunity, "label": label, "label_available_ms": row[0]}
+            )
         return result
 
     def export(self, asof_ms, policy="prints-v1", stage="decision", source=None):

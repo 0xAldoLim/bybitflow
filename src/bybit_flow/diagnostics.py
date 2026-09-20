@@ -60,6 +60,10 @@ async def doctor(settings, store, network=True):
         "status": "FRESH" if 0 <= now_ms() - runtime.get("at_ms", 0) <= 90_000 else "NOT_OBSERVED_OR_STALE"
     }
     checks["stream"] = store.get("stream_health", {"status": "NOT_OBSERVED"})
+    from .thesis_health import summary as health_summary
+    checks["thesis_health"] = health_summary(store)
+    checks["macro"] = store.get("macro_health", {"status": "NOT_OBSERVED"})
+    checks["recorder_runtime"] = store.get("recorder_health", {"status": "NOT_OBSERVED"})
     checks["recorder"] = {
         "segments": store.db.execute("SELECT count(*) FROM segments").fetchone()[0],
         "note": "segment count is not proof the running recorder is healthy",
@@ -68,6 +72,9 @@ async def doctor(settings, store, network=True):
         "status": "CONFIGURED" if settings.research_webhook.get_secret_value() else "NOT_CONFIGURED",
         "delivery": "run test-discord to establish actual delivery",
     }
+    from .identity import delivery_status
+
+    checks["real_signal_delivery"] = delivery_status(store)
     from .ml.registry import Registry
 
     summary = Registry(store).summary()
@@ -111,7 +118,7 @@ async def discord_test(settings, store, transport=None):
         "embeds": [
             {
                 "title": "BYBITFLOW CONNECTION TEST",
-                "description": "NOT A TRADE SIGNAL\nNo candidate, fill, position or ML outcome is created.",
+                "description": "NOT A TRADE SIGNAL\nBybitFlow outbound Discord connectivity test. No setup, price recommendation, probability, or execution.",
                 "timestamp": iso(now),
                 "fields": [
                     {"name": "Application", "value": version("bybit-flow")},

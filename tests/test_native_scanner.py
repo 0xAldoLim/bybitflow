@@ -107,6 +107,7 @@ async def test_native_rest_to_persistent_watchlist(settings, venue):
                 "1h": 3600000,
                 "1H": 3600000,
                 "15m": 900000,
+                "5m": 300000,
             }[p.get("interval", p.get("bar"))]
             final, rows = asof // width * width, []
             for i in range(300):

@@ -33,11 +33,12 @@ async def test_recorder_raw_and_normalized_roundtrip(settings):
 def test_backpressure_opens_circuit(settings):
     store = Store(settings.data_dir)
     rec = Recorder(store, settings)
+    rec.critical_symbols.add("T")
     for _ in range(settings.queue_size):
         rec.offer("test", "T", 1, {})
     with pytest.raises(RuntimeError):
         rec.offer("test", "T", 1, {})
-    assert not rec.healthy and store.get("recorder_gap")
+    assert not rec.healthy and rec.metrics()["overflow_count"] == 1
     store.close()
 
 
@@ -45,6 +46,8 @@ async def test_recorder_keeps_up_with_bursts_without_losing_rows(settings):
     settings = settings.model_copy(update={"queue_size": 256})
     store = Store(settings.data_dir)
     rec = Recorder(store, settings)
+
+    rec.critical_symbols.add("T")
 
     async def produce():
         try:
@@ -70,6 +73,9 @@ async def test_recorder_keeps_up_with_bursts_without_losing_rows(settings):
 async def test_recording_storage_limit_reports_actionable_reason(settings):
     store = Store(settings.data_dir)
     rec = Recorder(store, settings)
+    rec.settings = settings.model_copy(update={"max_storage_gb": 0.11})
+    with (store.root / "budget-fixture.bin").open("wb") as fixture:
+        fixture.truncate(110_000_000)
     rec.disk_bytes = settings.max_storage_gb * 1e9
     rec.offer("test", "T", 100, {})
     rec.running = False
@@ -141,11 +147,11 @@ async def test_discord_deduplicates_and_omits_mentions(settings, signal):
 
     n = Notifier(cfg, store, httpx.MockTransport(handle))
     assert await n.send_research(signal) == "sent"
-    assert await n.send_research(signal) == "already-attempted"
+    assert await n.send_research(signal) == "duplicate-plan-suppressed"
     assert len(calls) == 1
     payload = json.loads(calls[0].content)
     assert payload["allowed_mentions"] == {"parse": []}
-    assert "score is not win probability" in json.dumps(payload)
+    assert "score is not win probability" not in json.dumps(payload)
     assert (await n.send_public(signal)).startswith("blocked")
     store.close()
 

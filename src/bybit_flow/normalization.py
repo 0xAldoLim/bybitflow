@@ -35,6 +35,8 @@ def normalize(envelope):
     exchange = p.get("exchange")
     if source.startswith("native/"):
         _, exchange, source = source.split("/", 2)
+        if p.get("exchange") not in {None, exchange}:
+            raise ValueError("Envelope source exchange mismatch")
     elif source.startswith("raw/"):
         exchange = source.split("/", 2)[1]
     elif "tradingview" in source:
@@ -60,6 +62,11 @@ def normalize(envelope):
         is_trade = source.startswith("ws/publicTrade.")
         rows = p["data"] if isinstance(p["data"], list) else [p["data"]]
         for r in rows:
+            price, quantity = Decimal(r["p"]), Decimal(r["v"])
+            if not price.is_finite() or not quantity.is_finite() or price <= 0 or quantity <= 0:
+                raise ValueError("Nonpositive or nonfinite public execution")
+            if r["S"] not in {"Buy", "Sell"} or int(r["T"]) > envelope["receipt_ms"] + 1000:
+                raise ValueError("Invalid side or future execution timestamp")
             yield base | {
                 "kind": "trade" if is_trade else "liquidation",
                 "event_ms": int(r["T"]),
@@ -76,3 +83,20 @@ def normalize(envelope):
         yield base | {"kind": "book_" + p["type"], "event_ms": int(p.get("cts", p["ts"]))}
     else:
         yield base
+
+
+def prepare(batch):
+    """Preserve malformed envelopes as explicit gaps instead of poisoning retries."""
+    safe, normalized = [], []
+    for original in batch:
+        envelope = original
+        try:
+            rows = list(normalize(envelope))
+        except (ValueError, KeyError, TypeError, ArithmeticError) as exc:
+            envelope = dict(original, source="control/gap", complete=False,
+                            payload=json.dumps(dict(reason="DATA_QUALITY", error_type=type(exc).__name__,
+                                                    original_envelope=original)))
+            rows = list(normalize(envelope))
+        safe.append(envelope)
+        normalized.extend(rows)
+    return safe, normalized

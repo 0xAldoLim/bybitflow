@@ -23,7 +23,7 @@ def cycle(settings, store):
         raise ValueError("No recorded active venue for source-specific training")
     if settings.ml_two_stage:
         ready = store.db.execute(
-            "SELECT COUNT(*) FROM ml_snapshots s JOIN ml_labels l ON l.snapshot_id=s.id "
+            "SELECT COUNT(DISTINCT coalesce(c.candidate_identity,s.signal_id)) FROM ml_snapshots s JOIN ml_labels l ON l.snapshot_id=s.id LEFT JOIN candidate_identities c ON c.signal_id=s.signal_id "
             "WHERE s.stage='decision' AND l.policy='prints-v1' "
             "AND json_extract(l.payload,'$.complete')=1 AND json_array_length(s.payload,'$.sequence')=16 "
             "AND json_extract(s.payload,'$.source')=?",
@@ -46,6 +46,9 @@ def monitor(settings, store):
     from .labels import label_recordings
     from .recordings import worker_rows
 
+    previous = store.get("ml_monitor", {})
+    store.put("ml_monitor", dict(at_ms=now_ms(), status="materializing", previous_status=previous.get("status"),
+                                last_success_ms=previous.get("last_success_ms", previous.get("at_ms") if previous.get("status") == "observed" else None)))
     paths = store.db.execute("SELECT 1 FROM segments LIMIT 1").fetchone()
     result = dict(at_ms=now_ms(), status="no-recordings")
     if settings.ml_two_stage:
@@ -65,7 +68,13 @@ def monitor(settings, store):
             (store.get("recording_retention", {}).get("through_ms", 0),),
         ).fetchone()
         labels = (
-            label_recordings(store, worker_rows(store), settings, observed_until_ms=now_ms())
+            label_recordings(
+                store,
+                worker_rows(store, after_ms=store.get("primary_materialization", {}).get("cursor_ms")),
+                settings,
+                observed_until_ms=now_ms(),
+                incremental=True,
+            )
             if pending
             else {"complete": 0}
         )
@@ -77,10 +86,17 @@ def monitor(settings, store):
             from ..notifications import Notifier
 
             asyncio.run(Notifier(settings, store).send_operational("drift", result["drift"]))
+    if result["status"] == "observed":
+        result["last_success_ms"] = now_ms()
     store.put("ml_monitor", result)
     from ..retention import prune_recordings
 
     result["retention"] = prune_recordings(store, settings)
+    from .horizon import fit as fit_horizon
+
+    result["horizon_model"] = fit_horizon(store, settings, now_ms())
+    from .policy_research import run as policy_research
+    result["score_profile_research"] = policy_research(store, now_ms())
     return result
 
 
@@ -194,11 +210,13 @@ def run(arguments, settings, store):
                 import fcntl
 
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            first_monitor = True
             while True:
-                if now_ms() - store.get("ml_monitor", {}).get("at_ms", 0) >= 900_000:
+                if first_monitor or now_ms() - store.get("ml_monitor", {}).get("at_ms", 0) >= 900_000:
+                    first_monitor = False
                     try:
                         monitor(settings, store)
-                    except (ValueError, OSError) as exc:
+                    except Exception as exc:
                         store.put("ml_monitor", dict(at_ms=now_ms(), status="abstained", reason=str(exc)))
                 previous_cycle = store.get("ml_cycle", {})
                 previous = previous_cycle.get("at_ms", 0)
@@ -211,7 +229,7 @@ def run(arguments, settings, store):
                 if args.command == "cycle" or now_ms() - previous >= cadence:
                     try:
                         result = dict(at_ms=now_ms(), status="challenger", model_id=cycle(settings, store))
-                    except (ValueError, OSError) as exc:
+                    except Exception as exc:
                         result = dict(at_ms=now_ms(), status="abstained", reason=str(exc))
                     store.put("ml_cycle", result)
                     if settings.ops_webhook.get_secret_value():

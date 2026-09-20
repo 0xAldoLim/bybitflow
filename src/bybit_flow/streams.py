@@ -97,7 +97,10 @@ class Streams:
         symbol = topic.split(".")[-1]
         if symbol not in self.books:
             return
-        self.recorder.offer("ws/" + topic, symbol, msg["ts"], msg, receipt)
+        if self.recorder.offer("ws/" + topic, symbol, msg["ts"], msg, receipt) is False:
+            self.books[symbol].reset()
+            self.tapes[symbol].reset(receipt)
+            return
         if topic.startswith("orderbook."):
             self.books[symbol].apply(msg, receipt)
             if receipt - self.last_frame.get(symbol, 0) >= 5000:

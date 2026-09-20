@@ -294,3 +294,50 @@ and restore into a separate volume before replacing an installation.
 `bybit-flow retention-plan` reports archive candidates; it does not delete data.
 Keep the outbox and recording manifests with their related artifacts.
 See [operations](OPERATIONS.md) for recovery and delivery semantics.
+
+## Multi-horizon discovery and notification hardening
+
+Stage A1 ranks short intraday, core intraday and swing opportunities independently
+using closed candles, spread and liquidity. The best supported priority determines
+shortlisting; these ranks are not quality scores or probabilities. Stage A2 checks
+real visible depth for protected active/core symbols, exploit and exploration
+selections, then reserves only as needed. `FLOW_STAGE_A_DEPTH_CANDIDATES=0` derives
+reserve capacity as three times deep capacity. Existing active feeds remain protected.
+
+New versions use explicit context/setup/execution timeframe provenance. Existing
+plans, scores, horizons and deadlines are unchanged. Fundamentals now separate
+source coverage from an explicit sourced quality/risk assessment; unassessed facts
+provide no favorable quality. Severe adverse evidence reduces credit. The five
+cross-market points primarily use beta-adjusted residual evidence, with a capped
+fallback when factors are unavailable. The seven category weights still total 100.
+
+An economic plan has an `alert-fingerprint-v1` identity independent of evaluation
+timestamps. SQLite atomically claims it before HTTP delivery. Existing outbox
+idempotency remains. Ambiguous delivery is not automatically retried. Candidate
+reevaluations remain in history but contribute at most one independent opportunity
+to future ML datasets. Different horizons and families retain separate research data.
+
+Thesis clustering affects **notification presentation only**. A stronger related
+plan can become the primary displayed thesis, but it never replaces, pauses,
+rescales, merges or terminates either original setup. Related horizons receive
+compact confirmations; materially different plans can receive separate cards;
+opposite directions are labelled as conflicting. These cards do not imply multiple
+full positions. Existing active alerts are seeded individually, without retroactive
+clustering. `/api/delivery` and the Signals page report real initial delivery metrics,
+excluding connection/synthetic tests and lifecycle-only updates.
+
+Late-outcome research joins immutable decision-time snapshots to separate completed
+post-terminal labels. Future labels never enter decision inputs or rewrite a primary
+expiry. The pooled logistic horizon experiment uses chronological train/validation/
+test partitions, outcome purging, a one-day embargo and a reserved holdout. Its
+minimum is `FLOW_HORIZON_MODEL_MIN_SAMPLES` (default 500). Below that it reports
+`INSUFFICIENT_EVIDENCE` and no recommendation. It remains research-only, with no
+production promotion or authority to change live plans.
+
+Retention is enabled by default for new installations. Explicit
+`FLOW_RECORDING_RETENTION_ENABLED=false` still disables it. Upgrades do not edit
+an existing `.env`. Storage status includes retention state, raw/permanent/protected/
+deletable bytes, usage percentage, cleanup history and cumulative reclaimed space.
+Active setups and unresolved primary recording outcomes remain
+protected. At budget pressure the recorder attempts safe cleanup before opening its
+storage circuit breaker. Late observations use compact candle checkpoints rather than pinning raw depth for days.

@@ -163,7 +163,7 @@ async def test_materially_different_horizon_can_alert_during_symbol_cooldown(set
     assert await notifier.send_research(swing) == "sent"
     duplicate = swing.model_copy(update={"id": "duplicate-swing"})
     store.signal(duplicate)
-    assert await notifier.send_research(duplicate) == "thesis already delivered"
+    assert await notifier.send_research(duplicate) == "duplicate-plan-suppressed"
     assert store.db.execute("SELECT count(*) FROM outbox WHERE status='sent'").fetchone()[0] == 2
     store.close()
 

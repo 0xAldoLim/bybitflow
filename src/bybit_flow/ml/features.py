@@ -83,6 +83,13 @@ CATALOG = {
         }.items()
     },
 }
+CATALOG.update({
+    "macro_minutes_to_high_impact_usd": ("macro", "evidence.macro.minutes_to_high_impact_usd", "Scheduled high USD event proximity known at decision time; no release result"),
+    "macro_pause_active": ("macro", "evidence.macro.macro_pause_active", "Scheduled New York session USD high-impact pause flag"),
+    "btc_regime_impulse": ("market_alignment", "evidence.market_alignment.btc_impulse_strength", "Causal BTC setup-timeframe slope in ATR units"),
+    "market_conflict_blocked": ("market_alignment", "evidence.market_alignment.blocked", "Versioned market-conflict validity gate at decision time"),
+})
+
 CONTEXT = (
     "family",
     "direction",
@@ -196,7 +203,16 @@ def snapshot(signal, decision_ms, stage, membership=None):
     payload = signal.model_dump(mode="json")
     values, metadata = {}, {}
     for name, (group, path, definition) in CATALOG.items():
-        value = lookup(payload, path)
+        actual_path = path
+        if signal.horizon_profile != "LEGACY":
+            for old, new in (
+                ("h4", "context_features"),
+                ("h1", "setup_features"),
+                ("m15", "execution_features"),
+            ):
+                if new in signal.evidence:
+                    actual_path = actual_path.replace("evidence." + old + ".", "evidence." + new + ".")
+        value = lookup(payload, actual_path)
         if name in {"bos", "choch"}:
             value = {"up": 1.0, "down": -1.0}.get(value)
         source = signal.source + (
@@ -204,7 +220,7 @@ def snapshot(signal, decision_ms, stage, membership=None):
             if signal.source == "tradingview" and group == "orderflow"
             else ":deterministic-observation"
         )
-        prefix = path.split(".")[1] if path.startswith("evidence.") else "risk"
+        prefix = actual_path.split(".")[1] if actual_path.startswith("evidence.") else "risk"
         section = signal.evidence.get(prefix, {})
         section = section if isinstance(section, dict) else {}
         source_ms = section.get("asof", section.get("event_ms", decision_ms))
@@ -223,6 +239,14 @@ def snapshot(signal, decision_ms, stage, membership=None):
             available_ms=available_ms,
             definition=definition,
             version=SCHEMA_VERSION,
+            timeframe={
+                "context_features": signal.context_timeframe,
+                "setup_features": signal.setup_timeframe,
+                "execution_features": signal.execution_timeframe,
+                "h4": "240",
+                "h1": "60",
+                "m15": "15",
+            }.get(prefix),
             missing=missing,
         )
     # Derived features use only the frozen plan, not subsequent execution outcomes.

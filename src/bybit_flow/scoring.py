@@ -35,14 +35,20 @@ def unit(value, scale=1):
     )
 
 
-def score(signal, flow_confirmed, derivatives_available, fundamental=None, cross=None):
+def score(
+    signal, flow_confirmed, derivatives_available, fundamental=None, cross=None, preserve_original=False
+):
     # Price-event group receives one score; sweep/BOS/wick are never summed as independent votes.
     e = signal.evidence
-    h4, h1, flow, d = (e.get(k, {}) for k in ("h4", "h1", "flow", "derivatives"))
-    sign = 1 if signal.direction == "LONG" else -1
-    structure = h1.get("sweep_long" if sign > 0 else "sweep_short", False) or h1.get("bos") == (
-        "up" if sign > 0 else "down"
+    context_features, setup_features = (
+        e.get("context_features", e.get("h4", {})),
+        e.get("setup_features", e.get("h1", {})),
     )
+    flow, d = e.get("flow", {}), e.get("derivatives", {})
+    sign = 1 if signal.direction == "LONG" else -1
+    structure = setup_features.get("sweep_long" if sign > 0 else "sweep_short", False) or setup_features.get(
+        "bos"
+    ) == ("up" if sign > 0 else "down")
     distance = abs(signal.entry - signal.stop)
     same_funding = sign * (d.get("funding_rate") or 0)
     # Due-diligence coverage, not token intrinsic value or a directional override.
@@ -74,8 +80,8 @@ def score(signal, flow_confirmed, derivatives_available, fundamental=None, cross
             unit(flow.get("stacked_buy" if sign > 0 else "stacked_sell", 0), 4),
         )
     fractions = {
-        "regime": unit(h4.get("efficiency"), 0.5),
-        "structure": unit(h1.get("atr", 0) * 2 / distance if distance else 0)
+        "regime": unit(context_features.get("efficiency"), 0.5),
+        "structure": unit(setup_features.get("atr", 0) * 2 / distance if distance else 0)
         * int(
             bool(structure)
             or signal.family in {"trend_pullback", "breakout_retest"}
@@ -113,14 +119,38 @@ def score(signal, flow_confirmed, derivatives_available, fundamental=None, cross
             )
             fractions["structure"] *= 0.85 + 0.15 * int(aligned or auction["state"] == "BALANCE" and reversal)
         fractions["execution"] *= unit(execution.get("stop_noise_ratio", 0), 1)
-        factor = e.get("market_factor", {})
-        if factor.get("available"):
-            fractions["cross_market"] *= 0.75 + 0.25 * int(sign * factor["residual_return"] >= 0)
         if signal.horizon_profile in {"SWING", "EXTENDED_SWING"}:
             fractions["derivatives"] *= unit(1 - max(0, same_funding) * signal.expected_hold_max / 480 / 0.01)
         e["score_reasons"] = [
             f"{k}: {v:.3f} of category weight from observed evidence" for k, v in fractions.items()
         ]
+    if preserve_original and signal.horizon_profile != "LEGACY" and e.get("range"):
+        factor = e.get("market_factor", {})
+        if factor.get("available"):
+            fractions["cross_market"] *= 0.75 + 0.25 * int(sign * factor["residual_return"] >= 0)
+    if signal.horizon_profile != "LEGACY" and not preserve_original:
+        from .fundamentals import quality_evidence
+
+        assessment = quality_evidence(facts, signal.created_ms)
+        e["fundamental_assessment"] = assessment
+        fractions["fundamentals"] = assessment["fraction"]
+        factor = e.get("market_factor", {})
+        if factor.get("available"):
+            stabilities = [factor.get("beta_stability_" + name) for name in ("btc", "eth")]
+            stabilities = [x for x in stabilities if isinstance(x, (int, float))]
+            stability = 1 / (1 + sum(stabilities) / len(stabilities)) if stabilities else 0
+            residual = sign * factor.get("residual_return", 0)
+            # Near-zero residual cannot get full credit merely by following crypto beta.
+            strength = unit(residual, 0.005)
+            fractions["cross_market"] = strength * (0.7 + 0.3 * stability)
+        else:
+            fractions["cross_market"] = min(0.25, cross_fraction * 0.25)
+        oi = d.get("oi_history", [])
+        if not oi or not 0 <= signal.created_ms - int(oi[-1].get("timestamp", 0)) <= 6 * 3_600_000:
+            fractions["derivatives"] *= 0.25
+        basis = sign * (d.get("basis") or 0)
+        fractions["derivatives"] *= unit(1 - max(0, basis) / 0.02)
+        e["score_reasons"] = [f"{k}: {v:.3f} of existing category weight" for k, v in fractions.items()]
     signal.quality = round(sum(WEIGHTS[k] * v for k, v in fractions.items()), 1)
     signal.raw_tier = "F" if signal.gates else tier(signal.quality)
     signal.evidence["score_components"] = {
@@ -135,5 +165,7 @@ def score(signal, flow_confirmed, derivatives_available, fundamental=None, cross
     }
     signal.evidence["score_profile"] = (
         "native-evidence-2; family-specific flow; fundamentals means sourced diligence coverage"
+        if preserve_original
+        else "native-evidence-3; sourced quality/risk separated from coverage; causal residual factor credit"
     )
     return signal

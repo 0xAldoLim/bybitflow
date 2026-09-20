@@ -14,26 +14,21 @@ from ..replay import segment_rows
 from ..storage import now_ms
 
 
-def worker_rows(store):
-    import uuid
+def worker_rows(store, after_ms=None):
+    from ..leases import RangeLease
 
-    lease = uuid.uuid4().hex
-    with store.db:
-        store.db.execute(
-            "INSERT INTO storage_leases VALUES(?,?,?,?,?)",
-            (
-                lease,
-                store.get("recording_retention", {}).get("through_ms", 0),
-                now_ms(),
-                now_ms() + 86_400_000,
-                "ML replay in progress",
-            ),
-        )
-    try:
-        yield from _worker_rows(store)
-    finally:
-        with store.db:
-            store.db.execute("DELETE FROM storage_leases WHERE id=?", (lease,))
+    start = store.get("recording_retention", {}).get("through_ms", 0)
+    pending = store.db.execute(
+        "SELECT min(s.decision_ms) FROM ml_snapshots s WHERE s.stage='decision' AND s.decision_ms>? "
+        "AND NOT EXISTS (SELECT 1 FROM ml_labels l WHERE l.snapshot_id=s.id AND l.policy='prints-v1')",
+        (start,),
+    ).fetchone()[0]
+    if pending is not None:
+        start = max(start, pending - 900_000)
+    if after_ms is not None:
+        start = max(start, after_ms)
+    with RangeLease(store, start, now_ms(), "ML verified replay") as lease:
+        yield from _worker_rows(store, lease, after_ms)
 
 
 def committed_manifests(store, retained_after):
@@ -42,7 +37,8 @@ def committed_manifests(store, retained_after):
     while True:
         batch = store.db.execute(
             "SELECT id,payload FROM segments WHERE id>? AND at_ms<=? "
-            "AND json_extract(payload,'$.max_receipt_ms')>? ORDER BY id LIMIT 1000",
+            "AND json_extract(payload,'$.max_receipt_ms')>? "
+            "AND NOT EXISTS (SELECT 1 FROM kv WHERE key='pruned_segment:'||segments.id) ORDER BY id LIMIT 1000",
             (last_id, boundary, retained_after),
         ).fetchall()
         if not batch:
@@ -52,7 +48,7 @@ def committed_manifests(store, retained_after):
             yield json.loads(payload)
 
 
-def _worker_rows(store):
+def _worker_rows(store, lease=None, after_ms=None):
     # SQLite publication happens after gzip, parquet and manifest have closed.
     retained_after = store.get("recording_retention", {}).get("through_ms", 0)
     pending = store.db.execute(
@@ -62,9 +58,13 @@ def _worker_rows(store):
     ).fetchone()
     if pending and pending[0] is not None:
         retained_after = max(retained_after, pending[0] - 900_000)
+    if after_ms is not None:
+        retained_after = max(retained_after, after_ms)
     manifests = committed_manifests(store, retained_after)
     spans = []
     for manifest in manifests:
+        if lease:
+            lease.heartbeat()
         path = Path(manifest["raw"])
         start, end = manifest["min_receipt_ms"], manifest["max_receipt_ms"]
         reason = None
@@ -78,6 +78,8 @@ def _worker_rows(store):
             previous, low, high, count = -1, None, None, 0
             with raw_stream(path) as stream:
                 for line in stream:
+                    if lease:
+                        lease.heartbeat()
                     receipt = json.loads(line)["receipt_ms"]
                     if receipt < previous:
                         reason = "non-monotonic receipt time"
@@ -128,6 +130,8 @@ def _worker_rows(store):
     )
     previous = None
     for index, group in enumerate(groups):
+        if lease:
+            lease.heartbeat(start=group["start"], force=True)
         if index % 1000 == 0:
             store.put(
                 "ml_replay_progress",
@@ -169,6 +173,8 @@ def _worker_rows(store):
             )
         last_row = last_emitted = None
         for row in segment_rows([manifest["raw"]]):
+            if lease:
+                lease.heartbeat()
             last_row = row
             source = row["source"]
             if source.startswith("native/"):

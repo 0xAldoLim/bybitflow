@@ -71,15 +71,17 @@ def assign(signal, name):
     signal.entry_session = signal.session["primary"]
     signal.lifecycle_version = "horizon-v1"
     signal.feature_schema_version = "candidate-v5"
-    signal.version += ":horizons-v1:" + name
+    signal.version += ":horizons-v1:" + name + ":hardening-v1:autonomy-v1"
     signal.id = hashlib.sha256((signal.id + ":" + name).encode()).hexdigest()[:24]
     # Group the actual structural event across horizons; alert comparison also checks prices.
     signal.setup_thesis_id = hashlib.sha256(
         f"{signal.source}|{signal.symbol}|{signal.family}|{signal.direction}|{signal.evidence['trigger_bar_end']}".encode()
     ).hexdigest()[:24]
-    signal.reason = (
-        f"{signal.family}: causal {p.setup} setup, {p.context} context; executed-flow confirmation required"
-    )
+    for old, new in (("h4", "context_features"), ("h1", "setup_features"), ("m15", "execution_features")):
+        if old in signal.evidence:
+            signal.evidence[new] = signal.evidence.pop(old)
+    label = {"D": "1D", "240": "4H", "60": "1H", "15": "15M", "5": "5M"}
+    signal.reason = f"{signal.family}: {label[p.setup]} setup in {label[p.context]} context; {label[p.execution]} execution confirmation"
     signal.evidence["research_only_horizon"] = p.research_only
     return signal
 

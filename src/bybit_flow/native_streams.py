@@ -135,7 +135,7 @@ class NativeStreams:
             )
 
     def record(self, source, symbol, event, payload, complete=True):
-        self.recorder.offer(
+        recorded = self.recorder.offer(
             f"native/{self.api.name}/{source}",
             symbol,
             event,
@@ -143,6 +143,12 @@ class NativeStreams:
             now_ms(),
             complete=complete,
         )
+        if recorded is False and source.startswith("ws/"):
+            # Optional streams may shed persistence under pressure, but their tape
+            # must never remain qualified as continuously recorded evidence.
+            if symbol in self.tapes:
+                self.tapes[symbol].reset(now_ms())
+            raise RuntimeError("Optional stream suspended by recorder backpressure")
 
     def trade(self, symbol, raw):
         receipt = now_ms()
@@ -223,8 +229,10 @@ class NativeStreams:
                     f"feed:{self.api.name}:{symbol}",
                     {"status": "DISCONNECTED", "at_ms": now_ms(), "error_type": type(exc).__name__},
                 )
-                if not self.recorder.healthy:
-                    return  # Persistence loss is a circuit breaker, not a reason to collect unrecorded data.
+                while not self.recorder.healthy:
+                    # Keep the task alive so persistence recovery also restores
+                    # subscriptions. Never collect unrecorded data while waiting.
+                    await asyncio.sleep(1)
                 await asyncio.sleep(backoff + random.random())
                 backoff = min(backoff * 2, 60)
 

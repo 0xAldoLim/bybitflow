@@ -63,17 +63,17 @@ function watchTable(rows) {
     ? table(
         [
           "Market",
-          "4H regime",
-          "1H regime",
+          "Best horizon",
+          "Short / core / swing priority",
           "7D median turnover",
           "Current / normal spread",
           "Eligibility",
-          "Research rank",
+          "Scanner priority",
         ],
         rows.map((r) => [
           `<a href="#market/${encodeURIComponent(r.symbol)}">${escape(r.symbol)}</a>`,
-          escape(r.regime_4h),
-          escape(r.regime_1h),
+          escape(r.best_pre_rank_horizon || "CORE_INTRADAY"),
+          [r.pre_rank_short_intraday, r.pre_rank_core_intraday, r.pre_rank_swing].map(v => number(v)).join(" / "),
           money(r.turnover_7d),
           number(r.spread_bps) + " / " + number(r.normal_spread?.median_bps) + " bps",
           r.eligible
@@ -181,8 +181,10 @@ async function render() {
         `<input id="filter" aria-label="Filter symbols" placeholder="Filter symbol…"><div id="watch-table">${watchTable(data.watchlist)}</div>`,
         "All paginated eligible contracts",
       );
-    else if (page === "signals")
-      body = panel("Lifecycle journal", signalTable(data.signals), "Research alerts; no order execution");
+    else if (page === "signals") {
+      const delivery = await api("delivery");
+      body = panel("Real signal delivery", json(delivery), "Excludes connection tests, synthetic cards and lifecycle updates") + panel("Lifecycle journal", signalTable(data.signals), "Research alerts; no order execution");
+    }
     else if (page === "ml") {
       const ml = await api("ml"),
         latest = ml.models[0];
@@ -199,6 +201,7 @@ async function render() {
           recording_audit: ml.recording_audit,
           learning_note: ml.learning_note,
           cycle: ml.cycle,
+          horizon_model: ml.horizon_model,
           drift: ml.drift,
         }),
       );

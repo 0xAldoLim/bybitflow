@@ -7,6 +7,11 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     market_source: Literal["auto", "binance", "bybit", "okx", "multi"] = "auto"
+    macro_news_enabled: bool = True
+    macro_news_pre_minutes: int = Field(30, ge=0, le=240)
+    macro_news_post_minutes: int = Field(30, ge=0, le=240)
+    macro_refresh_minutes: int = Field(15, ge=15, le=1440)
+    score_profile_auto_promote: bool = False
     ml_enabled: bool = False
     ml_filter_research: bool = False
     validated_alert_tiers: list[Literal["SSS", "SS", "S"]] = Field(default_factory=lambda: ["SSS"])
@@ -19,6 +24,8 @@ class Settings(BaseSettings):
     settle_coins: list[Literal["USDT", "USDC"]] = ["USDT"]
     core_watchlist: list[str] = ["BTCUSDT", "ETHUSDT"]
     deep_symbols: int = Field(8, ge=1, le=30)
+    stage_a_depth_candidates: int = Field(0, ge=0, le=150)
+    horizon_model_min_samples: int = Field(500, ge=30)
     min_age_days: int = Field(30, ge=30)
     min_daily_turnover: float = Field(20_000_000, gt=0)
     max_spread_bps: float = Field(5, gt=0, le=50)
@@ -46,7 +53,7 @@ class Settings(BaseSettings):
     queue_byte_limit: int = Field(32_000_000, ge=1_000_000, le=128_000_000)
     tape_max_trades: int = Field(50_000, ge=1000, le=200_000)
     max_storage_gb: float = Field(10, gt=0.1)
-    recording_retention_enabled: bool = False
+    recording_retention_enabled: bool = True
     ml_two_stage: bool = False
     horizon_profiles: list[Literal["SHORT_INTRADAY", "CORE_INTRADAY", "SWING", "EXTENDED_SWING"]] = Field(
         default_factory=lambda: ["CORE_INTRADAY", "SHORT_INTRADAY", "SWING", "EXTENDED_SWING"]

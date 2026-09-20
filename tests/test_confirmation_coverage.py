@@ -22,11 +22,12 @@ async def test_stale_other_symbol_does_not_block_confirmation_evidence(
     calculate_flow = Mock(return_value=flow)
     monkeypatch.setattr("bybit_flow.scanner.footprint", calculate_flow)
     monkeypatch.setattr("bybit_flow.scanner.evaluate_risk", lambda *args: {"reasons": [], "accepted": False})
-    monkeypatch.setattr("bybit_flow.scanner.score", lambda *args: None)
+    monkeypatch.setattr("bybit_flow.scanner.score", lambda *args, **kwargs: None)
     monkeypatch.setattr("bybit_flow.ml.inference.apply", lambda *args: None)
     store = Store(settings.data_dir)
     signal.source = "binance"
     signal.expires_ms = now + 900_000
+    signal.coverage["macro_deferred_ms"] = now - 100_000
     signal.evidence = {
         "trigger_bar_end": end,
         "execution_window_ms": window_ms,
@@ -34,6 +35,7 @@ async def test_stale_other_symbol_does_not_block_confirmation_evidence(
     }
     store.signal(signal)
     scanner = Scanner.__new__(Scanner)
+    scanner.recorder = Mock(healthy=True)
     scanner.settings, scanner.store = settings, store
     scanner.api = SimpleNamespace(name="binance")
     scanner.recorder = Mock(healthy=True)
@@ -66,6 +68,7 @@ async def test_stale_other_symbol_does_not_block_confirmation_evidence(
     saved = store.signals()[0]
     assert saved["coverage"]["trade_window_complete"]
     assert saved["coverage"]["reasons"] == []
+    assert saved["coverage"]["macro_deferred_ms"] == now - 100_000
     assert "executed order flow did not confirm family trigger" in saved["gates"]
     # Losing this signal's own history must still block evidence evaluation.
     tape.coverage_start = end
@@ -105,6 +108,7 @@ async def test_elapsed_fast_window_expires_instead_of_remaining_pending(settings
     signal.evidence = {"execution_window_ms": 60_000, "execution_window_end_ms": now - 120_001}
     store.signal(signal)
     scanner = Scanner.__new__(Scanner)
+    scanner.recorder = Mock(healthy=True)
     scanner.settings, scanner.store = settings, store
     scanner.api = SimpleNamespace(name="binance")
     scanner.context = {}

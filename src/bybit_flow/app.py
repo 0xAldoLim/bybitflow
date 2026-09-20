@@ -21,6 +21,20 @@ from .tradingview import Gateway, LiquidityObservation, TVEvent
 STATIC = Path(__file__).parent / "static"
 
 
+def read_report(root, callback):
+    """Research reports must not block the live market-data event loop."""
+    import sqlite3
+
+    store = Store.__new__(Store)
+    store.root = root
+    store.db = sqlite3.connect((root / "research.sqlite").resolve().as_uri() + "?mode=ro", uri=True)
+    store.db.row_factory = sqlite3.Row
+    try:
+        return callback(store)
+    finally:
+        store.close()
+
+
 class Position(BaseModel):
     symbol: str = Field(pattern=r"^[A-Z0-9]{2,30}$")
     risk_fraction: float = Field(ge=0, le=1)
@@ -128,7 +142,13 @@ def create_app(settings=None):
     async def ml_research(request: Request):
         from .ml.registry import Registry
 
-        return Registry(request.app.state.store).summary()
+        return await asyncio.to_thread(read_report, settings.data_dir, lambda store: Registry(store).summary())
+
+    @app.get("/api/delivery")
+    async def delivery_view(request: Request):
+        from .identity import delivery_status
+
+        return delivery_status(request.app.state.store)
 
     @app.get("/api/horizons")
     async def horizon_research(request: Request):
@@ -137,15 +157,17 @@ def create_app(settings=None):
         from .horizons import PROFILES, session_context
         from .observations import metrics
 
-        store = request.app.state.store
-        return dict(
-            profiles={k: asdict(v) for k, v in PROFILES.items()},
-            session=session_context(now_ms()),
-            observations=dict(store.db.execute("SELECT status,count(*) FROM observations GROUP BY status")),
-            score_buckets=metrics(store),
-            storage=store.get("storage_status", {}),
-            selection=store.get("deep_selection", {}),
-        )
+        def report(store):
+            return dict(
+                profiles={k: asdict(v) for k, v in PROFILES.items()},
+                session=session_context(now_ms()),
+                observations=dict(store.db.execute("SELECT status,count(*) FROM observations GROUP BY status")),
+                score_buckets=metrics(store),
+                storage=store.get("storage_status", {}),
+                selection=store.get("deep_selection", {}),
+            )
+
+        return await asyncio.to_thread(read_report, settings.data_dir, report)
 
     @app.get("/api/observations/{signal_id}")
     async def observation(signal_id: str, request: Request):
@@ -278,6 +300,7 @@ def create_app(settings=None):
 
     @app.get("/api/overview")
     async def overview(request: Request):
+        from .thesis_health import summary as health_summary
         store, rec, scanner = request.app.state.store, request.app.state.recorder, request.app.state.scanner
         return dict(
             scanner=scanner.status,
@@ -287,6 +310,9 @@ def create_app(settings=None):
             health=dict(
                 recorder=rec.healthy,
                 recorder_reason=rec.reason,
+                recorder_metrics=rec.metrics(),
+                thesis_health=health_summary(store),
+                macro=store.get("macro_health", {}),
                 queued=rec.queue.qsize(),
                 records_written=rec.written,
                 disk_bytes=rec.disk_bytes,

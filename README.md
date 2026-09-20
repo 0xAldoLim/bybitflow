@@ -37,7 +37,7 @@ the password stored in `FLOW_ADMIN_TOKEN` in the private `.env` file.
 
 ```bat
 cd /d "%USERPROFILE%\Documents\Codex\bybitflow"
-docker compose --profile ml stop
+docker compose --profile ml down
 ```
 
 **Check whether the services are running:**
@@ -170,7 +170,7 @@ replayed later. If protected data alone fills the budget, recording stops explic
 Back up important data first, then run from the project folder:
 
 ```bat
-docker compose --profile ml stop
+docker compose --profile ml down
 git pull --ff-only
 docker compose --profile ml up -d --build
 ```
@@ -216,6 +216,49 @@ Selected live feeds continue generating fresh minute candidates after older cand
 
 ### Feed interruptions after a signal
 
-A temporary feed interruption pauses monitoring; it does not establish a stop-loss hit or invalidate the price setup. The dashboard shows **MONITORING PAUSED** immediately. An interruption lasting at least one minute produces one Discord pause notice, followed by a recovery notice when fresh data returns. These updates are not new entry signals. Prices during a gap remain unverified, and new signals still require complete order-flow evidence.
+A temporary feed interruption pauses monitoring; it does not establish a stop-loss hit or invalidate the price setup. The dashboard shows **MONITORING PAUSED** immediately. An interruption lasting at least one minute produces one Discord pause notice, followed by a recovery notice only after historical catch-up and fresh live coverage both succeed. These updates are not new entry signals. Closed candles can establish conservative historical price outcomes; intrabar order flow and account fills remain unverified. New signals still require complete order-flow evidence.
 
 Published setups are monitored until their holding deadline, independently of the shorter entry window. Fresh observed stop crossings, a changed market regime, or a known major asset event can invalidate a setup. At the holding deadline, **TRACKING ENDED** reports the end of monitoring without claiming an account result. Previously withdrawn messages are historical records and are not reactivated.
+
+## Automatic maintenance
+
+The scanner, recording writer, source checks, storage maintenance, calendar and
+research workers recover independently. The recorder uses a bounded queue and a
+separate writer process. Under pressure, optional collection is reduced before
+active setups, unresolved primary outcomes and BTC/ETH evidence. Any lost data is
+recorded as a coverage gap; it cannot count as complete research evidence.
+
+Storage maintenance starts lossless compaction at 70% of the configured budget,
+adds safe pruning at 85%, and enters emergency maintenance at 95%. Short renewable
+range leases protect only data being read. Permanent signals, labels, model
+artifacts and audit provenance remain. Explicit retention opt-out is respected;
+existing `.env` files are never rewritten. If protected evidence fills the budget,
+the dashboard reports backpressure rather than deleting it.
+
+After downtime, existing setups are checked against original-exchange closed
+one-minute candles before monitoring resumes. Stops, targets and deadlines retain
+the original plan. Missing history keeps monitoring paused. Same-candle stop and
+target ambiguity is treated conservatively; reconstructed prices are not account
+fills.
+
+New entries pause around high-impact USD events scheduled during the New York
+08:00–17:00 session (DST-aware). Active setup monitoring continues. The calendar
+uses [Forex Factory's weekly export](https://www.forexfactory.com/calendar), caches
+schedules and reports provider failures. With no fresh cache, entry delivery is
+fail-open and the calendar is visibly degraded.
+
+New policy versions add market-conflict checks and persistent, multi-source thesis
+health checks. Existing setups keep their original version. Notification clusters
+provide exposure context only: every individual setup continues its own lifecycle.
+
+ML labels are accumulated incrementally using durable restart checkpoints. Repeated
+technical evaluations are excluded as independent opportunities. Horizon and
+score-profile studies remain research-only; insufficient evidence means abstention.
+Swing stop research does not move existing stops or automatically widen future ones.
+Current Swing stop policy retained until convincing out-of-sample evidence exists.
+
+Use `docker compose exec desk bybit-flow doctor` for health and
+`docker compose exec desk bybit-flow storage status` for storage details.
+Do not use `docker compose down -v` for ordinary shutdown: `-v` removes data volumes.
+
+See [deployment verification](docs/AUTONOMY_VERIFICATION.md) for test evidence, continuity checks and current research limitations.

@@ -61,10 +61,9 @@ def raw_stream(path):
 
 def compact(store, limit=300, dry_run=False):
     migrate(store)
+    from .leases import overlaps
     from .storage import now_ms
 
-    if store.db.execute("SELECT 1 FROM storage_leases WHERE expires_ms>? LIMIT 1", (now_ms(),)).fetchone():
-        return {"status": "replay in progress; compaction deferred", "segments": 0}
     # Never compact the writer's current boundary. Published older files are immutable.
     rows = store.db.execute(
         "SELECT s.payload FROM segments s LEFT JOIN segment_packs p ON p.segment_id=s.id WHERE p.segment_id IS NULL AND json_extract(s.payload,'$.max_receipt_ms')>? ORDER BY s.at_ms LIMIT ?",
@@ -73,7 +72,11 @@ def compact(store, limit=300, dry_run=False):
     selected = []
     for row in rows:
         m = json.loads(row[0])
-        if Path(m["raw"]).exists() and Path(m["parquet"]).exists():
+        if (
+            not overlaps(store, m["min_receipt_ms"], m["max_receipt_ms"])
+            and Path(m["raw"]).exists()
+            and Path(m["parquet"]).exists()
+        ):
             selected.append(m)
         if len(selected) >= limit:
             break
@@ -86,6 +89,32 @@ def compact(store, limit=300, dry_run=False):
             "files_to_pack": len(selected) * 3,
             "policy": "Lossless archive with checksum verification before removing redundant originals",
         }
+    from contextlib import ExitStack
+
+    from .leases import RangeLease
+
+    # Recheck/claim each exact range atomically before touching files. A new reader
+    # either owns the range first or waits for this lossless publication to finish.
+    with ExitStack() as stack:
+        protected = []
+        for m in selected:
+            try:
+                lease = stack.enter_context(
+                    RangeLease(
+                        store, m["min_receipt_ms"], m["max_receipt_ms"], "Lossless compaction", exclusive=True
+                    )
+                )
+                protected.append((m, lease))
+            except BlockingIOError:
+                continue
+        if len(protected) < 2:
+            return {"status": "overlapping evidence protected", "segments": 0}
+        result = _pack(store, [m for m, _ in protected], [lease for _, lease in protected])
+        store.put("last_compaction", dict(at_ms=now_ms(), **result))
+        return result
+
+
+def _pack(store, selected, leases):
     root = (store.root / "segments").resolve()
     directory = store.root / "packs"
     directory.mkdir(exist_ok=True)
@@ -94,6 +123,8 @@ def compact(store, limit=300, dry_run=False):
     before = 0
     with zipfile.ZipFile(target, "x", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
         for m in selected:
+            for lease in leases:
+                lease.heartbeat()
             paths = [Path(m["raw"]), Path(m["parquet"]), Path(m["raw"]).with_name(m["id"] + ".manifest.json")]
             for p in paths:
                 if p.is_symlink() or p.resolve().parent != root:
@@ -113,6 +144,8 @@ def compact(store, limit=300, dry_run=False):
                 (m["id"], str(target), Path(m["raw"]).stat().st_size + Path(m["parquet"]).stat().st_size),
             )
     # A crash here leaves redundant originals; readers prefer them, and evidence survives.
+    for lease in leases:
+        lease.heartbeat(force=True)
     for p in files:
         p.unlink()
     return dict(
