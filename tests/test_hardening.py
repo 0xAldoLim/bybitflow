@@ -96,7 +96,7 @@ async def test_clustering_does_not_mutate_either_lifecycle(settings, signal):
     store.signal(other)
     before = dict(store.db.execute("SELECT id,payload FROM signals"))
     assert await notifier.send_research(other) == "sent"
-    assert "PRIMARY THESIS UPDATE" in sent[-1]["embeds"][0]["title"]
+    assert "NEW SETUP [Stronger setup]" in sent[-1]["embeds"][0]["title"]
     assert before == dict(store.db.execute("SELECT id,payload FROM signals"))
     assert len(store.active_signals()) == 2
     assert delivery_status(store)["thesis_cluster_updates"] == 1
@@ -414,3 +414,38 @@ async def test_restart_seeds_older_runtime_send_without_mutating_active(settings
     )
     assert calls == []
     store.close()
+
+
+@pytest.mark.parametrize(
+    "relation,label",
+    [
+        ("CONFIRMING_HORIZON", "Setup confirmation"),
+        ("CONFLICTING_HORIZON", "Conflicting horizon"),
+        ("STRONGER_REPLACEMENT", "Stronger setup"),
+    ],
+)
+def test_related_setup_cards_show_old_and_new_without_changing_plans(signal, relation, label):
+    from bybit_flow.notifications import related_embed
+
+    old = signal.model_copy(deep=True)
+    old.state = "ALERTED"
+    old.horizon_profile = "CORE_INTRADAY"
+    new = signal.model_copy(deep=True)
+    new.id = "new-plan"
+    new.state = "CONFIRMED"
+    new.horizon_profile = "SWING"
+    new.entry = 101
+    if relation == "CONFLICTING_HORIZON":
+        new.direction = "SHORT"
+        new.stop, new.tp1, new.tp2 = 106, 86, 81
+    before = (old.model_dump_json(), new.model_dump_json())
+    card = related_embed(new, old, relation, "http://localhost", "cluster:test")["embeds"][0]
+    assert card["title"].startswith("NEW SETUP [" + label + "]")
+    fields = {f["name"]: f["value"] for f in card["fields"]}
+    assert "101" in fields["Entry"]
+    assert "Entry 100" in fields["Previous setup [unchanged]"]
+    assert "SL 95" in fields["Previous setup [unchanged]"]
+    assert "CORE_INTRADAY" in fields["Previous setup [unchanged]"]
+    assert "separately monitored" in fields["Monitoring"]
+    assert before == (old.model_dump_json(), new.model_dump_json())
+    assert len(json.dumps(card)) < 6000

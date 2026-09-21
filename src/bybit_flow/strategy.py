@@ -19,7 +19,11 @@ def candidates(
     execution_window_ms=900_000,
     structural_targets=False,
     volume_profile=None,
+    horizon=None,
 ):
+    context_bars, setup_bars, execution_bars = [
+        [b for b in bars if b.end <= asof] for bars in (context_bars, setup_bars, execution_bars)
+    ]
     context_features, setup_features, execution_features = [
         candle_features(b, asof) for b in (context_bars, setup_bars, execution_bars)
     ]
@@ -67,8 +71,24 @@ def candidates(
             sign = 1 if long else -1
             entry = execution_bars[-1].close
             stop = min(last.low, level) - 0.15 * atr if long else max(last.high, level) + 0.15 * atr
+            stop_plan = None
+            if horizon == "SWING":
+                from .levels import build_stop_plan
+
+                stop_plan = build_stop_plan(
+                    entry,
+                    direction,
+                    family,
+                    setup_bars,
+                    execution_bars,
+                    atr,
+                    instrument.tick,
+                    asof,
+                    volume_profile,
+                )
+                stop = stop_plan["stop"]
             distance = sign * (entry - stop)
-            if distance <= 0 or distance > 3 * atr:
+            if distance <= 0 or (distance > 3 * atr and stop_plan is None):
                 continue
             target = setup_features["high"] if long else setup_features["low"]
             if not ranging:
@@ -110,6 +130,28 @@ def candidates(
                     invalidation=f"Price breaches {rounded(stop)}; data gap or regime loss also invalidates",
                     reason=f"{family}: causal 1H rule in {context_features['regime']}; executed-flow confirmation required",
                     evidence={
+                        "production_policies": dict(
+                            confirmation="intraday-confirmation-v2"
+                            if horizon in {"SHORT_INTRADAY", "CORE_INTRADAY"}
+                            and family in {"liquidity_sweep", "range_rejection"}
+                            else "family-executed-flow-v1",
+                            market_alignment="market-alignment-v2",
+                            scoring="native-evidence-4",
+                            levels="structural-levels-v3",
+                            profile="executed-profile-v2",
+                            stop="swing-stop-v2" if horizon == "SWING" else "structural-stop-v1",
+                        )
+                        if horizon
+                        else {},
+                        "stop_plan": stop_plan,
+                        "volume_profile": volume_profile or {"available": False},
+                        "structural_trigger": dict(
+                            valid=True,
+                            family=family,
+                            level=level,
+                            extreme=last.low if long else last.high,
+                            available_ms=last.end,
+                        ),
                         "h4": context_features,
                         "h1": setup_features,
                         "m15": execution_features,
@@ -124,6 +166,13 @@ def candidates(
                 )
             )
     for signal in plans:
+        if horizon:
+            signal.version += ":production-v2:flow-score-v2"
+            signal.id = hashlib.sha256((signal.id + ":production-v2:flow-score-v2").encode()).hexdigest()[:24]
+        if (signal.evidence.get("stop_plan") or {}).get("reasons"):
+            signal.gates = list(signal.evidence["stop_plan"]["reasons"])
+            signal.state = "INVALIDATED"
+            signal.invalidation = "; ".join(signal.gates)
         if structural_targets:
             from .levels import targets
 
@@ -140,8 +189,8 @@ def candidates(
             signal.tp1, signal.tp2 = selected["tp1"], selected["tp2"]
             signal.evidence["level_policy"] = selected
             signal.evidence["target_method"] = selected["target_method"]
-            signal.version += ":structural-targets-v2"
-            signal.id = hashlib.sha256((signal.id + ":structural-targets-v2").encode()).hexdigest()[:24]
+            signal.version += ":structural-levels-v3"
+            signal.id = hashlib.sha256((signal.id + ":structural-levels-v3").encode()).hexdigest()[:24]
         signal.source = instrument.exchange
         signal.evidence["source_exchange"] = instrument.exchange
         signal.evidence["exchange_symbol"] = instrument.exchange_symbol or instrument.symbol

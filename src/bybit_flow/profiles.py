@@ -7,11 +7,13 @@ from .orderflow import footprint
 
 def build(tape, tick, atr, start, end, available_ms, source, symbol, previous=None):
     result = dict(
-        policy="executed-profile-v1",
+        policy="executed-profile-v2",
         available=False,
         source=source,
         symbol=symbol,
         start_ms=start,
+        window_start_ms=start,
+        window_end_ms=end,
         end_ms=end,
         available_ms=available_ms,
         tick_size=str(tick),
@@ -28,7 +30,7 @@ def build(tape, tick, atr, start, end, available_ms, source, symbol, previous=No
     trades = [t for t in tape.window(start, end) if t.receipt_ms <= available_ms]
     if len(trades) > 120000:
         return result | dict(reason="profile exceeds bounded worker capacity", trades=len(trades))
-    if not trades or not complete:
+    if not trades or trades[-1].event_ms < end - 10000 or not complete:
         return result | dict(reason="insufficient continuous executed-trade coverage", trades=len(trades))
     profile = footprint(trades, tick, atr)
     bins = profile["profile"]
@@ -48,10 +50,16 @@ def build(tape, tick, atr, start, end, available_ms, source, symbol, previous=No
         else "IN_VALUE",
         interpretation="descriptive executed auction; acceptance/excess hypotheses are not validated profitability labels",
         migration_available=False,
+        poc_shift=None,
+        vah_shift=None,
+        val_shift=None,
+        value_overlap=None,
+        value_migration_direction="UNAVAILABLE",
     )
     if (
         previous
         and previous.get("available")
+        and previous.get("coverage_complete")
         and previous.get("source") == source
         and previous.get("symbol") == symbol
         and previous.get("end_ms", end) >= start
@@ -73,12 +81,26 @@ def build(tape, tick, atr, start, end, available_ms, source, symbol, previous=No
             ),
             reference_note="successive rolling windows may overlap; no independent-sample claim",
         )
+    for side in ("low", "high"):
+        price = float((min if side == "low" else max)(t.price for t in trades))
+        for kind in ("excess", "rejection"):
+            context[kind + "_" + side + "_price"] = price if context[kind + "_" + side] else None
+    if context["migration_available"]:
+        shifts = [context[k] for k in ("poc_shift", "vah_shift", "val_shift")]
+        context["value_migration_direction"] = (
+            "UP"
+            if all(x >= 0 for x in shifts) and any(x > 0 for x in shifts)
+            else "DOWN"
+            if all(x <= 0 for x in shifts) and any(x < 0 for x in shifts)
+            else "FLAT"
+        )
     # Compact levels only; the immutable recording holds the full executions.
     return (
         result
         | context
         | {k: profile[k] for k in ("poc", "vah", "val", "hvn", "lvn", "bucket", "trades")}
         | dict(
+            sample_count=len(trades),
             available=True,
             coverage_complete=True,
             price_min=min(float(t.price) for t in trades),

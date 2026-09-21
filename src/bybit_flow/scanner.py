@@ -247,6 +247,15 @@ class Scanner:
                                 )
                                 session_baseline(self.store, identity, flow, bf, now, window_end_ms=end)
                     await asyncio.sleep(0.05)
+                self.store.put(
+                    "profile_health",
+                    dict(
+                        state="HEALTHY",
+                        last_success_ms=now_ms(),
+                        symbols=len(self.volume_profiles),
+                        complete=sum(bool(p.get("available")) for p in self.volume_profiles.values()),
+                    ),
+                )
             await asyncio.sleep(30)
 
     def save_candidates(self, instrument, context_bars, setup_bars, execution_bars, evaluated):
@@ -261,12 +270,17 @@ class Scanner:
             execution_window_ms=self.settings.execution_window_seconds * 1000,
             structural_targets=True,
             volume_profile=self.generation_profile(instrument, setup_bars, evaluated),
+            horizon="CORE_INTRADAY",
         )
         for signal in plans:
             assign(signal, "CORE_INTRADAY")
             old = self.store.db.execute("SELECT 1 FROM signals WHERE id=?", (signal.id,)).fetchone()
             if not old and signal.expires_ms > evaluated:
                 self.store.signal(signal)
+                for reason in signal.gates:
+                    from .funnel import reject
+
+                    reject(self.store, signal, reason, signal.created_ms)
         return plans
 
     async def discover_horizons(self, instrument, now):
@@ -286,6 +300,7 @@ class Scanner:
                 execution_window_ms=self.settings.execution_window_seconds * 1000,
                 structural_targets=True,
                 volume_profile=self.generation_profile(instrument, bars[1], now),
+                horizon=name,
             )
             for signal in plans:
                 assign(signal, name)
@@ -293,6 +308,10 @@ class Scanner:
                 signal.trigger_expires_ms = now + 120_000
                 if not self.store.db.execute("SELECT 1 FROM signals WHERE id=?", (signal.id,)).fetchone():
                     self.store.signal(signal)
+                    for reason in signal.gates:
+                        from .funnel import reject
+
+                        reject(self.store, signal, reason, signal.created_ms)
 
     def record_membership(self, evaluated_ms, symbol, eligible, payload):
         available = now_ms()
@@ -883,10 +902,14 @@ class Scanner:
                 else self.streams.connected
             )
             mid = float((max(book.bids) + min(book.asks)) / 2) if book and book.valid else None
-            if now >= s.expires_ms:
+            production_v2 = ":production-v2" in s.version
+            if now >= s.expires_ms or (
+                production_v2 and s.trigger_expires_ms is not None and now >= s.trigger_expires_ms
+            ):
                 s.state = "EXPIRED"
             elif (
-                s.evidence.get("execution_window_ms", 900_000) < 900_000
+                not production_v2
+                and s.evidence.get("execution_window_ms", 900_000) < 900_000
                 and now > s.evidence.get("execution_window_end_ms", now) + 120_000
             ):
                 s.state = "EXPIRED"
@@ -923,6 +946,8 @@ class Scanner:
             candle_end = execution_bars[-1].end
             window_ms = s.evidence.get("execution_window_ms", 900_000)
             end = s.evidence.get("execution_window_end_ms", candle_end) if window_ms < 900_000 else candle_end
+            if production_v2 and not s.evidence.get("score_components") and window_ms < 900_000:
+                end = now // 60000 * 60000
             start = end - window_ms
             checks = {
                 "recorder unavailable": self.recorder.healthy,
@@ -965,7 +990,21 @@ class Scanner:
                         c["instrument"].tick,
                         candle_features(execution_bars, now)["atr"],
                     )
-                    if end <= s.coverage["macro_deferred_ms"] or not confirm(s, current_flow, execution_bars):
+                    resumed_flow_ok = confirm(s, current_flow, execution_bars)
+                    if production_v2:
+                        from .evidence import flow_response
+                        from .production import flow_support, structure_response
+
+                        current_flow.update(
+                            flow_response([t for t in tape.window(start, end) if t.receipt_ms <= now], {})
+                        )
+                        support = flow_support(
+                            current_flow,
+                            1 if s.direction == "LONG" else -1,
+                            structure_response(s, execution_bars, now),
+                        )
+                        resumed_flow_ok = support["raw_fallback"] and support["state"] == "FLOW_SUPPORTIVE"
+                    if end <= s.coverage["macro_deferred_ms"] or not resumed_flow_ok:
                         continue
                 # A deferred last-mile send must not silently strand an immutable decision.
                 if await self.notifier.send_research(s) == "sent":
@@ -988,7 +1027,7 @@ class Scanner:
                 )
                 continue
             emit(self.store, "confirmation_attempts", now, signal=s, key=f"confirmation:{s.id}:{end}")
-            trades = tape.window(start, end)
+            trades = [t for t in tape.window(start, end) if t.receipt_ms <= now]
             execution_features = candle_features(execution_bars, now)
             s.evidence["m15" if s.horizon_profile == "LEGACY" else "execution_features"] = execution_features
             # Generation already fixed these deadlines. Confirmation must not
@@ -1005,7 +1044,7 @@ class Scanner:
             window_book.changes.extend(x for x in book.changes if x[0] <= end)
             flow = footprint(trades, c["instrument"].tick, execution_features["atr"], window_book)
             flow_ok = confirm(s, flow, execution_bars)
-            if flow_ok:
+            if flow_ok and not production_v2:
                 emit(self.store, "flow_confirmed", now, signal=s, key=f"flow:{s.id}:{end}")
             s.gates = []
             normal_spread = self.spread_history(s.symbol).assess(
@@ -1013,7 +1052,7 @@ class Scanner:
             )
             s.evidence["normal_spread"] = normal_spread
             s.gates.extend(normal_spread["reasons"])
-            if not flow_ok:
+            if not flow_ok and not production_v2:
                 s.gates.append("executed order flow did not confirm family trigger")
             if now - end > 900_000:
                 s.gates.append("execution trigger expired")
@@ -1106,7 +1145,46 @@ class Scanner:
                     )
                     for tf in dict.fromkeys((s.context_timeframe, s.setup_timeframe, s.execution_timeframe))
                 }
-                if ":autonomy-v1" in s.version:
+                if production_v2:
+                    from .production import (
+                        INTRADAY,
+                        REVERSALS,
+                        evaluate_intraday_confirmation,
+                        market_alignment,
+                        structure_response,
+                    )
+
+                    s.evidence["factor_regimes"] = {}
+                    for tf in dict.fromkeys((s.context_timeframe, s.setup_timeframe, s.execution_timeframe)):
+                        regimes = {}
+                        for label, symbol in (("btc", "BTCUSDT"), ("eth", "ETHUSDT")):
+                            closed = [
+                                b for b in self.candle_cache.get((symbol, tf), (None, []))[1] if b.end <= now
+                            ]
+                            regimes[label] = candle_features(closed, now) if len(closed) >= 60 else {}
+                        s.evidence["factor_regimes"][tf] = regimes
+                    regimes = s.evidence["factor_regimes"].get(s.setup_timeframe, {})
+                    alignment = market_alignment(
+                        s,
+                        regimes.get("btc", {}),
+                        regimes.get("eth", {}),
+                        now,
+                        structure_response(s, execution_bars, now),
+                    )
+                    s.evidence["market_alignment"] = alignment
+                    if s.horizon_profile in INTRADAY and s.family in REVERSALS:
+                        confirmation = evaluate_intraday_confirmation(s, flow, execution_bars, now, alignment)
+                        s.evidence["confirmation"] = confirmation
+                        flow_ok = confirmation["passed"]
+                        s.gates.extend(confirmation["reason_codes"])
+                    else:
+                        if not flow_ok:
+                            s.gates.append("executed order flow did not confirm family trigger")
+                        if alignment["blocked"]:
+                            s.gates.append(alignment["reason"])
+                    if flow_ok:
+                        emit(self.store, "flow_confirmed", now, signal=s, key=f"flow:{s.id}:{end}")
+                elif ":autonomy-v1" in s.version:
                     from .thesis_health import market_gate
 
                     alignment = market_gate(
@@ -1134,12 +1212,29 @@ class Scanner:
                     s.gates.append("volatility shock; execution assumptions require requalification")
                 if s.horizon_profile == "EXTENDED_SWING":
                     s.evidence["publication_policy"] = "shadow research until horizon-specific validation"
+            if production_v2 and s.gates:
+                for gate in s.gates:
+                    reject(self.store, s, gate, now)
+                self.store.signal(s, "Awaiting valid evidence within the original entry window")
+                continue
             score(s, flow_ok, rate is not None, preserve_original=":hardening-v1" not in s.version)
             if self.settings.sss_research and s.quality >= 95 and not s.gates and s.risk.get("accepted"):
                 s.final_tier = "SSS RESEARCH · UNCALIBRATED"
             from .ml.inference import apply as apply_ml
 
-            apply_ml(s, self.settings, self.store, now_ms())
+            if production_v2:
+                # ML is advisory for this explicit deterministic policy, including abstention.
+                try:
+                    apply_ml(
+                        s,
+                        self.settings.model_copy(update={"ml_filter_research": False}),
+                        self.store,
+                        now_ms(),
+                    )
+                except Exception as exc:
+                    s.qualification["ml_reason"] = "Optional ML unavailable: " + type(exc).__name__
+            else:
+                apply_ml(s, self.settings, self.store, now_ms())
             self.recorder.offer(
                 "features/signal",
                 s.symbol,

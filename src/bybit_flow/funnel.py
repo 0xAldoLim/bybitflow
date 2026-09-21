@@ -66,6 +66,8 @@ def reject(store, signal, reason, at_ms):
     upper = reason.upper()
     if "UNCONFIRMED_LIQUIDITY_SWEEP" in upper:
         metric, code = "unconfirmed_liquidity_sweep", "UNCONFIRMED_LIQUIDITY_SWEEP"
+    elif "SWING_STRUCTURAL_STOP_TOO_WIDE" in upper:
+        metric, code = "risk_rejected", "SWING_STRUCTURAL_STOP_TOO_WIDE"
     elif "MARKET_CONFLICT" in upper or "CONTRARIAN" in upper:
         metric, code = "market_alignment_blocked", "CONTRARIAN_EVIDENCE_INSUFFICIENT"
     elif "FLOW" in upper and "CONFIRM" in upper:

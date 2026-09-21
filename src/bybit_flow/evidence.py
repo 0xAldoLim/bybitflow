@@ -136,9 +136,12 @@ def flow_response(trades, book_features, previous=None):
     change = float(trades[-1].price - trades[0].price)
     duration = max(1, (trades[-1].event_ms - trades[0].event_ms) / 1000)
     run = best = 1
+    side_runs = {"Buy": 0, "Sell": 0}
+    side_runs[trades[0].side] = 1
     for a, b in zip(trades, trades[1:]):
         run = run + 1 if a.side == b.side else 1
         best = max(best, run)
+        side_runs[b.side] = max(side_runs[b.side], run)
     width = max(1, math.ceil(len(signed) / 4))
     chunks = [sum(signed[i : i + width]) for i in range(0, len(signed), width)]
     delta = buy - sell
@@ -157,6 +160,8 @@ def flow_response(trades, book_features, previous=None):
         cvd_slope=slope,
         cvd_acceleration=slope - prior["cvd_slope"] if "cvd_slope" in prior else None,
         same_side_run=best,
+        same_side_buy_run=side_runs["Buy"],
+        same_side_sell_run=side_runs["Sell"],
         trade_intensity=len(trades) / duration,
         high=max(float(t.price) for t in trades),
         low=min(float(t.price) for t in trades),
@@ -191,6 +196,11 @@ def session_baseline(store, signal, flow, book, now, window_end_ms=None):
     )
     history = store.get(key, [])
     window_end_ms = window_end_ms if window_end_ms is not None else now // 60000 * 60000
+    history = [
+        h
+        for h in history
+        if h["at_ms"] < now and h.get("window_end_ms", h["at_ms"] // 60000 * 60000) < window_end_ms
+    ]
     current = dict(
         spread=book.get("spread_bps"),
         depth=sum(book.get("depth", {}).get("10", {}).get(s, 0) for s in ("bid", "ask")),
@@ -211,7 +221,9 @@ def session_baseline(store, signal, flow, book, now, window_end_ms=None):
         "normalization": "prior complete execution windows from selected native markets, same symbol, venue, horizon and session",
         "policy": "participation-percentiles-v2",
         "available_ms": now,
-        "production_gate": False,
+        "production_gate": True,
+        "window_end_ms": window_end_ms,
+        "window_start_ms": min((h.get("window_end_ms", h["at_ms"]) for h in history), default=window_end_ms),
     }
     for name, value in current.items():
         prior = [

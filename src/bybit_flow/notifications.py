@@ -161,6 +161,58 @@ def embed(signal, dashboard_url):
     }
 
 
+def related_embed(signal, primary, relation, dashboard_url, cluster_id):
+    """One setup-card layout; relationship changes presentation, never either plan."""
+
+    category = {
+        "CONFIRMING_HORIZON": "Setup confirmation",
+        "STRONGER_REPLACEMENT": "Stronger setup",
+        "CONFLICTING_HORIZON": "Conflicting horizon",
+    }[relation]
+
+    payload = embed(signal, dashboard_url)
+
+    card = payload["embeds"][0]
+
+    card["title"] = f"NEW SETUP [{category}] · {signal.symbol} {signal.direction}"
+
+    card["description"] += f"\n[Updated information] {signal.family.replace('_', ' ')} · {signal.state}"
+
+    deadline = min(primary.expires_ms, primary.trigger_expires_ms or primary.expires_ms)
+
+    old_plan = (
+        f"**{primary.symbol} {primary.direction} · {primary.horizon_profile}**\n"
+        f"{primary.family.replace('_', ' ')} · {primary.raw_tier} · {primary.quality:.1f}/100 · {primary.state}\n"
+        f"Entry {primary.entry:g} · zone {primary.zone[0]:g}–{primary.zone[1]:g}\n"
+        f"SL {primary.stop:g} · TP1 {primary.tp1:g} · TP2 {primary.tp2:g}\n"
+        f"Original entry deadline <t:{deadline // 1000}:t> · ID {primary.id}"
+    )
+
+    relationship_note = {
+        "CONFIRMING_HORIZON": "The new setup supports the same direction with its own horizon and plan. It is not an instruction to double exposure.",
+        "STRONGER_REPLACEMENT": "The new setup has a higher quality score. The earlier plan is not replaced or cancelled.",
+        "CONFLICTING_HORIZON": "The plans point in opposite directions during overlapping tracking periods. Compare their horizons and entry conditions before choosing an entry.",
+    }[relation]
+
+    card["fields"].insert(
+        0, dict(name="Relationship [" + category + "]", value=relationship_note, inline=False)
+    )
+
+    card["fields"].append(dict(name="Previous setup [unchanged]", value=old_plan, inline=False))
+
+    card["fields"].append(
+        dict(
+            name="Monitoring",
+            value="Both setups retain their original stops, targets and deadlines and remain separately monitored.",
+            inline=False,
+        )
+    )
+
+    card["footer"]["text"] = f"New setup {signal.id} · {cluster_id}"
+
+    return payload
+
+
 class Notifier:
     def __init__(self, settings, store, transport=None):
 
@@ -215,10 +267,13 @@ class Notifier:
 
         if macro_state(self.store, self.settings, now_ms())["macro_pause_active"]:
             return "macro-paused"
+
         from .funnel import emit
 
         emit(self.store, "alert_claim_attempts", now_ms(), signal=signal, key="claim-attempt:" + signal.id)
+
         claimed = claim(self.store, signal, now_ms())
+
         emit(
             self.store,
             "alert_claimed" if claimed["claimed"] else "duplicate_suppressed",
@@ -235,39 +290,9 @@ class Notifier:
         relation = claimed["relationship"]
 
         if primary is not None:
-            title = {
-                "CONFIRMING_HORIZON": "SETUP CONFIRMATION",
-                "STRONGER_REPLACEMENT": "PRIMARY THESIS UPDATE",
-                "CONFLICTING_HORIZON": "CONFLICTING HORIZONS",
-            }[relation]
-
-            def summary(s):
-
-                return f"{s.horizon_profile} · {s.family.replace('_', ' ')} · {s.raw_tier} {s.quality:.1f} · {s.id}"
-
-            payload = {
-                "allowed_mentions": {"parse": []},
-                "embeds": [
-                    {
-                        "title": f"{title} · {signal.symbol} {signal.direction}",
-                        "description": "Presentation update only. Both original plans remain separately monitored. Same-direction confirmation does not imply two full positions.",
-                        "fields": [
-                            {
-                                "name": "New primary"
-                                if relation == "STRONGER_REPLACEMENT"
-                                else "Related plan",
-                                "value": summary(signal),
-                            },
-                            {"name": "Existing plan (unchanged)", "value": summary(primary)},
-                            {
-                                "name": "New plan",
-                                "value": f"Entry {signal.entry:g} · SL {signal.stop:g} · TP1 {signal.tp1:g} · TP2 {signal.tp2:g}",
-                            },
-                        ],
-                        "footer": {"text": claimed["cluster_id"] + " · " + relation},
-                    }
-                ],
-            }
+            payload = related_embed(
+                signal, primary, relation, self.settings.dashboard_url, claimed["cluster_id"]
+            )
 
         status = await self.deliver(key, signal.id, payload, secret)
 
@@ -338,9 +363,12 @@ class Notifier:
         from .funnel import emit
 
         real_initial = signal_id is not None and key.endswith(":initial")
+
         if real_initial:
             emit(self.store, "discord_http_attempts", now_ms(), key="http:" + key)
+
         status, message_id = "uncertain", None
+
         transport_detail = dict(at_ms=now_ms(), category="UNKNOWN", http_status=None)
 
         try:
@@ -348,6 +376,7 @@ class Notifier:
                 response = await client.post(secret, params={"wait": "true"}, json=payload)
 
                 transport_detail.update(http_status=response.status_code, category="HTTP")
+
                 if response.status_code == 429:
                     status = "rate-limited"
 
@@ -359,9 +388,11 @@ class Notifier:
 
         except httpx.TransportError as exc:
             # Store a category only: exception messages can contain webhook secrets.
+
             transport_detail["category"] = (
                 "TIMEOUT" if isinstance(exc, httpx.TimeoutException) else "CONNECTION_ERROR"
             )
+
             transport_detail["error_type"] = type(exc).__name__
 
         with self.store.db:
@@ -371,10 +402,12 @@ class Notifier:
             )
 
         self.store.put("discord_transport", transport_detail | dict(status=status))
+
         if real_initial:
             metric = {"sent": "discord_sent", "uncertain": "discord_uncertain"}.get(
                 status, "discord_rejected"
             )
+
             emit(
                 self.store,
                 metric,
@@ -382,8 +415,10 @@ class Notifier:
                 key="http-result:" + key,
                 reason="" if status == "sent" else status.upper(),
             )
+
         elif signal_id is not None and status == "sent":
             emit(self.store, "lifecycle_updates_sent", now_ms(), key="lifecycle:" + key)
+
         return status
 
     async def send_public(self, signal, update=False):

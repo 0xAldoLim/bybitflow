@@ -35,7 +35,7 @@ def register(store, signal, decision_ms):
     if not atr or noise is None or not risk:
         return
     sign = 1 if signal.direction == "LONG" else -1
-    structural = signal.stop + sign * 0.15 * atr
+    structural = (signal.evidence.get("stop_plan") or {}).get("anchor", signal.stop + sign * 0.15 * atr)
     distances = {
         "incumbent": risk,
         "noise_buffer": max(risk, noise),

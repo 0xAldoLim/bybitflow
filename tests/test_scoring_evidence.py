@@ -49,3 +49,37 @@ def test_native_score_can_reach_sss_with_actual_component_observations(signal):
     signal.evidence["cross_market"] = {"BTCUSDT": "unavailable"}
     score(signal, True, True)
     assert signal.quality == 85
+
+
+def test_confirmed_directional_reversal_earns_flow_without_absorption(signal):
+    signal.family = "liquidity_sweep"
+    signal.evidence.update(
+        flow=dict(delta_pct=25, delta_persistence=0.75, cvd_slope=10, absorption_long=False),
+        confirmation=dict(passed=True, flow_support="FLOW_SUPPORTIVE"),
+    )
+    score(signal, True, False)
+    assert signal.score_components["orderflow"]["earned"] == 0  # Grandfathered scoring.
+    signal.version += ":flow-score-v2"
+    score(signal, True, False)
+    assert signal.score_components["orderflow"]["earned"] == 12.5
+    assert signal.score_components["orderflow"]["weight"] == 25
+    assert signal.quality == round(sum(v["earned"] for v in signal.score_components.values()), 1)
+    assert signal.evidence["score_profile"].startswith("native-evidence-4")
+    signal.evidence["flow"]["delta_pct"] = -25
+    score(signal, True, False)
+    assert signal.score_components["orderflow"]["earned"] == 0
+
+
+def test_new_flow_score_is_capped_and_requires_confirmed_evidence(signal):
+    signal.family = "range_rejection"
+    signal.direction = "SHORT"
+    signal.version += ":flow-score-v2"
+    signal.evidence.update(
+        flow=dict(delta_pct=-100, delta_persistence=1, cvd_slope=-100),
+        confirmation=dict(passed=True, flow_support="FLOW_SUPPORTIVE"),
+    )
+    score(signal, True, False)
+    assert signal.score_components["orderflow"]["earned"] == 25
+    signal.evidence["confirmation"]["passed"] = False
+    score(signal, True, False)
+    assert signal.score_components["orderflow"]["earned"] == 0

@@ -264,6 +264,10 @@ def snapshot(signal, decision_ms, stage, membership=None):
         missing = (
             not isinstance(value, (int, float))
             or not math.isfinite(value)
+            or not isinstance(source_ms, (int, float))
+            or not math.isfinite(source_ms)
+            or not isinstance(available_ms, (int, float))
+            or not math.isfinite(available_ms)
             or source_ms > decision_ms
             or available_ms > decision_ms
         )

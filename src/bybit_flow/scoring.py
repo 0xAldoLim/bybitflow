@@ -74,6 +74,22 @@ def score(
             unit(abs(flow.get("delta_pct", 0)), 50), unit(defended / opposing if opposing else 0, 0.25)
         )
         flow_strength *= int(bool(flow.get("absorption_long" if sign > 0 else "absorption_short")))
+        if ":flow-score-v2" in signal.version:
+            confirmation = e.get("confirmation", {})
+            directional = (
+                min(
+                    unit(sign * flow.get("delta_pct", 0), 50),
+                    unit(flow.get("delta_persistence", 0), 0.75),
+                    float(sign * flow.get("cvd_slope", 0) > 0),
+                )
+                if confirmation.get("passed") and confirmation.get("flow_support") == "FLOW_SUPPORTIVE"
+                else 0
+            )
+            e["orderflow_score_basis"] = (
+                "directional executed flow" if directional > flow_strength else "defended absorption"
+            )
+            # Alternative verified flow pathways, never additive duplicate points.
+            flow_strength = max(flow_strength, directional)
     else:
         flow_strength = min(
             unit(abs(flow.get("delta_pct", 0)), 25),
@@ -168,4 +184,8 @@ def score(
         if preserve_original
         else "native-evidence-3; sourced quality/risk separated from coverage; causal residual factor credit"
     )
+    if ":flow-score-v2" in signal.version:
+        signal.evidence["score_profile"] = (
+            "native-evidence-4; confirmed directional or absorption flow; unchanged category weights"
+        )
     return signal
