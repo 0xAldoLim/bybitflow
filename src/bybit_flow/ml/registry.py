@@ -169,6 +169,25 @@ class Registry:
         with self.db:
             self.event(ident, "rollback", {"reviewer": reviewer})
 
+    def cached_summary(self):
+        """Operator views use the worker's summary, never a full label scan."""
+        cached = self.store.get("ml_summary_cache", {})
+        return cached | dict(
+            summary_status="CACHED" if cached else "AWAITING_WORKER_SUMMARY",
+            models=cached.get("models", []),
+            champion=self.store.get("ml_champion"),
+            pipeline=self.store.get("ml_pipeline"),
+            monitoring=self.store.get("ml_monitor"),
+            cycle=self.store.get("ml_cycle"),
+            horizon_model=self.store.get("horizon_model"),
+            score_profile_research=self.store.get("score_profile_research"),
+            swing_stop_study=self.store.get("swing_stop_study"),
+            confirmation_policy_research=self.store.get("confirmation_policy_research"),
+            replay_progress=self.store.get("ml_replay_progress"),
+            recording_audit=self.store.get("ml_recordings"),
+            learning_note="Training uses complete independent outcomes and chronological validation; no automatic promotion.",
+        )
+
     def summary(self):
         models = []
         for row in self.db.execute("SELECT id FROM ml_models ORDER BY created_ms DESC LIMIT 10"):
@@ -185,6 +204,7 @@ class Registry:
             pipeline=self.store.get("ml_pipeline"),
             score_profile_research=self.store.get("score_profile_research"),
             swing_stop_study=self.store.get("swing_stop_study"),
+            confirmation_policy_research=self.store.get("confirmation_policy_research"),
             withdrawal_research=self.store.get("withdrawal_research"),
             horizon_model=self.store.get(
                 "horizon_model",

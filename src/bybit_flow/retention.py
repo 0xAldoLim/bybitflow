@@ -74,9 +74,12 @@ def storage_status(store, settings):
         policy="Preserve primary evidence, active plans, unresolved labels, replay leases and compact afterlife records",
     )
     deletable = prune_recordings(store, settings, dry_run=True).get("bytes_freed", 0)
-    result.update(deletable_bytes=deletable, scheduled_deletable_bytes=deletable,
-                  protected_bytes=max(0, used - deletable) if used >= budget * .85 else None,
-                  eligibility_measurement="scheduled cleanup under current pressure; null protection means not measured")
+    result.update(
+        deletable_bytes=deletable,
+        scheduled_deletable_bytes=deletable,
+        protected_bytes=max(0, used - deletable) if used >= budget * 0.85 else None,
+        eligibility_measurement="scheduled cleanup under current pressure; null protection means not measured",
+    )
     store.put("storage_status", result)
     return result
 
@@ -87,10 +90,16 @@ def prune_recordings(store, settings, at_ms=None, dry_run=False):
     now = at_ms or now_ms()
     usage = directory_bytes(store.root)
     budget = settings.max_storage_gb * 1e9
-    if usage < budget * .85 and store.get("recording_retention", {}).get("status") != "pruning":
-        return dict(status="dry-run" if dry_run else "within budget", bytes_before=usage,
-                    bytes_freed=0, freed_bytes=0, segments=[], archives=[],
-                    reason="No deletion scheduled below the pressure threshold")
+    if usage < budget * 0.85 and store.get("recording_retention", {}).get("status") != "pruning":
+        return dict(
+            status="dry-run" if dry_run else "within budget",
+            bytes_before=usage,
+            bytes_freed=0,
+            freed_bytes=0,
+            segments=[],
+            archives=[],
+            reason="No deletion scheduled below the pressure threshold",
+        )
     # Eligibility is per evidence interval, never gated by global ML health.
     cutoff = now - 6 * 3_600_000
     ranges = protection_ranges(store, now)

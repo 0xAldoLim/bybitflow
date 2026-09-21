@@ -352,3 +352,23 @@ async def test_synthetic_discord_delivery_does_not_contaminate_research(settings
     for table in ("signals", "ml_snapshots", "ml_labels", "research_labels"):
         assert store.db.execute("SELECT count(*) FROM " + table).fetchone()[0] == 0
     store.close()
+
+
+def test_horizon_recommendation_is_cached_causal_and_never_queries_large_labels(settings, signal):
+    from bybit_flow.observations import recommend
+    from bybit_flow.storage import Store
+
+    store = Store(settings.data_dir)
+    store.put(
+        "horizon_recommendations",
+        dict(
+            available_ms=1000,
+            families={signal.family: dict(samples=120, successful_horizon_counts={"SWING": 70})},
+        ),
+    )
+    statements = []
+    store.db.set_trace_callback(statements.append)
+    assert recommend(store, signal, 1001)["recommended_horizon_profile"] == "SWING"
+    assert recommend(store, signal, 999)["recommended_horizon_profile"] is None
+    assert not any("research_labels" in q for q in statements)
+    store.close()

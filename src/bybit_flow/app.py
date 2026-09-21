@@ -142,7 +142,15 @@ def create_app(settings=None):
     async def ml_research(request: Request):
         from .ml.registry import Registry
 
-        return await asyncio.to_thread(read_report, settings.data_dir, lambda store: Registry(store).summary())
+        return await asyncio.to_thread(
+            read_report, settings.data_dir, lambda store: Registry(store).cached_summary()
+        )
+
+    @app.get("/api/funnel")
+    async def funnel_view(request: Request):
+        from .funnel import status
+
+        return status(request.app.state.store, configured=bool(settings.research_webhook.get_secret_value()))
 
     @app.get("/api/delivery")
     async def delivery_view(request: Request):
@@ -161,7 +169,9 @@ def create_app(settings=None):
             return dict(
                 profiles={k: asdict(v) for k, v in PROFILES.items()},
                 session=session_context(now_ms()),
-                observations=dict(store.db.execute("SELECT status,count(*) FROM observations GROUP BY status")),
+                observations=dict(
+                    store.db.execute("SELECT status,count(*) FROM observations GROUP BY status")
+                ),
                 score_buckets=metrics(store),
                 storage=store.get("storage_status", {}),
                 selection=store.get("deep_selection", {}),
@@ -301,6 +311,7 @@ def create_app(settings=None):
     @app.get("/api/overview")
     async def overview(request: Request):
         from .thesis_health import summary as health_summary
+
         store, rec, scanner = request.app.state.store, request.app.state.recorder, request.app.state.scanner
         return dict(
             scanner=scanner.status,

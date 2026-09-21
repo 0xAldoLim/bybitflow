@@ -6,11 +6,18 @@ POLICY = "thesis-health-v1"
 def summary(store):
     import json
 
-    result = dict(policy=POLICY, active_healthy=0, active_degraded=0, withdrawn_toxic_flow=0,
-                  withdrawn_structure_failure=0)
+    result = dict(
+        policy=POLICY,
+        active_healthy=0,
+        active_degraded=0,
+        withdrawn_toxic_flow=0,
+        withdrawn_structure_failure=0,
+    )
     for key, text in store.db.execute("SELECT key,payload FROM kv WHERE key LIKE 'thesis_health:%'"):
         health = json.loads(text)
-        signal = store.db.execute("SELECT state FROM signals WHERE id=?", (key.removeprefix("thesis_health:"),)).fetchone()
+        signal = store.db.execute(
+            "SELECT state FROM signals WHERE id=?", (key.removeprefix("thesis_health:"),)
+        ).fetchone()
         if not signal:
             continue
         if signal[0] not in {"INVALIDATED", "EXPIRED", "RESOLVED"}:

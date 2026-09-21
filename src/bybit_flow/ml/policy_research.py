@@ -8,6 +8,9 @@ from .store import canonical, digest
 
 
 def run(store, asof):
+    from .confirmation_research import run as confirmation_study
+
+    confirmation_study(store, asof)
     rows, seen = [], set()
     boundary = store.get("score_profile_holdout_end", -1)
     for row in store.db.execute(
@@ -22,8 +25,14 @@ def run(store, asof):
         if identity in seen:
             continue
         seen.add(identity)
-        snapshot = json.loads(store.db.execute("SELECT payload FROM ml_snapshots WHERE id=?", (row[2],)).fetchone()[0])
-        outcome = json.loads(store.db.execute("SELECT payload FROM ml_labels WHERE snapshot_id=? AND policy='prints-v1'", (row[2],)).fetchone()[0])
+        snapshot = json.loads(
+            store.db.execute("SELECT payload FROM ml_snapshots WHERE id=?", (row[2],)).fetchone()[0]
+        )
+        outcome = json.loads(
+            store.db.execute(
+                "SELECT payload FROM ml_labels WHERE snapshot_id=? AND policy='prints-v1'", (row[2],)
+            ).fetchone()[0]
+        )
         components = snapshot["signal"]["evidence"].get("score_components", {})
         if not outcome.get("complete") or outcome.get("net_r") is None or set(components) != set(WEIGHTS):
             continue
@@ -123,6 +132,9 @@ def run(store, asof):
         decision="Current Swing stop policy retained.",
         reason="Post-terminal aggregate recovery is insufficient to simulate alternative stops and costs without path ambiguity",
     )
+    from ..path_research import summary as path_summary
+
+    study["forward_path_dataset"] = path_summary(store, asof)
     store.put("swing_stop_study", study)
     store.put(
         "withdrawal_research",

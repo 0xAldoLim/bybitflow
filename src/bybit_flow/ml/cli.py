@@ -47,8 +47,17 @@ def monitor(settings, store):
     from .recordings import worker_rows
 
     previous = store.get("ml_monitor", {})
-    store.put("ml_monitor", dict(at_ms=now_ms(), status="materializing", previous_status=previous.get("status"),
-                                last_success_ms=previous.get("last_success_ms", previous.get("at_ms") if previous.get("status") == "observed" else None)))
+    store.put(
+        "ml_monitor",
+        dict(
+            at_ms=now_ms(),
+            status="materializing",
+            previous_status=previous.get("status"),
+            last_success_ms=previous.get(
+                "last_success_ms", previous.get("at_ms") if previous.get("status") == "observed" else None
+            ),
+        ),
+    )
     paths = store.db.execute("SELECT 1 FROM segments LIMIT 1").fetchone()
     result = dict(at_ms=now_ms(), status="no-recordings")
     if settings.ml_two_stage:
@@ -96,7 +105,11 @@ def monitor(settings, store):
 
     result["horizon_model"] = fit_horizon(store, settings, now_ms())
     from .policy_research import run as policy_research
+
     result["score_profile_research"] = policy_research(store, now_ms())
+    from .registry import Registry
+
+    store.put("ml_summary_cache", Registry(store).summary() | dict(summary_at_ms=now_ms()))
     return result
 
 

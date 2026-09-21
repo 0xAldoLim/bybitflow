@@ -18,6 +18,7 @@ def candidates(
     families=FAMILIES,
     execution_window_ms=900_000,
     structural_targets=False,
+    volume_profile=None,
 ):
     context_features, setup_features, execution_features = [
         candle_features(b, asof) for b in (context_bars, setup_bars, execution_bars)
@@ -127,13 +128,20 @@ def candidates(
             from .levels import targets
 
             selected = targets(
-                signal.entry, signal.stop, signal.direction, signal.family, setup_bars, instrument.tick, asof
+                signal.entry,
+                signal.stop,
+                signal.direction,
+                signal.family,
+                setup_bars,
+                instrument.tick,
+                asof,
+                volume_profile,
             )
             signal.tp1, signal.tp2 = selected["tp1"], selected["tp2"]
             signal.evidence["level_policy"] = selected
             signal.evidence["target_method"] = selected["target_method"]
-            signal.version += ":structural-targets-v1"
-            signal.id = hashlib.sha256((signal.id + ":structural-targets-v1").encode()).hexdigest()[:24]
+            signal.version += ":structural-targets-v2"
+            signal.id = hashlib.sha256((signal.id + ":structural-targets-v2").encode()).hexdigest()[:24]
         signal.source = instrument.exchange
         signal.evidence["source_exchange"] = instrument.exchange
         signal.evidence["exchange_symbol"] = instrument.exchange_symbol or instrument.symbol

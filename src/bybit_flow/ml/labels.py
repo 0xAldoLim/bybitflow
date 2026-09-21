@@ -69,17 +69,27 @@ def label_recordings(
         # paper positions. Freeze an explicit exclusion, never copy a winner.
         first = {}
         from ..storage import now_ms
+
         for ident, decision, identity, labeled in store.db.execute(
             "SELECT s.id,s.decision_ms,coalesce(c.candidate_identity,s.signal_id),"
             "EXISTS(SELECT 1 FROM ml_labels l WHERE l.snapshot_id=s.id AND l.policy='prints-v1') "
             "FROM ml_snapshots s LEFT JOIN candidate_identities c ON c.signal_id=s.signal_id "
-            "WHERE s.stage='decision' ORDER BY s.decision_ms,s.id").fetchall():
+            "WHERE s.stage='decision' ORDER BY s.decision_ms,s.id"
+        ).fetchall():
             canonical = first.setdefault(identity, ident)
             if canonical != ident and not labeled:
-                fs.label(ident, dict(policy="prints-v1", complete=False, classification="technical_duplicate",
-                                    canonical_snapshot_id=canonical, net_r=None,
-                                    reason="Repeated evaluation of the same economic opportunity; excluded from independent sampling"),
-                         max(now_ms(), decision))
+                fs.label(
+                    ident,
+                    dict(
+                        policy="prints-v1",
+                        complete=False,
+                        classification="technical_duplicate",
+                        canonical_snapshot_id=canonical,
+                        net_r=None,
+                        reason="Repeated evaluation of the same economic opportunity; excluded from independent sampling",
+                    ),
+                    max(now_ms(), decision),
+                )
     checkpoint = store.get("primary_materialization", {}) if incremental else {}
     cursor = checkpoint.get("cursor_ms", -1)
     restored_ids = set(checkpoint.get("positions", {}))

@@ -27,6 +27,8 @@ async def test_stale_other_symbol_does_not_block_confirmation_evidence(
     store = Store(settings.data_dir)
     signal.source = "binance"
     signal.expires_ms = now + 900_000
+    signal.trigger_expires_ms = now + 120_000
+    signal.holding_deadline_ms = now + 3_600_000
     signal.coverage["macro_deferred_ms"] = now - 100_000
     signal.evidence = {
         "trigger_bar_end": end,
@@ -66,6 +68,8 @@ async def test_stale_other_symbol_does_not_block_confirmation_evidence(
     await scanner.evaluate()
     calculate_flow.assert_called_once()
     saved = store.signals()[0]
+    assert saved["trigger_expires_ms"] == signal.trigger_expires_ms
+    assert saved["holding_deadline_ms"] == signal.holding_deadline_ms
     assert saved["coverage"]["trade_window_complete"]
     assert saved["coverage"]["reasons"] == []
     assert saved["coverage"]["macro_deferred_ms"] == now - 100_000

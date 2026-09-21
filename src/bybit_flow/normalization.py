@@ -93,9 +93,14 @@ def prepare(batch):
         try:
             rows = list(normalize(envelope))
         except (ValueError, KeyError, TypeError, ArithmeticError) as exc:
-            envelope = dict(original, source="control/gap", complete=False,
-                            payload=json.dumps(dict(reason="DATA_QUALITY", error_type=type(exc).__name__,
-                                                    original_envelope=original)))
+            envelope = dict(
+                original,
+                source="control/gap",
+                complete=False,
+                payload=json.dumps(
+                    dict(reason="DATA_QUALITY", error_type=type(exc).__name__, original_envelope=original)
+                ),
+            )
             rows = list(normalize(envelope))
         safe.append(envelope)
         normalized.extend(rows)

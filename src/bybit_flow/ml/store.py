@@ -62,8 +62,8 @@ class FeatureStore:
         from . import SCHEMA_VERSION
 
         old = self.db.execute(
-            "SELECT id FROM ml_snapshots WHERE signal_id=? AND stage=? AND schema_version=?",
-            (signal.id, stage, SCHEMA_VERSION),
+            "SELECT id FROM ml_snapshots WHERE signal_id=? AND stage=? ORDER BY decision_ms,id LIMIT 1",
+            (signal.id, stage),
         ).fetchone()
         if old:
             return old[0]

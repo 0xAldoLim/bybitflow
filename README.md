@@ -123,6 +123,24 @@ If alerts stop, check the dashboard and `doctor`. Common causes include clock sk
 exchange connection failures, incomplete market history and the storage limit.
 Restarting repeatedly discards live flow history and can prolong warm-up.
 
+## Trace missing alerts
+
+Use the Signal journal's **Signal pipeline** panel or run:
+
+```bat
+docker compose exec desk bybit-flow signals status
+```
+
+The report separates recorded events from actual setups and shows 15-minute,
+hourly, daily and process counters, confirmation checks, rejection reasons and
+Discord results. Tests and synthetic cards do not count as genuine deliveries.
+Rejection checks can overlap. Historical gate outcomes that were not recorded
+remain unavailable.
+
+A confirmation runtime error is a software failure. A healthy pipeline reporting
+flow, entry-zone or risk rejections has evaluated those gates without passing them.
+A successful connection test verifies Discord access, not setup qualification.
+
 ## How machine learning works
 
 The optional two-stage pipeline compares these algorithms:
@@ -262,3 +280,38 @@ Use `docker compose exec desk bybit-flow doctor` for health and
 Do not use `docker compose down -v` for ordinary shutdown: `-v` removes data volumes.
 
 See [deployment verification](docs/AUTONOMY_VERIFICATION.md) for test evidence, continuity checks and current research limitations.
+
+## Decision evidence and policy research
+
+New decisions retain participation percentiles from prior observations of the same
+market, venue, horizon and session. At least 20 prior windows are required. These
+baselines sample complete flow windows from selected markets independently of
+setup generation. Missing feed coverage contributes no observation.
+
+Executed-volume profiles use complete closed 30-minute intraday or four-hour Swing
+native trade windows with
+explicit tick size, binning and availability time. Profile work runs outside the
+confirmation loop. Missing coverage produces no profile levels. New plans may use
+suitable POC, value-area or volume-node targets, subject to the existing risk gates.
+Existing plans are never retargeted.
+
+Swing path research freezes four stop policies at the decision and follows closed
+one-minute candles separately from live monitoring. It records stop/target timing,
+overshoot, reclaim and post-stop excursions. Ambiguous paths are excluded from
+complete executable-return samples. The original live stop remains unchanged.
+Confirmation and stop challengers use separate chronological partitions, purging
+and an embargo. Descriptive results do not automatically promote a policy.
+
+Feature schema `candidate-v6` adds participation percentiles. Earlier snapshots,
+labels and model files remain intact. Old decisions are not recaptured under the
+new schema. New training cohorts must satisfy the existing validation requirements.
+
+An offline recorder smoke test runs in CI. For a longer test, use a separate empty
+data directory, never the production directory:
+
+```bat
+python examples/recorder_soak.py --seconds 1800 --rate 1000 --data-dir recorder-soak-data
+```
+
+This tests the recorder without exchange or Discord connections. See
+[v4 verification](docs/V4_VERIFICATION.md) for measured results and limitations.

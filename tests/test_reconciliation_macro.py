@@ -93,7 +93,7 @@ async def test_restart_terminal_catchup_notifies_once_and_never_resumes(settings
     store.signal(signal)
     scanner = Scanner(settings, store, Recorder(store, settings))
     await scanner.api.close()
-    scanner.api = SimpleNamespace(name="bybit", candles=AsyncMock(return_value=[bar(60000,94,102)]))
+    scanner.api = SimpleNamespace(name="bybit", candles=AsyncMock(return_value=[bar(60000, 94, 102)]))
     scanner.notifier = SimpleNamespace(send_research=AsyncMock(return_value="sent"))
     assert not await reconcile(scanner, signal, 180000)
     assert signal.state == "INVALIDATED"

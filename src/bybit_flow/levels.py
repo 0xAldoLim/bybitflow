@@ -3,12 +3,27 @@
 from decimal import ROUND_HALF_UP, Decimal
 
 
-def targets(entry, stop, direction, family, bars, tick, asof):
+def targets(entry, stop, direction, family, bars, tick, asof, profile=None):
     if not bars or any(bar.end > asof for bar in bars):
         raise ValueError("Structural targets require closed decision-time bars")
     sign = 1 if direction == "LONG" else -1
     risk = abs(entry - stop)
     candidates = []
+    valid_profile = bool(
+        profile
+        and profile.get("available")
+        and profile.get("coverage_complete")
+        and profile.get("available_ms", asof + 1) <= asof
+        and profile.get("end_ms", asof + 1) <= asof
+    )
+    if valid_profile:
+        for name in ("poc", "vah", "val"):
+            if profile.get(name) is not None:
+                candidates.append((profile[name], "executed volume " + name.upper(), profile["available_ms"]))
+        for name in ("hvn", "lvn"):
+            candidates.extend(
+                (p, "executed volume " + name.upper(), profile["available_ms"]) for p in profile.get(name, [])
+            )
     # A pivot is known only after its right-hand confirmation candle closes.
     for left, center, right in zip(bars[-62:-2], bars[-61:-1], bars[-60:]):
         if sign > 0 and center.high > left.high and center.high >= right.high:
@@ -34,14 +49,26 @@ def targets(entry, stop, direction, family, bars, tick, asof):
         return float((Decimal(str(price)) / tick).to_integral_value(rounding=ROUND_HALF_UP) * tick)
 
     return dict(
-        policy="structural-targets-v1",
+        policy="structural-targets-v2",
         tp1=rounded(first[0]),
         tp2=rounded(second[0]),
         target_method=first[1],
         tp2_method=second[1],
         available_ms=asof,
         source_timeframe_ms=bars[-1].interval,
-        profile_evidence="unavailable; no profile level invented",
+        profile_evidence=profile if valid_profile else "unavailable; no profile level invented",
+        profile_location={
+            name: (
+                "ABOVE_VALUE"
+                if price > profile["vah"]
+                else "BELOW_VALUE"
+                if price < profile["val"]
+                else "IN_VALUE"
+            )
+            for name, price in [("entry", entry), ("stop", stop), ("tp1", first[0]), ("tp2", second[0])]
+        }
+        if valid_profile
+        else None,
         candidates=[dict(price=p, kind=k, available_ms=t) for p, k, t in usable],
         stop_policy="existing structural invalidation plus 0.15 setup ATR; unchanged",
     )

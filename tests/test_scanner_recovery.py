@@ -153,6 +153,7 @@ async def test_native_removal_cancels_all_feeds_before_waiting():
     assert not streams.tasks and not streams.books and not streams.tapes
     assert not streams.connected_for("A")
 
+
 @pytest.mark.asyncio
 async def test_depth_recovery_preserves_executed_trade_window(monkeypatch):
     from collections import deque

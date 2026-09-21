@@ -82,6 +82,12 @@ class Store:
         from .identity import migrate as migrate_identity
 
         migrate_identity(self, migration_backup_dir)
+        from .funnel import migrate as migrate_funnel
+
+        migrate_funnel(self)
+        from .path_research import migrate as migrate_paths
+
+        migrate_paths(self)
         if self.get("horizon_counts") is None:
             counts = dict(
                 self.db.execute(
@@ -126,6 +132,26 @@ class Store:
                     "INSERT INTO transitions(signal_id,at_ms,state,reason) VALUES(?,?,?,?)",
                     (signal.id, now_ms(), signal.state, reason),
                 )
+            from .funnel import emit
+
+            if not old:
+                emit(
+                    self,
+                    "candidates_generated",
+                    signal.created_ms,
+                    signal=signal,
+                    key="generated:" + signal.id,
+                )
+            stage = {
+                "PENDING CONFIRMATION": "pending_confirmation",
+                "CONFIRMED": "confirmed",
+                "ALERTED": "alerted",
+            }.get(signal.state)
+            if stage and (not old or old[0] != signal.state):
+                emit(self, stage, now_ms(), signal=signal, key=stage + ":" + signal.id)
+            from .path_research import register
+
+            register(self, signal, now_ms())
         start(self, signal, now_ms())
 
     def signals(self, limit=200):
@@ -362,6 +388,9 @@ class Recorder:
                 "INSERT OR REPLACE INTO kv VALUES('last_segment',?)",
                 (json.dumps({"id": ident, "sha256": digest}),),
             )
+            from .funnel import emit
+
+            emit(store, "recorded_events", now_ms(), key="segment:" + ident, amount=len(batch))
         self.disk_bytes += (
             raw.stat().st_size
             + normalized.stat().st_size

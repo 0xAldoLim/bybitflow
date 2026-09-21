@@ -161,6 +161,94 @@ class Scanner:
                 self.store.put("refresh_health", dict(at_ms=now_ms(), error_type=type(exc).__name__))
             await asyncio.sleep(30)
 
+    def generation_profile(self, instrument, bars, now):
+        cache = "swing_profiles" if bars and bars[-1].interval >= 14400000 else "volume_profiles"
+        profile = getattr(self, cache, {}).get(instrument.symbol, {})
+        if profile.get("source") == self.exchange and 0 <= now - profile.get("available_ms", 0) <= 120000:
+            return profile
+        return {"available": False, "reason": "No fresh complete cached executed-volume profile"}
+
+    async def profile_loop(self):
+        from .orderflow import Tape
+        from .profiles import build
+
+        self.volume_profiles = {}
+        self.swing_profiles = {}
+        while True:
+            if self.source_ready and self.recorder.healthy:
+                for symbol, context in list(self.context.items()):
+                    tape = self.streams.tapes.get(symbol)
+                    if tape is None:
+                        continue
+                    now = now_ms()
+                    end = now // 60000 * 60000
+                    snapshot = Tape()
+                    snapshot.trades = list(tape.trades)
+                    snapshot.coverage_start = tape.coverage_start
+                    snapshot.last_event = tape.last_event
+                    inst = context["instrument"]
+                    atr = candle_features(context["h1"], now)["atr"]
+                    result = await asyncio.to_thread(
+                        build,
+                        snapshot,
+                        inst.tick,
+                        atr,
+                        end - 1800000,
+                        end,
+                        now,
+                        self.exchange,
+                        symbol,
+                        self.volume_profiles.get(symbol),
+                    )
+                    result["available_ms"] = now_ms()
+                    self.volume_profiles[symbol] = result
+                    swing_atr = candle_features(context["h4"], now)["atr"]
+                    swing = await asyncio.to_thread(
+                        build,
+                        snapshot,
+                        inst.tick,
+                        swing_atr,
+                        end - 14400000,
+                        end,
+                        now,
+                        self.exchange,
+                        symbol,
+                        self.swing_profiles.get(symbol),
+                    )
+                    swing["available_ms"] = now_ms()
+                    self.swing_profiles[symbol] = swing
+                    # Baselines mature from every complete selected-market window,
+                    # independent of whether the strategy generated a candidate.
+                    book = self.streams.books.get(symbol)
+                    window = self.settings.execution_window_seconds * 1000
+                    start = end - window
+                    if (
+                        snapshot.coverage_start <= start
+                        and snapshot.last_event >= end - 10000
+                        and book
+                        and book.fresh(now, self.settings.book_stale_ms)
+                    ):
+                        from types import SimpleNamespace
+
+                        from .evidence import flow_response, session_baseline
+                        from .horizons import session_context
+
+                        trades = snapshot.window(start, end)
+                        flow = await asyncio.to_thread(footprint, trades, inst.tick, atr)
+                        if flow.get("available"):
+                            bf = book.features(now)
+                            flow.update(flow_response(trades, bf))
+                            for horizon in self.settings.horizon_profiles:
+                                identity = SimpleNamespace(
+                                    source=self.exchange,
+                                    symbol=symbol,
+                                    horizon_profile=horizon,
+                                    entry_session=session_context(now)["primary"],
+                                )
+                                session_baseline(self.store, identity, flow, bf, now, window_end_ms=end)
+                    await asyncio.sleep(0.05)
+            await asyncio.sleep(30)
+
     def save_candidates(self, instrument, context_bars, setup_bars, execution_bars, evaluated):
         if not self.recorder.healthy:
             return []
@@ -172,6 +260,7 @@ class Scanner:
             evaluated,
             execution_window_ms=self.settings.execution_window_seconds * 1000,
             structural_targets=True,
+            volume_profile=self.generation_profile(instrument, setup_bars, evaluated),
         )
         for signal in plans:
             assign(signal, "CORE_INTRADAY")
@@ -191,7 +280,12 @@ class Scanner:
                 for tf in (profile.context, profile.setup, profile.execution)
             ]
             plans = candidates(
-                instrument, *bars, now, execution_window_ms=self.settings.execution_window_seconds * 1000, structural_targets=True
+                instrument,
+                *bars,
+                now,
+                execution_window_ms=self.settings.execution_window_seconds * 1000,
+                structural_targets=True,
+                volume_profile=self.generation_profile(instrument, bars[1], now),
             )
             for signal in plans:
                 assign(signal, name)
@@ -583,6 +677,21 @@ class Scanner:
                 },
             )
             self.store.put("scanner", self.status)
+            from .funnel import emit
+
+            for field, metric in [
+                ("discovered", "broad_markets_discovered"),
+                ("preeligible", "preeligible_markets"),
+                ("depth_verified", "depth_verified_markets"),
+                ("deep_selected", "deep_selected_markets"),
+            ]:
+                emit(
+                    self.store,
+                    metric,
+                    self.status["at_ms"],
+                    amount=self.status[field],
+                    key=f"scan:{self.status['at_ms']}:{metric}",
+                )
             return self.status
 
     async def monitor_alerted(self, s, now):
@@ -744,7 +853,7 @@ class Scanner:
         self.recorder.critical_symbols.update(
             r[0]
             for r in self.store.db.execute(
-                "SELECT DISTINCT json_extract(s.payload,'$.symbol') FROM ml_snapshots s WHERE s.stage='decision' "
+                "SELECT DISTINCT json_extract(s.payload,'$.signal.symbol') FROM ml_snapshots s WHERE s.stage='decision' "
                 "AND NOT EXISTS (SELECT 1 FROM ml_labels l WHERE l.snapshot_id=s.id AND l.policy='prints-v1') "
                 "AND s.decision_ms>?",
                 (now - 7 * DAY,),
@@ -797,6 +906,9 @@ class Scanner:
                 s.evidence["macro"] = macro
             if macro["macro_pause_active"]:
                 s.evidence["macro"] = macro
+                from .funnel import emit
+
+                emit(self.store, "macro_deferred", now, signal=s, reason="MACRO_EVENT_PAUSE")
                 s.coverage["macro_deferred_ms"] = now
                 self.store.signal(s, "High-impact USD entry pause; lifecycle continues")
                 continue
@@ -864,14 +976,28 @@ class Scanner:
                 continue
             s.state = "PENDING CONFIRMATION"
             self.store.signal(s)
+            from .funnel import emit, reject
+
             if not healthy:
+                emit(
+                    self.store,
+                    "coverage_incomplete",
+                    now,
+                    signal=s,
+                    reason="REQUIRED_EXECUTED_FLOW_COVERAGE_INCOMPLETE",
+                )
                 continue
+            emit(self.store, "confirmation_attempts", now, signal=s, key=f"confirmation:{s.id}:{end}")
             trades = tape.window(start, end)
             execution_features = candle_features(execution_bars, now)
             s.evidence["m15" if s.horizon_profile == "LEGACY" else "execution_features"] = execution_features
-            s.trigger_expires_ms = end + (120_000 if window_ms < 900_000 else 900_000)
-            s.holding_deadline_ms = now + s.expected_hold_max * 60_000
-            if s.horizon_profile != "LEGACY":
+            # Generation already fixed these deadlines. Confirmation must not
+            # extend or replace an existing setup's original lifecycle.
+            if s.trigger_expires_ms is None:
+                s.trigger_expires_ms = end + (120_000 if window_ms < 900_000 else 900_000)
+            if s.holding_deadline_ms is None:
+                s.holding_deadline_ms = now + s.expected_hold_max * 60_000
+            if s.primary_tracking_deadline is None and s.horizon_profile != "LEGACY":
                 s.primary_tracking_deadline = s.holding_deadline_ms
             # Use only additions at/before window close to avoid confirmation leakage.
             window_book = Book()
@@ -879,6 +1005,8 @@ class Scanner:
             window_book.changes.extend(x for x in book.changes if x[0] <= end)
             flow = footprint(trades, c["instrument"].tick, execution_features["atr"], window_book)
             flow_ok = confirm(s, flow, execution_bars)
+            if flow_ok:
+                emit(self.store, "flow_confirmed", now, signal=s, key=f"flow:{s.id}:{end}")
             s.gates = []
             normal_spread = self.spread_history(s.symbol).assess(
                 now, self.settings.max_spread_bps, self.settings.spread_min_samples
@@ -956,13 +1084,28 @@ class Scanner:
                 s.evidence.update(
                     range=range_context(setup_bars, now),
                     auction=auction_context(flow, previous_flow, mid),
-                    market_factor=factor_context(setup_bars, factor_bars("BTCUSDT"), factor_bars("ETHUSDT")),
+                    market_factor=factor_context(
+                        setup_bars, factor_bars("BTCUSDT"), factor_bars("ETHUSDT"), asof=now
+                    ),
                     execution=execution_context(s, execution_bars, book, self.settings),
                     selection=self.store.get("deep_selection", {}).get(s.symbol, {}),
                     horizon_suitability=recommend(self.store, s, now),
                     derivatives=derivatives_context(d, setup_bars),
-                    session_metrics=session_baseline(self.store, s, flow, bf, now),
+                    session_metrics=session_baseline(self.store, s, flow, bf, now, window_end_ms=end),
                 )
+                s.evidence["factor_timeframes"] = {
+                    tf: factor_context(
+                        self.candle_cache.get((s.symbol, tf), (None, []))[1],
+                        self.candle_cache.get(("BTCUSDT", tf), (None, []))[1]
+                        if s.symbol != "BTCUSDT"
+                        else [],
+                        self.candle_cache.get(("ETHUSDT", tf), (None, []))[1]
+                        if s.symbol != "ETHUSDT"
+                        else [],
+                        asof=now,
+                    )
+                    for tf in dict.fromkeys((s.context_timeframe, s.setup_timeframe, s.execution_timeframe))
+                }
                 if ":autonomy-v1" in s.version:
                     from .thesis_health import market_gate
 
@@ -1011,6 +1154,8 @@ class Scanner:
                     "strategy_version": s.version,
                 },
             )
+            for gate in s.gates:
+                reject(self.store, s, gate, now)
             if not s.gates:
                 s.state = "CONFIRMED"
             self.store.signal(s)
@@ -1070,13 +1215,32 @@ class Scanner:
         while True:
             try:
                 await self.evaluate()
+                self.store.put(
+                    "confirmation_health",
+                    self.store.get("confirmation_health", {})
+                    | dict(state="HEALTHY", last_success_ms=now_ms()),
+                )
             except Exception as exc:
+                import traceback
+
+                frames = traceback.extract_tb(exc.__traceback__)
+                self.store.put(
+                    "confirmation_health",
+                    self.store.get("confirmation_health", {})
+                    | dict(
+                        state="DEGRADED",
+                        last_error_ms=now_ms(),
+                        last_error_type=type(exc).__name__,
+                        sqlite_error=getattr(exc, "sqlite_errorname", None),
+                        location=f"{frames[-1].name}:{frames[-1].lineno}" if frames else None,
+                    ),
+                )
                 log.warning("evaluation_failed", extra={"error_type": type(exc).__name__})
             await asyncio.sleep(10)
 
     async def research_loop(self):
         """Compact late observations use shared REST candles, never additional DOM streams."""
-        from .observations import advance_batch
+        from .observations import advance_batch, refresh_recommendations
 
         while True:
             try:
@@ -1099,11 +1263,41 @@ class Scanner:
                         try:
                             bars = await api.candles(symbol, "1", now_ms(), limit=300, start=start)
                             await asyncio.to_thread(
-                                advance_batch, self.settings.data_dir, [ident for ident, _ in group], bars, now_ms()
+                                advance_batch,
+                                self.settings.data_dir,
+                                [ident for ident, _ in group],
+                                bars,
+                                now_ms(),
                             )
                         finally:
                             if api is not self.api:
                                 await api.close()
+                    from .path_research import advance_batch as advance_paths
+
+                    path_rows = self.store.db.execute(
+                        "SELECT signal_id,source,symbol,cursor_ms FROM swing_path_jobs WHERE next_ms<=? ORDER BY next_ms LIMIT 50",
+                        (now_ms(),),
+                    ).fetchall()
+                    path_groups = defaultdict(list)
+                    for ident, source, symbol, cursor in path_rows:
+                        path_groups[(source, symbol)].append((ident, cursor))
+                    for (source, symbol), group in list(path_groups.items())[:5]:
+                        api = self.api if source == self.exchange else VenueAPI(source, self.settings)
+                        try:
+                            bars = await api.candles(
+                                symbol, "1", now_ms(), limit=300, start=min(cursor for _, cursor in group)
+                            )
+                            await asyncio.to_thread(
+                                advance_paths,
+                                self.settings.data_dir,
+                                [ident for ident, _ in group],
+                                bars,
+                                now_ms(),
+                            )
+                        finally:
+                            if api is not self.api:
+                                await api.close()
+                    await asyncio.to_thread(refresh_recommendations, self.settings.data_dir, now_ms())
                     self.store.put("observation_health", dict(at_ms=now_ms(), processed=len(rows)))
             except Exception as exc:
                 self.store.put("observation_health", dict(at_ms=now_ms(), error_type=type(exc).__name__))
@@ -1117,6 +1311,9 @@ class Scanner:
         def maintain():
             store = Store(self.settings.data_dir)
             try:
+                from .funnel import maintain as maintain_funnel
+
+                maintain_funnel(store, now_ms())
                 result = storage_maintain(store, self.settings)
                 if now_ms() - store.get("storage_status", {}).get("at_ms", 0) >= 300_000:
                     storage_status(store, self.settings)
@@ -1136,6 +1333,12 @@ class Scanner:
     def start(self):
         from .supervision import supervise
 
+        self.store.put("scanner_process_start", dict(at_ms=now_ms()))
+        self.store.put(
+            "funnel_process_baseline",
+            dict(self.store.db.execute("SELECT metric,n FROM funnel_totals WHERE dimension='all'")),
+        )
+
         def start_task(name, factory):
             self.tasks.append(asyncio.create_task(supervise(self.store, name, factory)))
 
@@ -1146,13 +1349,16 @@ class Scanner:
         if self.settings.scan_enabled:
             if self.settings.macro_news_enabled:
                 from .macro import run as macro_run
+
                 start_task("macro", lambda: macro_run(self))
             start_task("scanner", self.scan_loop)
             start_task("quotes", self.quote_loop)
+            start_task("volume_profiles", self.profile_loop)
             start_task("pending", self.refresh_pending)
             start_task("source", self.source_watchdog)
             if self.settings.market_source == "multi":
                 from .cross_venue import CrossVenue
+
                 start_task("cross_venue", CrossVenue(self).run)
 
     async def stop(self):

@@ -17,6 +17,8 @@ def main():
     serve.add_argument("--host", default="127.0.0.1")
     serve.add_argument("--port", type=int, default=8000)
     sub.add_parser("scan-once")
+    signals = sub.add_parser("signals", help="Signal pipeline counters and delivery diagnostics")
+    signals.add_argument("operation", choices=["status"])
     doctor = sub.add_parser("doctor", help="Public connectivity and local operational diagnostics")
     doctor.add_argument("--json", action="store_true")
     market = sub.add_parser("test-market", help="Genuine public REST and trade WebSocket smoke test")
@@ -67,7 +69,15 @@ def main():
         return
     store = Store(settings.data_dir)
     try:
-        if args.command == "test-signal":
+        if args.command == "signals":
+            from .funnel import status
+
+            print(
+                json.dumps(
+                    status(store, configured=bool(settings.research_webhook.get_secret_value())), indent=2
+                )
+            )
+        elif args.command == "test-signal":
             from .synthetic import test_signal
 
             print(json.dumps(asyncio.run(test_signal(settings, store)), indent=2))

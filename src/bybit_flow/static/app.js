@@ -41,6 +41,19 @@ async function api(path, data) {
 function table(columns, rows) {
   return `<table><thead><tr>${columns.map((c) => `<th>${escape(c)}</th>`).join("")}</tr></thead><tbody>${rows.map((r) => `<tr>${r.map((c) => `<td>${c}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
 }
+function funnelPanel(f) {
+  const metrics = [
+    ["recorded_events", "Recorded events"], ["candidates_generated", "Generated setups"],
+    ["pending_confirmation", "Reached confirmation"], ["confirmation_attempts", "Flow checks"],
+    ["flow_confirmed", "Flow confirmed"], ["confirmed", "All gates passed"],
+    ["discord_http_attempts", "Discord attempts"], ["discord_sent", "Discord delivered"],
+  ];
+  const counts = table(["Stage", "Past 15 min", "Past hour", "Past 24 hours", "Recorded total"],
+    metrics.map(([key, label]) => [escape(label), ...["15m", "1h", "24h"].map(w => number(f.windows[w]?.[key] || 0, 0)), number(f.cumulative[key] || 0, 0)]));
+  const reasons = table(["Gate", "Checks in past hour", "Last seen"],
+    f.top_rejections.map(r => [escape(r.reason.replaceAll("_", " ").toLowerCase()), number(r.count, 0), utc(r.last_seen_ms)]));
+  return panel("Signal pipeline", `<p>${escape(f.message)}</p>${counts}<h3>Recent rejection reasons</h3>${reasons}<p>Events are not independent setups. Rejection checks may overlap. Historical counts begin where retained evidence is available.</p>`, "Live confirmation and delivery diagnostics");
+}
 function signalTable(rows) {
   return rows.length
     ? table(
@@ -183,7 +196,8 @@ async function render() {
       );
     else if (page === "signals") {
       const delivery = await api("delivery");
-      body = panel("Real signal delivery", json(delivery), "Excludes connection tests, synthetic cards and lifecycle updates") + panel("Lifecycle journal", signalTable(data.signals), "Research alerts; no order execution");
+      const funnel = await api("funnel");
+      body = funnelPanel(funnel) + panel("Real signal delivery", json(delivery), "Excludes connection tests, synthetic cards and lifecycle updates") + panel("Lifecycle journal", signalTable(data.signals), "Research alerts; no order execution");
     }
     else if (page === "ml") {
       const ml = await api("ml"),

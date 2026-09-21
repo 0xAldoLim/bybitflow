@@ -20,3 +20,4 @@ jobs:
       - run: node --check src/bybit_flow/static/app.js
       - run: pytest -q
       - run: python examples/offline_research.py
+      - run: python examples/recorder_soak.py --seconds 20 --rate 500 --data-dir /tmp/bybitflow-recorder-smoke

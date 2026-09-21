@@ -83,12 +83,30 @@ CATALOG = {
         }.items()
     },
 }
-CATALOG.update({
-    "macro_minutes_to_high_impact_usd": ("macro", "evidence.macro.minutes_to_high_impact_usd", "Scheduled high USD event proximity known at decision time; no release result"),
-    "macro_pause_active": ("macro", "evidence.macro.macro_pause_active", "Scheduled New York session USD high-impact pause flag"),
-    "btc_regime_impulse": ("market_alignment", "evidence.market_alignment.btc_impulse_strength", "Causal BTC setup-timeframe slope in ATR units"),
-    "market_conflict_blocked": ("market_alignment", "evidence.market_alignment.blocked", "Versioned market-conflict validity gate at decision time"),
-})
+CATALOG.update(
+    {
+        "macro_minutes_to_high_impact_usd": (
+            "macro",
+            "evidence.macro.minutes_to_high_impact_usd",
+            "Scheduled high USD event proximity known at decision time; no release result",
+        ),
+        "macro_pause_active": (
+            "macro",
+            "evidence.macro.macro_pause_active",
+            "Scheduled New York session USD high-impact pause flag",
+        ),
+        "btc_regime_impulse": (
+            "market_alignment",
+            "evidence.market_alignment.btc_impulse_strength",
+            "Causal BTC setup-timeframe slope in ATR units",
+        ),
+        "market_conflict_blocked": (
+            "market_alignment",
+            "evidence.market_alignment.blocked",
+            "Versioned market-conflict validity gate at decision time",
+        ),
+    }
+)
 
 CONTEXT = (
     "family",
@@ -144,6 +162,22 @@ for _group, _fields in {
             "evidence." + _group + "." + _field,
             "Causal observed " + _group + " " + _field,
         )
+for _metric in (
+    "volume",
+    "trade_count",
+    "trade_intensity",
+    "aggressive_buy_notional",
+    "aggressive_sell_notional",
+    "delta_magnitude",
+    "cvd_slope",
+    "replenishment",
+    "obi",
+):
+    CATALOG["participation_" + _metric + "_percentile"] = (
+        "participation",
+        "evidence.session_metrics." + _metric + "_percentile",
+        "Prior same-instrument venue horizon session empirical percentile; missing until 20 windows",
+    )
 CATALOG["quality_score"] = ("quality", "quality", "Frozen combined quality; never calibrated probability")
 for _category in (
     "regime",
@@ -224,7 +258,9 @@ def snapshot(signal, decision_ms, stage, membership=None):
         section = signal.evidence.get(prefix, {})
         section = section if isinstance(section, dict) else {}
         source_ms = section.get("asof", section.get("event_ms", decision_ms))
-        available_ms = section.get("receipt_ms", section.get("collected_ms", decision_ms))
+        available_ms = section.get(
+            "available_ms", section.get("receipt_ms", section.get("collected_ms", decision_ms))
+        )
         missing = (
             not isinstance(value, (int, float))
             or not math.isfinite(value)

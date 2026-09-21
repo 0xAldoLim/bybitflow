@@ -20,7 +20,8 @@ async def doctor(settings, store, network=True):
         "tradingview_required": False,
     }
     checks["database"] = {
-        "status": "OK" if store.db.execute("PRAGMA quick_check").fetchone()[0] == "ok" else "FAIL"
+        "status": "OK" if store.db.execute("SELECT 1").fetchone()[0] == 1 else "FAIL",
+        "scope": "operational read; full integrity checks run separately",
     }
     try:
         with tempfile.TemporaryFile(dir=settings.data_dir) as f:
@@ -61,6 +62,7 @@ async def doctor(settings, store, network=True):
     }
     checks["stream"] = store.get("stream_health", {"status": "NOT_OBSERVED"})
     from .thesis_health import summary as health_summary
+
     checks["thesis_health"] = health_summary(store)
     checks["macro"] = store.get("macro_health", {"status": "NOT_OBSERVED"})
     checks["recorder_runtime"] = store.get("recorder_health", {"status": "NOT_OBSERVED"})
@@ -75,9 +77,14 @@ async def doctor(settings, store, network=True):
     from .identity import delivery_status
 
     checks["real_signal_delivery"] = delivery_status(store)
+    from .funnel import status as funnel_status
+
+    checks["signal_funnel"] = funnel_status(
+        store, configured=bool(settings.research_webhook.get_secret_value())
+    )
     from .ml.registry import Registry
 
-    summary = Registry(store).summary()
+    summary = Registry(store).cached_summary()
     checks["ml"] = {
         "status": "OK",
         "enabled": settings.ml_enabled,
@@ -129,6 +136,7 @@ async def discord_test(settings, store, transport=None):
         ],
     }
     result = await Notifier(settings, store, transport).deliver(f"operator-test:{now}", None, payload, secret)
+    store.put("discord_connection_test", dict(status=result, at_ms=now))
     return {
         "status": result,
         "at_ms": now,

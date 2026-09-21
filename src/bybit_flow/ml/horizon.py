@@ -13,7 +13,9 @@ def dataset(store, asof):
         "SELECT signal_id,available_ms FROM research_labels WHERE available_ms<=? ORDER BY available_ms",
         (asof,),
     ).fetchall():
-        text = store.db.execute("SELECT payload FROM research_labels WHERE signal_id=?", (signal_id,)).fetchone()[0]
+        text = store.db.execute(
+            "SELECT payload FROM research_labels WHERE signal_id=?", (signal_id,)
+        ).fetchone()[0]
         label = json.loads(text)
         if not label.get("coverage_complete"):
             continue

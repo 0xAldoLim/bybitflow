@@ -207,11 +207,18 @@ def advance(store, ident, bars, now):
             stop_time, target_time = p["time_to_late_stop"], p["time_to_late_target"]
             p["withdrawal_research"] = dict(
                 policy=s.evidence["withdrawal"]["policy"],
-                classification="WITHDRAWAL_AMBIGUOUS" if not p["coverage_complete"] else
-                "WITHDRAWAL_TOO_EARLY" if target_time is not None and (stop_time is None or target_time < stop_time) else
-                "WITHDRAWAL_SAVED_STOP" if stop_time is not None else "INCONCLUSIVE",
-                post_withdrawal_mfe=p["post_terminal_mfe"], post_withdrawal_mae=p["post_terminal_mae"],
-                original_stop_later_hit=p["late_stop_hit"], original_tp1_later_hit=p["late_target_hit"])
+                classification="WITHDRAWAL_AMBIGUOUS"
+                if not p["coverage_complete"]
+                else "WITHDRAWAL_TOO_EARLY"
+                if target_time is not None and (stop_time is None or target_time < stop_time)
+                else "WITHDRAWAL_SAVED_STOP"
+                if stop_time is not None
+                else "INCONCLUSIVE",
+                post_withdrawal_mfe=p["post_terminal_mfe"],
+                post_withdrawal_mae=p["post_terminal_mae"],
+                original_stop_later_hit=p["late_stop_hit"],
+                original_tp1_later_hit=p["late_target_hit"],
+            )
 
         with store.db:
             store.db.execute(
@@ -239,8 +246,12 @@ def advance_batch(root, identities, bars, at_ms):
 
 def metrics(store):
     groups = defaultdict(list)
-    for ident, in store.db.execute("SELECT signal_id FROM research_labels ORDER BY available_ms DESC LIMIT 10000").fetchall():
-        p = json.loads(store.db.execute("SELECT payload FROM research_labels WHERE signal_id=?", (ident,)).fetchone()[0])
+    for (ident,) in store.db.execute(
+        "SELECT signal_id FROM research_labels ORDER BY available_ms DESC LIMIT 10000"
+    ).fetchall():
+        p = json.loads(
+            store.db.execute("SELECT payload FROM research_labels WHERE signal_id=?", (ident,)).fetchone()[0]
+        )
         s = p["signal"]
         for dimension, value in (
             ("tier", s["raw_tier"]),
@@ -295,24 +306,41 @@ def metrics(store):
     return report
 
 
+def refresh_recommendations(root, asof):
+    """Materialize small causal summaries outside the live confirmation loop."""
+    from .storage import Store
+
+    store = Store(root)
+    try:
+        families = {}
+        query = "SELECT json_extract(payload,'$.coverage_complete'), json_extract(payload,'$.signal.family'), json_extract(payload,'$.extended_same_rules_outcome'), json_extract(payload,'$.best_observed_horizon') FROM research_labels WHERE available_ms<? ORDER BY available_ms DESC LIMIT 10000"
+        for complete, family, outcome, horizon in store.db.execute(query, (asof,)).fetchall():
+            if not complete:
+                continue
+            group = families.setdefault(family, dict(samples=0, successful_horizon_counts={}))
+            group["samples"] += 1
+            if outcome == "TARGET" and horizon:
+                group["successful_horizon_counts"][horizon] = (
+                    group["successful_horizon_counts"].get(horizon, 0) + 1
+                )
+        store.put("horizon_recommendations", dict(available_ms=asof, families=families))
+    finally:
+        store.close()
+
+
 def recommend(store, signal, asof, minimum=100):
-    # Research-only pooled empirical target. Never alters an active or historical plan.
-    rows = []
-    for row in store.db.execute(
-        "SELECT payload FROM research_labels WHERE available_ms<? ORDER BY available_ms DESC LIMIT 10000",
-        (asof,),
-    ):
-        p = json.loads(row[0])
-        if p["coverage_complete"] and p["signal"]["family"] == signal.family:
-            rows.append(p)
-    counts = defaultdict(int)
-    for p in rows:
-        if p["extended_same_rules_outcome"] == "TARGET" and p["best_observed_horizon"]:
-            counts[p["best_observed_horizon"]] += 1
+    # Never sort multi-megabyte labels on the live event loop. A missing/stale
+    # optional research summary cannot prevent confirmation or Discord delivery.
+    cache = store.get("horizon_recommendations", {})
+    valid = 0 <= asof - cache.get("available_ms", -86_400_000) <= 86_400_000
+    group = cache.get("families", {}).get(signal.family, {}) if valid else {}
+    counts = group.get("successful_horizon_counts", {})
+    samples = group.get("samples", 0)
     return dict(
-        status="research-only" if len(rows) >= minimum else "insufficient evidence",
-        samples=len(rows),
-        recommended_horizon_profile=max(counts, key=counts.get) if counts and len(rows) >= minimum else None,
-        successful_horizon_counts=dict(counts),
+        status="research-only" if samples >= minimum else "insufficient evidence",
+        samples=samples,
+        recommended_horizon_profile=max(counts, key=counts.get) if counts and samples >= minimum else None,
+        successful_horizon_counts=counts,
+        available_ms=cache.get("available_ms") if valid else None,
         production_enabled=False,
     )

@@ -70,7 +70,7 @@ def assign(signal, name):
     signal.session = session_context(signal.created_ms)
     signal.entry_session = signal.session["primary"]
     signal.lifecycle_version = "horizon-v1"
-    signal.feature_schema_version = "candidate-v5"
+    signal.feature_schema_version = "candidate-v6"
     signal.version += ":horizons-v1:" + name + ":hardening-v1:autonomy-v1"
     signal.id = hashlib.sha256((signal.id + ":" + name).encode()).hexdigest()[:24]
     # Group the actual structural event across horizons; alert comparison also checks prices.

@@ -155,9 +155,7 @@ def embed(signal, dashboard_url):
                 else (0x4CC9A4 if s.direction == "LONG" else 0xEF7F86),
                 "timestamp": iso(now_ms() if terminal or monitoring_update else s.created_ms),
                 "fields": fields,
-                "footer": {
-                    "text": f"{s.id}"
-                },
+                "footer": {"text": f"{s.id}"},
             }
         ],
     }
@@ -214,9 +212,20 @@ class Notifier:
 
         from .identity import claim
         from .macro import state as macro_state
+
         if macro_state(self.store, self.settings, now_ms())["macro_pause_active"]:
             return "macro-paused"
+        from .funnel import emit
+
+        emit(self.store, "alert_claim_attempts", now_ms(), signal=signal, key="claim-attempt:" + signal.id)
         claimed = claim(self.store, signal, now_ms())
+        emit(
+            self.store,
+            "alert_claimed" if claimed["claimed"] else "duplicate_suppressed",
+            now_ms(),
+            signal=signal,
+            key="claim-result:" + signal.id,
+        )
 
         if not claimed["claimed"]:
             return "duplicate-plan-suppressed"
@@ -326,12 +335,19 @@ class Notifier:
 
         # reconcile it manually; at-most-once attempts prevent duplicate signal cards.
 
+        from .funnel import emit
+
+        real_initial = signal_id is not None and key.endswith(":initial")
+        if real_initial:
+            emit(self.store, "discord_http_attempts", now_ms(), key="http:" + key)
         status, message_id = "uncertain", None
+        transport_detail = dict(at_ms=now_ms(), category="UNKNOWN", http_status=None)
 
         try:
             async with httpx.AsyncClient(timeout=15, transport=self.transport) as client:
                 response = await client.post(secret, params={"wait": "true"}, json=payload)
 
+                transport_detail.update(http_status=response.status_code, category="HTTP")
                 if response.status_code == 429:
                     status = "rate-limited"
 
@@ -341,8 +357,12 @@ class Notifier:
                 else:
                     status = "rejected"
 
-        except httpx.TransportError:
-            pass
+        except httpx.TransportError as exc:
+            # Store a category only: exception messages can contain webhook secrets.
+            transport_detail["category"] = (
+                "TIMEOUT" if isinstance(exc, httpx.TimeoutException) else "CONNECTION_ERROR"
+            )
+            transport_detail["error_type"] = type(exc).__name__
 
         with self.store.db:
             self.store.db.execute(
@@ -350,6 +370,20 @@ class Notifier:
                 (status, message_id, now_ms(), key),
             )
 
+        self.store.put("discord_transport", transport_detail | dict(status=status))
+        if real_initial:
+            metric = {"sent": "discord_sent", "uncertain": "discord_uncertain"}.get(
+                status, "discord_rejected"
+            )
+            emit(
+                self.store,
+                metric,
+                now_ms(),
+                key="http-result:" + key,
+                reason="" if status == "sent" else status.upper(),
+            )
+        elif signal_id is not None and status == "sent":
+            emit(self.store, "lifecycle_updates_sent", now_ms(), key="lifecycle:" + key)
         return status
 
     async def send_public(self, signal, update=False):

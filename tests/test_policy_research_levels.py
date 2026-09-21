@@ -55,7 +55,9 @@ def test_ten_gb_pressure_policy_protects_evidence(settings, monkeypatch, fractio
 def test_horizon_snapshot_lookup_uses_signal_scoped_index(settings):
     store = Store(settings.data_dir)
     query = "SELECT id,decision_ms,payload FROM ml_snapshots WHERE signal_id=? AND stage='decision' AND decision_ms<=? ORDER BY decision_ms LIMIT 1"
-    plan = ' '.join(str(tuple(row)) for row in store.db.execute('EXPLAIN QUERY PLAN ' + query, ('candidate', 1000)))
-    assert 'ml_snapshot_signal_time' in plan
-    assert 'TEMP B-TREE' not in plan
+    plan = " ".join(
+        str(tuple(row)) for row in store.db.execute("EXPLAIN QUERY PLAN " + query, ("candidate", 1000))
+    )
+    assert "ml_snapshot_signal_time" in plan
+    assert "TEMP B-TREE" not in plan
     store.close()

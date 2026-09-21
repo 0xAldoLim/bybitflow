@@ -72,9 +72,10 @@ def auction_context(flow, previous, price):
     )
 
 
-def factor_context(asset, btc, eth):
+def factor_context(asset, btc, eth, asof=None):
     def returns(bars):
-        return {b.end: math.log(b.close / a.close) for a, b in zip(bars, bars[1:])}
+        closed = [b for b in bars if asof is None or b.end <= asof]
+        return {b.end: math.log(b.close / a.close) for a, b in zip(closed, closed[1:])}
 
     own = returns(asset)
     result = {"available": False, "method": "aligned closed-bar log returns, trailing 60 observations"}
@@ -87,12 +88,9 @@ def factor_context(asset, btc, eth):
         x, y = [other[t] for t in times], [own[t] for t in times]
 
         def beta(xs, ys):
-            variance = sum((v - mean(xs)) ** 2 for v in xs)
-            return (
-                sum((a - mean(xs)) * (b - mean(ys)) for a, b in zip(xs, ys)) / variance
-                if variance > 1e-18
-                else None
-            )
+            mx, my = mean(xs), mean(ys)
+            variance = sum((v - mx) ** 2 for v in xs)
+            return sum((a - mx) * (b - my) for a, b in zip(xs, ys)) / variance if variance > 1e-18 else None
 
         b = beta(x[:-1], y[:-1])
         if b is None:
@@ -104,6 +102,11 @@ def factor_context(asset, btc, eth):
         b1, b2 = beta(x[:half], y[:half]), beta(x[half:-1], y[half:-1])
         result.update(
             {
+                "samples_" + name: len(times) - 1,
+                "fit_end_ms_" + name: times[-2],
+                "available_ms_" + name: times[-1],
+                "factor_return_" + name: x[-1],
+                "actual_return_" + name: y[-1],
                 "beta_to_" + name: b,
                 "correlation_to_" + name: corr,
                 "expected_return_" + name: expected,
@@ -115,6 +118,7 @@ def factor_context(asset, btc, eth):
     if residuals:
         result.update(
             available=True,
+            available_ms=max(result[k] for k in result if k.startswith("available_ms_")),
             residual_return=mean(residuals),
             relative_strength=max(0, mean(residuals)),
             relative_weakness=min(0, mean(residuals)),
@@ -181,30 +185,53 @@ def derivatives_context(derivatives, bars):
     return result
 
 
-def session_baseline(store, signal, flow, book, now):
-    key = f"session-baseline:{signal.source}:{signal.symbol}:{signal.entry_session}"
+def session_baseline(store, signal, flow, book, now, window_end_ms=None):
+    key = (
+        f"session-baseline-v3:{signal.source}:{signal.symbol}:{signal.horizon_profile}:{signal.entry_session}"
+    )
     history = store.get(key, [])
+    window_end_ms = window_end_ms if window_end_ms is not None else now // 60000 * 60000
     current = dict(
         spread=book.get("spread_bps"),
         depth=sum(book.get("depth", {}).get("10", {}).get(s, 0) for s in ("bid", "ask")),
         trade_intensity=flow.get("trade_intensity"),
         delta=flow.get("delta_pct"),
         turnover=flow.get("buy_notional", 0) + flow.get("sell_notional", 0),
+        volume=flow.get("buy_base", 0) + flow.get("sell_base", 0),
+        trade_count=flow.get("trades"),
+        aggressive_buy_notional=flow.get("buy_notional"),
+        aggressive_sell_notional=flow.get("sell_notional"),
+        delta_magnitude=abs(flow["delta_pct"]) if flow.get("delta_pct") is not None else None,
+        cvd_slope=flow.get("cvd_slope"),
+        replenishment=flow.get("replenishment_strength"),
+        obi=book.get("obi_10bps"),
     )
     result = {
         "baseline_samples": len(history),
-        "normalization": "prior observations from the same symbol, venue and session",
+        "normalization": "prior complete execution windows from selected native markets, same symbol, venue, horizon and session",
+        "policy": "participation-percentiles-v2",
+        "available_ms": now,
+        "production_gate": False,
     }
     for name, value in current.items():
-        prior = [h[name] for h in history if h.get(name) is not None and h["at_ms"] < now]
+        prior = [
+            h[name]
+            for h in history
+            if h.get(name) is not None
+            and h["at_ms"] < now
+            and h.get("window_end_ms", h["at_ms"] // 60000 * 60000) < window_end_ms
+        ]
         result[name] = value
+        result[name + "_percentile"] = (
+            sum(v <= value for v in prior) / len(prior) if len(prior) >= 20 and value is not None else None
+        )
         result[name + "_relative"] = (
             value / median(prior)
             if len(prior) >= 20 and value is not None and abs(median(prior)) > 1e-12
             else None
         )
-    if not history or now // 60_000 > history[-1]["at_ms"] // 60_000:
-        store.put(key, (history + [current | {"at_ms": now}])[-120:])
+    if not history or window_end_ms > history[-1].get("window_end_ms", history[-1]["at_ms"] // 60000 * 60000):
+        store.put(key, (history + [current | {"at_ms": now, "window_end_ms": window_end_ms}])[-120:])
     return result
 
 

@@ -341,3 +341,20 @@ deletable bytes, usage percentage, cleanup history and cumulative reclaimed spac
 Active setups and unresolved primary recording outcomes remain
 protected. At budget pressure the recorder attempts safe cleanup before opening its
 storage circuit breaker. Late observations use compact candle checkpoints rather than pinning raw depth for days.
+
+
+## Signal pipeline diagnostics
+
+Run `docker compose exec desk bybit-flow signals status` or open the Signal journal.
+Recorded exchange events are separate from generated setups. The panel reports
+confirmation checks, rejection reasons and genuine Discord attempts over recent
+windows. Tests and synthetic cards are excluded from genuine delivery counts.
+A runtime-error state requires attention; healthy flow or risk rejections are
+recorded strategy decisions. A successful Discord test does not bypass those gates.
+
+ML dashboard summaries are materialized by the worker and include their observation
+time. Participation baselines need 20 prior complete windows from the same market,
+venue, horizon and session. Swing path and confirmation challengers remain research
+until their independent sample and chronological validation requirements are met.
+Existing signals keep their original entry, stop, targets and deadlines throughout
+these experiments. See [v4 verification](V4_VERIFICATION.md).

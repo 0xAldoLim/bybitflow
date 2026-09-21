@@ -91,6 +91,7 @@ def reap(store):
     now = now_ms()
     with store.db:
         for row in store.db.execute("SELECT * FROM storage_leases WHERE expires_ms<=?", (now,)).fetchall():
-            store.db.execute("INSERT OR IGNORE INTO kv VALUES(?,?)",
-                             ("expired_lease:"+row["id"], json.dumps(dict(row))))
+            store.db.execute(
+                "INSERT OR IGNORE INTO kv VALUES(?,?)", ("expired_lease:" + row["id"], json.dumps(dict(row)))
+            )
         store.db.execute("DELETE FROM storage_leases WHERE expires_ms<=?", (now,))
