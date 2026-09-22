@@ -9,6 +9,8 @@ import math
 
 def advance(signal, bars, cursor, until, detected_ms):
     deadline = signal.holding_deadline_ms or signal.expires_ms
+    if signal.state != "ALERTED":
+        deadline = min(deadline, signal.trigger_expires_ms or signal.expires_ms)
     entered = signal.evidence.get("observed_entry_ms")
     result = dict(
         policy="downtime-ohlc-v1",
@@ -88,7 +90,7 @@ async def reconcile(scanner, signal, now):
         and 0 <= now - tape.last_receipt <= scanner.settings.trade_stale_ms
     )
     live_covers_tail = bool(fresh and tape.coverage_start is not None and tape.coverage_start <= cursor)
-    if live_covers_tail and cursor >= now // 60_000 * 60_000:
+    if live_covers_tail:
         signal.coverage.update(
             monitor_cursor_event_ms=cursor, last_monitor_ms=now, monitoring="active", monitor_status="FRESH"
         )
