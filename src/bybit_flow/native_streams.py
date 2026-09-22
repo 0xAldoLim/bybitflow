@@ -83,6 +83,7 @@ class NativeStreams:
         self.tasks, self.sessions, self.last_sample, self.reconnects = {}, {}, {}, {}
         self.last_message = 0
         self.frames = {}
+        self.selection_lock = asyncio.Lock()
 
     @property
     def connected(self):
@@ -100,7 +101,19 @@ class NativeStreams:
         )
 
     async def select(self, symbols):
-        selected = tuple(dict.fromkeys(symbols))[: self.settings.deep_symbols]
+        async with self.selection_lock:
+            await self._select(symbols)
+
+    async def _select(self, symbols):
+        required = sorted(getattr(self, "required_symbols", set()))
+        optional = [s for s in dict.fromkeys(symbols) if s not in required]
+        selected = tuple(required + optional[: max(0, self.settings.deep_symbols - len(required))])
+        dead = {s for s, task in self.tasks.items() if task.done()}
+        for s in dead:
+            task = self.tasks.pop(s)
+            if not task.cancelled():
+                task.exception()
+        self.selected = tuple(s for s in self.selected if s not in dead)
         removed, added = set(self.selected) - set(selected), set(selected) - set(self.selected)
         # Publish removals before awaiting shutdown so health readers never access
         # half-removed state. Close all sockets concurrently, not one timeout each.

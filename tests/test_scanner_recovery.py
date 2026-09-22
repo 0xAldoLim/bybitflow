@@ -11,10 +11,13 @@ from bybit_flow.scanner import Scanner
 @pytest.mark.asyncio
 async def test_failed_scan_retries_then_restores_normal_cadence(monkeypatch):
     scanner = Scanner.__new__(Scanner)
+    scanner.lifecycle_bootstrapped = asyncio.Event()
+    scanner.lifecycle_bootstrapped.set()
+    scanner.pending_symbols = lambda: []
     scanner.settings = SimpleNamespace(market_source="auto", scan_seconds=900)
     scanner.store = Mock()
     scanner.context = {"BTCUSDT": {"stale": True}}
-    scanner.streams = SimpleNamespace(select=AsyncMock())
+    scanner.streams = SimpleNamespace(select=AsyncMock(), selected=())
     scanner.source_ready = True
     scanner.scan_once = AsyncMock(side_effect=[ConnectionError("temporary outage"), None])
     delays = []
@@ -22,8 +25,8 @@ async def test_failed_scan_retries_then_restores_normal_cadence(monkeypatch):
     async def sleep(delay):
         delays.append(delay)
         if len(delays) == 1:
-            assert scanner.context == {}
-            assert scanner.source_ready is False
+            assert scanner.context == {"BTCUSDT": {"stale": True}}
+            assert scanner.source_ready is True
             scanner.streams.select.assert_awaited_once_with([])
         else:
             raise asyncio.CancelledError
@@ -38,6 +41,9 @@ async def test_failed_scan_retries_then_restores_normal_cadence(monkeypatch):
 @pytest.mark.asyncio
 async def test_one_stale_symbol_does_not_reset_other_native_feeds(monkeypatch):
     scanner = Scanner.__new__(Scanner)
+    scanner.lifecycle_bootstrapped = asyncio.Event()
+    scanner.lifecycle_bootstrapped.set()
+    scanner.pending_symbols = lambda: []
     scanner.settings = SimpleNamespace(market_source="auto", scan_enabled=True)
     scanner.store = Mock()
     scanner.api = SimpleNamespace(name="binance")
@@ -47,6 +53,8 @@ async def test_one_stale_symbol_does_not_reset_other_native_feeds(monkeypatch):
     scanner.context = {"BTCUSDT": {"retained": True}}
     scanner.scan_lock = asyncio.Lock()
     streams = NativeStreams.__new__(NativeStreams)
+    streams.selection_lock = asyncio.Lock()
+    streams.tapes = {}
     streams.selected = ("BTCUSDT", "QUIETUSDT")
     streams.connected_for = lambda symbol: symbol == "BTCUSDT"
     streams.select = AsyncMock()
@@ -69,16 +77,21 @@ async def test_one_stale_symbol_does_not_reset_other_native_feeds(monkeypatch):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "failure,preserved", [(ConnectionError("REST outage"), True), (ValueError("clock skew"), False)]
+    "failure,preserved", [(ConnectionError("REST outage"), True), (ValueError("clock skew"), True)]
 )
 async def test_rest_failure_preserves_live_confirmation_history(monkeypatch, failure, preserved):
     scanner = Scanner.__new__(Scanner)
+    scanner.lifecycle_bootstrapped = asyncio.Event()
+    scanner.lifecycle_bootstrapped.set()
+    scanner.pending_symbols = lambda: []
     scanner.settings = SimpleNamespace(market_source="auto", scan_seconds=300)
     scanner.store = Mock()
     scanner.source_ready = True
     scanner.recorder = SimpleNamespace(healthy=True)
     scanner.context = {"BTCUSDT": {"retained": True}}
     streams = NativeStreams.__new__(NativeStreams)
+    streams.selection_lock = asyncio.Lock()
+    streams.tapes = {}
     streams.selected = ("BTCUSDT", "QUIETUSDT")
     streams.connected_for = lambda symbol: symbol == "BTCUSDT"
     streams.select = AsyncMock()
@@ -95,15 +108,15 @@ async def test_rest_failure_preserves_live_confirmation_history(monkeypatch, fai
     assert bool(scanner.context) is preserved
     assert scanner.source_ready is preserved
     assert scanner.status["live_feed_preserved"] is preserved
-    if preserved:
-        streams.select.assert_not_awaited()
-    else:
-        streams.select.assert_awaited_once_with([])
+    streams.select.assert_awaited_once_with(["BTCUSDT", "QUIETUSDT"])
 
 
 @pytest.mark.asyncio
 async def test_selected_feed_gets_new_minutes_after_pending_expires():
     scanner = Scanner.__new__(Scanner)
+    scanner.lifecycle_bootstrapped = asyncio.Event()
+    scanner.lifecycle_bootstrapped.set()
+    scanner.pending_symbols = lambda: []
     scanner.recorder = SimpleNamespace(healthy=True)
     scanner.discover_horizons = AsyncMock()
     scanner.settings = SimpleNamespace(execution_window_seconds=60)
@@ -126,6 +139,8 @@ async def test_selected_feed_gets_new_minutes_after_pending_expires():
 @pytest.mark.asyncio
 async def test_native_removal_cancels_all_feeds_before_waiting():
     streams = NativeStreams.__new__(NativeStreams)
+    streams.selection_lock = asyncio.Lock()
+    streams.tapes = {}
     streams.settings = SimpleNamespace(deep_symbols=30)
     streams.selected = ("A", "B")
     streams.books = {"A": Mock(), "B": Mock()}
@@ -161,6 +176,8 @@ async def test_depth_recovery_preserves_executed_trade_window(monkeypatch):
     from bybit_flow.orderflow import Book, BookGap, Tape
 
     streams = NativeStreams.__new__(NativeStreams)
+    streams.selection_lock = asyncio.Lock()
+    streams.tapes = {}
     streams.api = SimpleNamespace(name="binance")
     streams.books = {"BTCUSDT": Book()}
     tape = Tape()
@@ -186,6 +203,8 @@ async def test_depth_recovery_cannot_hide_recording_failure():
     from bybit_flow.orderflow import Book
 
     streams = NativeStreams.__new__(NativeStreams)
+    streams.selection_lock = asyncio.Lock()
+    streams.tapes = {}
     streams.books = {"BTCUSDT": Book()}
     streams.frames = {"BTCUSDT": deque()}
     streams.recorder = SimpleNamespace(healthy=False)

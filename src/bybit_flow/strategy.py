@@ -72,6 +72,20 @@ def candidates(
             entry = execution_bars[-1].close
             stop = min(last.low, level) - 0.15 * atr if long else max(last.high, level) + 0.15 * atr
             stop_plan = None
+            if horizon in {"SHORT_INTRADAY", "CORE_INTRADAY"}:
+                from .production import intraday_stop
+
+                stop_plan = intraday_stop(
+                    entry,
+                    direction,
+                    min(last.low, level) if long else max(last.high, level),
+                    setup_bars,
+                    execution_bars,
+                    atr,
+                    horizon,
+                    asof,
+                )
+                stop = stop_plan["stop"]
             if horizon == "SWING":
                 from .levels import build_stop_plan
 
@@ -139,11 +153,14 @@ def candidates(
                             scoring="native-evidence-4",
                             levels="structural-levels-v3",
                             profile="executed-profile-v2",
-                            stop="swing-stop-v2" if horizon == "SWING" else "structural-stop-v1",
+                            stop=(stop_plan or {}).get(
+                                "policy", "swing-stop-v2" if horizon == "SWING" else "structural-stop-v1"
+                            ),
                         )
                         if horizon
                         else {},
                         "stop_plan": stop_plan,
+                        "wick_regime": (stop_plan or {}).get("wick_regime", {}),
                         "volume_profile": volume_profile or {"available": False},
                         "structural_trigger": dict(
                             valid=True,
@@ -167,8 +184,10 @@ def candidates(
             )
     for signal in plans:
         if horizon:
-            signal.version += ":production-v2:flow-score-v2"
-            signal.id = hashlib.sha256((signal.id + ":production-v2:flow-score-v2").encode()).hexdigest()[:24]
+            signal.version += ":production-v2:flow-score-v2:lifecycle-v62"
+            signal.id = hashlib.sha256(
+                (signal.id + ":production-v2:flow-score-v2:lifecycle-v62").encode()
+            ).hexdigest()[:24]
         if (signal.evidence.get("stop_plan") or {}).get("reasons"):
             signal.gates = list(signal.evidence["stop_plan"]["reasons"])
             signal.state = "INVALIDATED"

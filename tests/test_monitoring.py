@@ -61,6 +61,12 @@ async def test_outage_pauses_recovers_and_fresh_stop_still_invalidates(
     assert signal.state == "ALERTED"
     book.event_ms = book.receipt_ms = now + 21_000
     await scanner.monitor_alerted(signal, now + 21_000)
+    assert signal.state == "ALERTED"  # Book quotes are not executed stop evidence.
+    from bybit_flow.lifecycle import advance_trades
+    from bybit_flow.models import Trade
+
+    tape.add(Trade(signal.symbol, now + 21000, now + 21000, "stop", "Sell", crossing, Decimal(1)))
+    advance_trades(signal, tape, now + 21000)
     assert signal.state == "INVALIDATED"
 
 

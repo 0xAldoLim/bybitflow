@@ -220,6 +220,13 @@ class Notifier:
 
     async def send_research(self, signal, update=False):
 
+        if update and signal.state in {"INVALIDATED", "EXPIRED", "RESOLVED"}:
+            # Store.signal commits the terminal event first. Delivery belongs to
+            # the independent durable worker, never to lifecycle monitoring.
+            if signal.source == "tradingview":
+                await self.retry_terminals()
+            return "terminal-persisted"
+
         if signal.synthetic:
             return "blocked: use explicitly labeled test-signal delivery"
 
@@ -260,7 +267,72 @@ class Notifier:
 
         return await self.deliver(key, signal.id, payload, secret)
 
+    async def terminal_loop(self):
+        import asyncio
+
+        while True:
+            try:
+                await self.retry_terminals()
+            except Exception as exc:
+                self.store.put("terminal_delivery_error", dict(at_ms=now_ms(), error_type=type(exc).__name__))
+            await asyncio.sleep(5)
+
+    async def retry_terminals(self):
+        from .models import Signal
+
+        rows = self.store.db.execute(
+            "SELECT t.signal_id,t.attempts,s.payload FROM terminal_events t JOIN signals s ON s.id=t.signal_id WHERE t.notification_status='pending' AND t.next_ms<=? LIMIT 20",
+            (now_ms(),),
+        ).fetchall()
+        for ident, attempts, raw in rows:
+            initial = self.store.db.execute(
+                "SELECT key,message_id FROM outbox WHERE signal_id=? AND key LIKE '%:initial' AND status='sent' ORDER BY updated_ms LIMIT 1",
+                (ident,),
+            ).fetchone()
+            if not initial or not initial[1]:
+                with self.store.db:
+                    self.store.db.execute(
+                        "UPDATE terminal_events SET notification_status='failed' WHERE signal_id=?", (ident,)
+                    )
+                continue
+            secret = (
+                self.settings.research_webhook
+                if initial[0].startswith("research:")
+                else self.settings.discord_webhook
+            ).get_secret_value()
+            u = urlparse(secret)
+            if u.scheme != "https" or u.hostname != "discord.com" or not u.path.startswith("/api/webhooks/"):
+                continue
+            signal = Signal.model_validate_json(raw)
+            status = "pending"
+            delay = min(300, 2 ** min(attempts + 1, 8))
+            try:
+                async with httpx.AsyncClient(timeout=15, transport=self.transport) as client:
+                    response = await client.patch(
+                        secret.split("?")[0].rstrip("/") + "/messages/" + initial[1],
+                        json=embed(signal, self.settings.dashboard_url),
+                    )
+                    if response.is_success:
+                        status = "sent"
+                    elif response.status_code == 429:
+                        delay = max(delay, min(3600, float(response.json().get("retry_after", delay))))
+                    elif response.status_code < 500:
+                        status = "failed"
+            except httpx.TransportError:
+                pass  # Editing the same known message is idempotent, including ambiguous timeouts.
+            with self.store.db:
+                self.store.db.execute(
+                    "UPDATE terminal_events SET notification_status=?,attempts=attempts+1,next_ms=? WHERE signal_id=?",
+                    (status, now_ms() + int(delay * 1000), ident),
+                )
+            if status == "sent":
+                self.store.put("last_terminal_delivery_ms", now_ms())
+
     async def deliver_initial(self, key, signal, payload, secret):
+
+        current = self.store.db.execute("SELECT state FROM signals WHERE id=?", (signal.id,)).fetchone()
+        if current and current[0] in {"INVALIDATED", "EXPIRED", "RESOLVED"}:
+            return "terminal-setup"
 
         from .identity import claim
         from .macro import state as macro_state
@@ -295,6 +367,12 @@ class Notifier:
             )
 
         status = await self.deliver(key, signal.id, payload, secret)
+        if status == "sent":
+            with self.store.db:
+                self.store.db.execute(
+                    "UPDATE terminal_events SET notification_status='pending' WHERE signal_id=? AND notification_status='unseen'",
+                    (signal.id,),
+                )
 
         row = self.store.db.execute("SELECT message_id FROM outbox WHERE key=?", (key,)).fetchone()
 

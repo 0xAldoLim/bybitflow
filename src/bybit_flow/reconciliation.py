@@ -70,7 +70,8 @@ async def reconcile(scanner, signal, now):
     key = "reconciliation:" + signal.id
     saved = scanner.store.get(key, {})
     initial = (
-        signal.coverage.get("last_trustworthy_ms")
+        signal.coverage.get("monitor_cursor_event_ms")
+        or signal.coverage.get("last_trustworthy_ms")
         or signal.coverage.get("pause_since_ms")
         or signal.coverage.get("checked_ms")
         or signal.created_ms
@@ -88,6 +89,12 @@ async def reconcile(scanner, signal, now):
     )
     live_covers_tail = bool(fresh and tape.coverage_start is not None and tape.coverage_start <= cursor)
     if live_covers_tail and cursor >= now // 60_000 * 60_000:
+        signal.coverage.update(
+            monitor_cursor_event_ms=cursor, last_monitor_ms=now, monitoring="active", monitor_status="FRESH"
+        )
+        signal.coverage.pop("last_checked_trade_id", None)
+        signal.coverage.pop("pause_since_ms", None)
+        scanner.store.signal(signal, "Historical gap covered; live path resumes")
         scanner.reconcile_pending.discard(signal.id)
         scanner.store.put(key, saved | dict(status="RECONCILED", cursor_ms=cursor, detected_ms=now))
         return True
@@ -118,6 +125,17 @@ async def reconcile(scanner, signal, now):
         alerted = signal.state == "ALERTED"
         signal.state = result["state"]
         signal.coverage["terminal_reason"] = result["reason"]
+        if result.get("outcome") == "STOP":
+            signal.coverage["terminal_reason"] = "PLANNED_STOP_CROSSED"
+        signal.evidence["terminal_event"] = dict(
+            effective_ms=result["effective_ms"],
+            detected_ms=now,
+            event_price=None,
+            reference_price=signal.stop if result.get("outcome") == "STOP" else signal.tp1,
+            source=signal.source,
+            method="CLOSED_1M_OHLC",
+            ambiguous=result.get("ambiguous", False),
+        )
         signal.evidence["primary_outcome"] = "UNCLEAR" if result.get("ambiguous") else result["outcome"]
         scanner.store.signal(signal, result["reason"])
         if alerted:

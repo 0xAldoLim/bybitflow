@@ -27,6 +27,7 @@ class Streams:
         self.subscription_changes = {}
         self.frames = {}
         self.last_frame = {}
+        self.selection_lock = asyncio.Lock()
 
     def topics(self, symbols):
         return [
@@ -40,8 +41,12 @@ class Streams:
         ]
 
     async def select(self, symbols):
-        symbols = tuple(sorted(set(symbols)))
-        if symbols == self.selected:
+        async with self.selection_lock:
+            await self._select(symbols)
+
+    async def _select(self, symbols):
+        symbols = tuple(sorted(set(symbols) | getattr(self, "required_symbols", set())))
+        if symbols == self.selected and self.task and not self.task.done():
             return
         if self.ws and self.connected:
             added, removed = set(symbols) - set(self.selected), set(self.selected) - set(symbols)
@@ -204,13 +209,13 @@ class Streams:
                 self.ws = None
                 if heartbeat:
                     heartbeat.cancel()
-                    with contextlib.suppress(asyncio.CancelledError):
+                    with contextlib.suppress(asyncio.CancelledError, Exception):
                         await heartbeat
 
     async def stop(self):
         if self.task:
             self.task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
+            with contextlib.suppress(asyncio.CancelledError, Exception):
                 await self.task
             self.task = None
         if self.selected:

@@ -4,8 +4,6 @@ import json
 import logging
 from statistics import median
 
-import httpx
-
 from .exchanges import VenueAPI, market_probe
 from .features import candle_features, validate_bars
 from .fundamentals import facts_asof
@@ -43,6 +41,7 @@ class Scanner:
         self.candle_cache = {}
         self.tasks = []
         self.scan_lock = asyncio.Lock()
+        self.lifecycle_bootstrapped = asyncio.Event()
         self.status = {"state": "disabled", "at_ms": now_ms(), "eligible": 0, "errors": 0}
 
     @property
@@ -115,16 +114,7 @@ class Scanner:
 
     def pending_symbols(self):
         return list(
-            dict.fromkeys(
-                r[0]
-                for r in self.store.db.execute(
-                    "SELECT symbol FROM signals WHERE coalesce(json_extract(payload,'$.source'),'bybit')=? AND ("
-                    "(state NOT IN ('INVALIDATED','EXPIRED','RESOLVED') AND json_extract(payload,'$.expires_ms')>?) OR "
-                    "(state='ALERTED' AND json_extract(payload,'$.holding_deadline_ms')>? AND EXISTS "
-                    "(SELECT 1 FROM transitions t WHERE t.signal_id=signals.id AND t.state='ALERTED'))) ORDER BY created_ms",
-                    (self.exchange, now_ms(), now_ms()),
-                )
-            )
+            dict.fromkeys(s["symbol"] for s in self.store.active_signals() if s["source"] == self.exchange)
         )
 
     async def refresh_once(self):
@@ -261,6 +251,8 @@ class Scanner:
     def save_candidates(self, instrument, context_bars, setup_bars, execution_bars, evaluated):
         if not self.recorder.healthy:
             return []
+        if not self.flow_ready(instrument.symbol, evaluated):
+            return []
         plans = candidates(
             instrument,
             context_bars,
@@ -285,6 +277,8 @@ class Scanner:
 
     async def discover_horizons(self, instrument, now):
         """All profiles reuse one venue stream and a shared closed-candle cache."""
+        if not self.flow_ready(instrument.symbol, now):
+            return
         for name in self.settings.horizon_profiles:
             if name == "CORE_INTRADAY":
                 continue
@@ -312,6 +306,29 @@ class Scanner:
                         from .funnel import reject
 
                         reject(self.store, signal, reason, signal.created_ms)
+
+    def flow_ready(self, symbol, now):
+        tape = self.streams.tapes.get(symbol)
+        book = self.streams.books.get(symbol)
+        start = now // 60000 * 60000 - self.settings.execution_window_seconds * 1000
+        return bool(
+            tape
+            and book
+            and book.fresh(now, self.settings.book_stale_ms)
+            and 0 < tape.coverage_start <= start
+            and 0 <= now - tape.last_receipt <= self.settings.trade_stale_ms
+        )
+
+    def entry_ready(self, signal, book, now):
+        from .production import entry_position
+
+        if not book.fresh(now, self.settings.book_stale_ms):
+            return False
+        price = float(min(book.asks) if signal.direction == "LONG" else max(book.bids))
+        signal.coverage["entry_position"] = entry_position(
+            signal, price, book.features(now).get("spread_bps", 0)
+        )
+        return signal.coverage["entry_position"]["state"] in {"IDEAL_ENTRY", "ACCEPTABLE_ENTRY"}
 
     def record_membership(self, evaluated_ms, symbol, eligible, payload):
         available = now_ms()
@@ -391,22 +408,25 @@ class Scanner:
                     source=self.exchange,
                     source_ready=self.source_ready,
                     selected=list(self.streams.selected),
-                    streams_fresh=self.streams.connected,
+                    streams_fresh=self.streams.connected
+                    and all(self.flow_ready(s, now_ms()) for s in self.streams.selected),
                     source_feed_available=source_feed_available,
+                    last_market_event_ms=max((t.last_event for t in self.streams.tapes.values()), default=0),
+                    last_recorder_write_ms=getattr(self.recorder, "last_success_ms", None),
                 ),
             )
             if not self.source_ready or not self.streams.selected or source_feed_available:
                 failed_since = None
                 continue
             failed_since = failed_since or now_ms()
-            if now_ms() - failed_since >= 120_000 and self.settings.market_source in {"auto", "multi"}:
+            if now_ms() - failed_since >= 120_000:
                 async with self.scan_lock:
-                    self.source_ready = False
-                    self.context.clear()
-                    await self.streams.select([])
+                    # Recover current source first. Active plans never change venue.
+                    self.streams.required_symbols = set(self.pending_symbols())
+                    await self.streams.select(list(self.streams.selected) + self.pending_symbols())
                     self.status.update(
-                        state="error",
-                        reason="deep feed stale; source requalification required",
+                        state="reconnecting",
+                        reason="original-source stream recovery in progress",
                         at_ms=now_ms(),
                     )
                     self.store.put("scanner", self.status)
@@ -745,42 +765,14 @@ class Scanner:
             monitoring_reasons=reasons,
             monitoring_event=None,
         )
-        if s.horizon_profile != "LEGACY" and fresh_book and self.recorder.healthy:
-            from .horizons import session_context
-
-            price = float(max(book.bids)) if s.direction == "LONG" else float(min(book.asks))
-            s.evidence["latest_observed_price"] = price
-            sessions = s.evidence.setdefault("sessions_traversed", [])
-            current_session = session_context(now)["primary"]
-            if not sessions or sessions[-1] != current_session:
-                sessions.append(current_session)
-            entry_quote = float(min(book.asks)) if s.direction == "LONG" else float(max(book.bids))
-            if s.zone[0] <= entry_quote <= s.zone[1] and now <= (s.trigger_expires_ms or s.expires_ms):
-                s.evidence.setdefault("observed_entry_ms", now)
-            target_seen = price >= s.tp1 if s.direction == "LONG" else price <= s.tp1
-            if (
-                target_seen
-                and s.evidence.get("observed_entry_ms")
-                and now < (s.holding_deadline_ms or s.expires_ms)
-            ):
-                s.state = "RESOLVED"
-                s.evidence["primary_outcome"] = (
-                    "TARGET" if s.evidence.get("primary_coverage_complete", True) else "UNCLEAR"
-                )
-                s.evidence["terminal_session"] = current_session
-                s.invalidation = (
-                    "Planned target observed after entry-zone observation; account fills unverified"
-                )
-                self.store.signal(s, s.invalidation)
-                await self.notifier.send_research(s, update=True)
-                return
         if not reasons and s.horizon_profile != "LEGACY":
             from .evidence import flow_response
             from .thesis_health import evaluate as health_evaluate
 
             setup = self.candle_cache.get((s.symbol, s.setup_timeframe), (None, []))[1]
             feature = candle_features(setup, now) if len(setup) >= 60 else {}
-            recent = tape.window(now - 60_000, now)
+            health_window = 60_000 if s.horizon_profile == "SHORT_INTRADAY" else 900_000
+            recent = tape.window(now - health_window, now)
             observed = footprint(
                 recent, context["instrument"].tick, feature.get("atr", float(context["instrument"].tick) * 10)
             )
@@ -794,12 +786,13 @@ class Scanner:
             observation = dict(
                 coverage_complete=bool(
                     tape.coverage_start is not None
-                    and tape.coverage_start <= now - 60_000
+                    and tape.coverage_start <= now - health_window
                     and observed.get("available")
                 ),
                 flow=observed,
                 obi=bf.get("obi_persistence", 0),
                 structural_failure=structure,
+                structure_timeframe=s.setup_timeframe,
                 window_end_ms=now,
             )
             key = "thesis_health:" + s.id
@@ -816,19 +809,6 @@ class Scanner:
             s.state = "EXPIRED"
             s.coverage["monitoring_event"] = "ended"
             s.invalidation = "Tracking period ended; no account outcome is inferred"
-        elif (
-            fresh_book
-            and self.recorder.healthy
-            and (
-                float(max(book.bids)) <= s.stop if s.direction == "LONG" else float(min(book.asks)) >= s.stop
-            )
-        ):
-            s.state = "INVALIDATED"
-            if s.horizon_profile != "LEGACY":
-                s.evidence["primary_outcome"] = (
-                    "STOP" if s.evidence.get("observed_entry_ms") else "INVALIDATED"
-                )
-            s.invalidation = "Fresh observed price crossed the planned stop; no account fill is verified"
         elif reasons:
             since = previous.get("pause_since_ms") or now
             s.coverage["pause_since_ms"] = since
@@ -847,7 +827,7 @@ class Scanner:
                     context_bars = cached[1]
             regime = candle_features(context_bars, now)["regime"]
             supportive = regime in {"range", "trending up" if s.direction == "LONG" else "trending down"}
-            if not supportive or any(f["major_event"] for f in facts):
+            if s.horizon_profile == "LEGACY" and (not supportive or any(f["major_event"] for f in facts)):
                 s.state = "INVALIDATED"
                 s.invalidation = (
                     "Higher-timeframe market regime no longer supports the setup"
@@ -865,6 +845,28 @@ class Scanner:
         self.store.signal(s, s.invalidation if s.state in TERMINAL else "Monitoring active")
         if s.state in TERMINAL:
             await self.notifier.send_research(s, update=True)
+
+    async def health_loop(self):
+        await self.lifecycle_bootstrapped.wait()
+        while True:
+            for payload in self.store.active_signals():
+                s = Signal.model_validate(payload)
+                if s.source == "tradingview":
+                    continue
+                try:
+                    if s.id not in self.reconcile_pending:
+                        await self.monitor_alerted(s, now_ms())
+                except Exception as exc:
+                    self.store.put(
+                        "thesis_health:" + s.id,
+                        dict(
+                            state="DEGRADED",
+                            checked_ms=now_ms(),
+                            coverage_status="UNAVAILABLE",
+                            error_type=type(exc).__name__,
+                        ),
+                    )
+            await asyncio.sleep(15)
 
     async def evaluate(self):
         now = now_ms()
@@ -884,15 +886,9 @@ class Scanner:
                 continue  # TradingView has its own source freshness and lifecycle worker.
             if s.state in TERMINAL:
                 continue
-            if s.id in getattr(self, "reconcile_pending", set()) or (
-                s.state == "ALERTED" and s.coverage.get("pause_since_ms")
-            ):
-                from .reconciliation import reconcile
-
-                if not await reconcile(self, s, now):
-                    continue
+            if s.id in getattr(self, "reconcile_pending", set()):
+                continue
             if s.state == "ALERTED":
-                await self.monitor_alerted(s, now)
                 continue
             c = self.context.get(s.symbol)
             book, tape = self.streams.books.get(s.symbol), self.streams.tapes.get(s.symbol)
@@ -914,11 +910,7 @@ class Scanner:
             ):
                 s.state = "EXPIRED"
             elif s.source != self.exchange:
-                s.state = "INVALIDATED"
-                s.invalidation = "Primary exchange changed; source continuity cannot be transferred"
-            elif mid and (mid <= s.stop if s.direction == "LONG" else mid >= s.stop):
-                s.state = "INVALIDATED"
-                s.invalidation = "Observed price crossed the planned stop level; no account fill is verified"
+                continue
             if s.state in TERMINAL:
                 self.store.signal(s, s.invalidation if s.state == "INVALIDATED" else "entry window expired")
                 continue
@@ -936,6 +928,19 @@ class Scanner:
                 self.store.signal(s, "High-impact USD entry pause; lifecycle continues")
                 continue
             if not c or not tape or not book:
+                from .coverage import record as coverage_record
+
+                reason = (
+                    "COVERAGE_SYMBOL_NOT_SELECTED"
+                    if s.symbol not in self.streams.selected
+                    else "COVERAGE_TAPE_NOT_CONNECTED"
+                    if not tape
+                    else "COVERAGE_BOOK_NOT_CONNECTED"
+                    if not book
+                    else "COVERAGE_CONTEXT_STALE"
+                )
+                coverage_record(self, s, now, [reason], now // 60000 * 60000 - 60000, now // 60000 * 60000)
+                self.store.signal(s, reason)
                 continue
             if s.horizon_profile not in {"LEGACY", "CORE_INTRADAY"}:
                 cached = self.candle_cache.get((s.symbol, s.execution_timeframe))
@@ -965,7 +970,7 @@ class Scanner:
             coverage_reasons = [reason for reason, passed in checks.items() if not passed]
             healthy = not coverage_reasons
             macro_deferred_ms = s.coverage.get("macro_deferred_ms")
-            s.coverage = dict(
+            s.coverage = s.coverage | dict(
                 book_fresh=book.fresh(now, self.settings.book_stale_ms),
                 trade_window_complete=healthy,
                 recording=self.recorder.healthy,
@@ -1007,7 +1012,7 @@ class Scanner:
                     if end <= s.coverage["macro_deferred_ms"] or not resumed_flow_ok:
                         continue
                 # A deferred last-mile send must not silently strand an immutable decision.
-                if await self.notifier.send_research(s) == "sent":
+                if self.entry_ready(s, book, now_ms()) and await self.notifier.send_research(s) == "sent":
                     s.state = "ALERTED"
                     self.store.signal(s, "research card delivered; no trade executed")
                 continue
@@ -1018,12 +1023,33 @@ class Scanner:
             from .funnel import emit, reject
 
             if not healthy:
+                from .coverage import record as coverage_record
+
+                codes = []
+                for reason in coverage_reasons:
+                    codes.append(
+                        "COVERAGE_RECORDER_UNHEALTHY"
+                        if reason == "recorder unavailable"
+                        else "COVERAGE_TAPE_NOT_CONNECTED"
+                        if reason == "symbol feed unavailable or stale"
+                        else "COVERAGE_BOOK_STALE"
+                        if reason == "order book stale"
+                        else "COVERAGE_TRADE_STALE"
+                        if reason == "latest trade stale"
+                        else "COVERAGE_TAPE_WARMING"
+                        if "not yet retained" in reason and now < tape.coverage_start + window_ms
+                        else "COVERAGE_WINDOW_PREDATES_TAPE"
+                        if "not yet retained" in reason
+                        else "COVERAGE_CONTEXT_STALE"
+                    )
+                coverage_record(self, s, now, codes, start, end)
+                self.store.signal(s, s.coverage["readiness"])
                 emit(
                     self.store,
                     "coverage_incomplete",
                     now,
                     signal=s,
-                    reason="REQUIRED_EXECUTED_FLOW_COVERAGE_INCOMPLETE",
+                    reason=codes[0],
                 )
                 continue
             emit(self.store, "confirmation_attempts", now, signal=s, key=f"confirmation:{s.id}:{end}")
@@ -1260,11 +1286,12 @@ class Scanner:
                 # Last-mile freshness immediately before webhook I/O.
                 if not book.fresh(now_ms(), self.settings.book_stale_ms) or not self.recorder.healthy:
                     continue
-                if await self.notifier.send_research(s) == "sent":
+                if self.entry_ready(s, book, now_ms()) and await self.notifier.send_research(s) == "sent":
                     s.state = "ALERTED"
                     self.store.signal(s, "research card delivered; no trade executed")
 
     async def scan_loop(self):
+        await self.lifecycle_bootstrapped.wait()
         while True:
             delay = self.settings.scan_seconds
             try:
@@ -1284,21 +1311,9 @@ class Scanner:
                     if isinstance(self.streams, NativeStreams)
                     else getattr(self.streams, "connected", False)
                 )
-                preserve_feed = (
-                    isinstance(exc, (httpx.TransportError, ConnectionError, TimeoutError))
-                    and feed_available
-                    and self.source_ready
-                    and self.recorder.healthy
-                )
-                if not preserve_feed:
-                    self.context.clear()
-                    try:
-                        await self.streams.select([])
-                    except Exception as cleanup_error:
-                        self.status["cleanup_error"] = type(cleanup_error).__name__
-                    finally:
-                        if self.settings.market_source in {"auto", "multi"}:
-                            self.source_ready = False
+                preserve_feed = feed_available and self.source_ready and self.recorder.healthy
+                self.streams.required_symbols = set(self.pending_symbols())
+                await self.streams.select(list(self.streams.selected) + self.pending_symbols())
                 self.status["live_feed_preserved"] = preserve_feed
                 self.store.put("scanner", self.status)
                 log.warning("scan_failed", extra={"error_type": type(exc).__name__})
@@ -1307,6 +1322,7 @@ class Scanner:
             await asyncio.sleep(delay)
 
     async def evaluation_loop(self):
+        await self.lifecycle_bootstrapped.wait()
         while True:
             try:
                 await self.evaluate()
@@ -1438,7 +1454,13 @@ class Scanner:
             self.tasks.append(asyncio.create_task(supervise(self.store, name, factory)))
 
         self.tasks = []
-        start_task("lifecycle", self.evaluation_loop)
+        from .lifecycle import reconcile_loop, run
+
+        start_task("lifecycle", lambda: run(self))
+        start_task("reconciliation", lambda: reconcile_loop(self))
+        start_task("confirmation", self.evaluation_loop)
+        start_task("thesis_health", self.health_loop)
+        start_task("terminal_delivery", self.notifier.terminal_loop)
         start_task("post_terminal", self.research_loop)
         start_task("storage", self.storage_loop)
         if self.settings.scan_enabled:
@@ -1451,10 +1473,9 @@ class Scanner:
             start_task("volume_profiles", self.profile_loop)
             start_task("pending", self.refresh_pending)
             start_task("source", self.source_watchdog)
-            if self.settings.market_source == "multi":
-                from .cross_venue import CrossVenue
+            from .cross_venue import CrossVenue
 
-                start_task("cross_venue", CrossVenue(self).run)
+            start_task("cross_venue", CrossVenue(self).run)
 
     async def stop(self):
         for task in self.tasks:

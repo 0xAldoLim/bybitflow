@@ -4,6 +4,139 @@ INTRADAY = {"SHORT_INTRADAY", "CORE_INTRADAY"}
 REVERSALS = {"liquidity_sweep", "range_rejection"}
 
 
+def wick_regime(bars, direction, atr, asof):
+    import numpy as np
+
+    prior = [b for b in bars if b.end <= asof][-96:]
+    rows = []
+    previous = prior[0].open if prior else 0
+    for b in prior:
+        width = b.high - b.low
+        upper, lower = b.high - max(b.open, b.close), min(b.open, b.close) - b.low
+        rows.append(
+            dict(
+                upper_wick=upper,
+                lower_wick=lower,
+                body=abs(b.close - b.open),
+                range=width,
+                true_range=max(width, abs(b.high - previous), abs(b.low - previous)),
+                upper_wick_atr=upper / max(atr, 1e-12),
+                lower_wick_atr=lower / max(atr, 1e-12),
+                body_to_range=abs(b.close - b.open) / max(width, 1e-12),
+                close_location=(b.close - b.low) / max(width, 1e-12),
+                range_atr=width / max(atr, 1e-12),
+            )
+        )
+        previous = b.close
+    adverse = [r["lower_wick" if direction == "LONG" else "upper_wick"] for r in rows]
+    ranges = [r["range"] for r in rows]
+
+    def quantile(values, q):
+        return float(np.quantile(values, q)) if values else 0.0
+
+    frequency = sum(v > 0.5 * atr for v in adverse) / max(1, len(adverse))
+    q80 = quantile(adverse, 0.8)
+    state = (
+        "LIQUIDITY_STRESS"
+        if frequency >= 0.3 or quantile(ranges, 0.9) > 2 * atr
+        else "WICKY"
+        if q80 >= 0.30 * atr
+        else "NORMAL"
+    )
+    return dict(
+        policy="wick-regime-v1",
+        state=state,
+        samples=len(rows),
+        available_ms=asof,
+        adverse_wick_q50=quantile(adverse, 0.5),
+        adverse_wick_q75=quantile(adverse, 0.75),
+        adverse_wick_q80=q80,
+        adverse_wick_q90=quantile(adverse, 0.9),
+        range_q80=quantile(ranges, 0.8),
+        range_q90=quantile(ranges, 0.9),
+        abnormal_wick_frequency=frequency,
+        latest=rows[-1] if rows else {},
+        normalization="symbol ATR; bounded closed bars",
+    )
+
+
+def intraday_stop(entry, direction, anchor, setup, execution, atr, horizon, asof):
+    short = horizon == "SHORT_INTRADAY"
+    wick = wick_regime(setup[:-1] if short else execution[:-1], direction, atr, asof)
+    noise = wick_regime(execution[:-1], direction, atr, asof)
+    buffer = max(
+        0.15 * atr, (1.10 if short else 1.0) * wick["adverse_wick_q80"], 0.75 * noise["adverse_wick_q80"]
+    )
+    sign = 1 if direction == "LONG" else -1
+    stop = anchor - sign * buffer
+    reasons = []
+    if short and buffer > 0.75 * atr:
+        reasons.append("SHORT_INTRADAY_NOISE_EXCEEDS_SAFE_STOP")
+    if sign * (entry - stop) > (1.5 if short else 2.25) * atr:
+        reasons.append(horizon + "_STRUCTURAL_STOP_TOO_WIDE")
+    return dict(
+        policy=horizon.lower() + "-stop-v2",
+        stop=stop,
+        anchor=anchor,
+        buffer=buffer,
+        atr=atr,
+        execution_noise_q80=noise["adverse_wick_q80"],
+        wick_regime=wick,
+        reasons=reasons,
+    )
+
+
+def reclaim_hold(signal, bars, asof):
+    sign = 1 if signal.direction == "LONG" else -1
+    trigger = signal.evidence.get("structural_trigger", {})
+    level, extreme = trigger.get("level"), trigger.get("extreme")
+    closed = [b for b in bars if b.interval == 300000 and trigger.get("available_ms", 0) < b.end <= asof]
+    if level is None or extreme is None or len(closed) < 2:
+        return False
+    reclaim = None
+    for b in closed:
+        if b.low < extreme if sign > 0 else b.high > extreme:
+            return False
+        if (
+            reclaim is not None
+            and sign * (b.close - level) > 0
+            and (b.low >= level if sign > 0 else b.high <= level)
+        ):
+            return True
+        if (
+            reclaim is not None
+            and sign * (b.close - level) > 0
+            and (b.low <= level if sign > 0 else b.high >= level)
+        ):
+            return True
+        if sign * (b.close - level) > 0:
+            reclaim = b
+    return False
+
+
+def entry_position(signal, price, spread_bps=0):
+    sign = 1 if signal.direction == "LONG" else -1
+    plan = signal.evidence.get("stop_plan") or {}
+    atr = plan.get("atr") or abs(signal.entry - signal.stop)
+    cost = abs(price) * (0.0012 + max(0, spread_bps) / 10000)
+    risk = sign * (price - signal.stop) + cost
+    reward = sign * (signal.tp1 - price) - cost
+    remaining_rr = reward / risk if risk > 0 else 0
+    distance = sign * (price - signal.entry)
+    state = (
+        "MISSED_ENTRY"
+        if reward <= 0
+        else "CHASED"
+        if distance > 0.5 * atr or remaining_rr < 1.5
+        else "IDEAL_ENTRY"
+        if distance <= 0.15 * atr
+        else "ACCEPTABLE_ENTRY"
+    )
+    return dict(
+        state=state, remaining_net_rr=remaining_rr, distance_atr=distance / max(atr, 1e-12), cost=cost
+    )
+
+
 def participation(metrics, sign, threshold):
     """Count categories, not correlated volume/count/intensity aliases."""
     mature = metrics.get("baseline_samples", 0) >= 20
@@ -193,6 +326,14 @@ def evaluate_intraday_confirmation(signal, flow, bars, asof, alignment=None):
     )
     factor_ok = not (alignment or {}).get("blocked", False)
     passed = bool(response and support["state"] == "FLOW_SUPPORTIVE" and part_ok and factor_ok)
+    stressed = (
+        signal.horizon_profile == "SHORT_INTRADAY"
+        and signal.family in REVERSALS
+        and signal.evidence.get("wick_regime", {}).get("state") in {"WICKY", "LIQUIDITY_STRESS"}
+    )
+    hold_ok = reclaim_hold(signal, bars, asof) if stressed else True
+    if stressed:
+        passed = passed and hold_ok and profile_ok
     reasons = [] if passed else ["UNCONFIRMED_LIQUIDITY_SWEEP"]
     if not factor_ok:
         reasons.append("CONTRARIAN_EVIDENCE_INSUFFICIENT")
@@ -205,6 +346,7 @@ def evaluate_intraday_confirmation(signal, flow, bars, asof, alignment=None):
         participation_support=bool(part_ok),
         factor_support=factor_ok,
         profile_support=profile_ok,
+        reclaim_hold_support=hold_ok,
         participation_mode=part["mode"],
         metrics=dict(flow=support, participation=part, baseline=metrics),
         available_ms=asof,

@@ -1,29 +1,38 @@
 """Versioned causal monitoring; frozen plans and historical scores never change."""
 
-POLICY = "thesis-health-v1"
+POLICY = "thesis-health-v2"
 
 
 def summary(store):
-    import json
-
     result = dict(
         policy=POLICY,
-        active_healthy=0,
-        active_degraded=0,
-        withdrawn_toxic_flow=0,
-        withdrawn_structure_failure=0,
+        eligible=0,
+        current=0,
+        healthy=0,
+        degraded=0,
+        toxic=0,
+        paused_for_coverage=0,
+        unavailable=0,
     )
-    for key, text in store.db.execute("SELECT key,payload FROM kv WHERE key LIKE 'thesis_health:%'"):
-        health = json.loads(text)
-        signal = store.db.execute(
-            "SELECT state FROM signals WHERE id=?", (key.removeprefix("thesis_health:"),)
-        ).fetchone()
-        if not signal:
+    for signal in store.active_signals():
+        if signal.get("source") == "tradingview":
             continue
-        if signal[0] not in {"INVALIDATED", "EXPIRED", "RESOLVED"}:
-            result["active_healthy" if health["state"] == "HEALTHY" else "active_degraded"] += 1
-        elif health.get("withdraw"):
-            result["withdrawn_toxic_flow"] += 1
+        result["eligible"] += 1
+        health = store.get("thesis_health:" + signal["id"], {})
+        if signal.get("coverage", {}).get("monitoring") == "paused":
+            result["paused_for_coverage"] += 1
+        elif not health or health.get("coverage_status") == "UNAVAILABLE":
+            result["unavailable"] += 1
+        elif health.get("state") != "HEALTHY":
+            result["degraded"] += 1
+            result["toxic"] += int(health.get("state") == "TOXIC")
+        else:
+            result["current"] += 1
+            result["healthy"] += 1
+    result["active_healthy"] = result["healthy"]
+    result["active_degraded"] = result["degraded"]
+    for key in ("eligible", "current", "degraded", "paused_for_coverage", "unavailable"):
+        result["health_" + key] = result[key]
     return result
 
 
@@ -34,7 +43,7 @@ def evaluate(signal, observation, previous, now):
         if signal.horizon_profile in {"SWING", "EXTENDED_SWING"}
         else 120_000
         if signal.horizon_profile == "SHORT_INTRADAY"
-        else 180_000
+        else 600_000
     )
     result = dict(
         policy=POLICY,
@@ -42,8 +51,21 @@ def evaluate(signal, observation, previous, now):
         state="HEALTHY",
         withdraw=False,
         reasons=[],
-        production_enabled=":autonomy-v1" in signal.version,
+        production_enabled=True,
         observation=observation,
+        **{
+            name + "_health": "UNAVAILABLE"
+            for name in (
+                "flow",
+                "liquidity",
+                "structure",
+                "auction",
+                "factor",
+                "derivatives",
+                "cross_venue",
+                "volatility_liquidity",
+            )
+        },
     )
     if not observation.get("coverage_complete"):
         return result | dict(state="DEGRADED", reasons=["Insufficient live evidence"], adverse_since_ms=None)
@@ -61,6 +83,25 @@ def evaluate(signal, observation, previous, now):
         result["reasons"].append("Supporting depth imbalance reversed")
     if structural:
         result["reasons"].append("Setup-timeframe structural reclaim failed")
+    higher = signal.horizon_profile in {"SWING", "EXTENDED_SWING"}
+    if higher and observation.get("structure_timeframe") not in {"240", "D"}:
+        structural = False
+    if higher and structural:
+        return result | dict(
+            state="HARD_FAILURE", withdraw=True, reason="STRUCTURAL_FAILURE", structure_health="HARD_FAILURE"
+        )
+    result.update(
+        flow_health="DEGRADED" if adverse_flow else "HEALTHY",
+        liquidity_health="DEGRADED" if adverse_book else "HEALTHY",
+        structure_health="DEGRADED" if structural else "HEALTHY",
+        auction_health=observation.get("auction_health", "UNAVAILABLE"),
+        factor_health=observation.get("factor_health", "UNAVAILABLE"),
+        derivatives_health=observation.get("derivatives_health", "UNAVAILABLE"),
+        cross_venue_health=observation.get("cross_venue_health", "UNAVAILABLE"),
+        volatility_liquidity_health=observation.get("volatility_liquidity_health", "UNAVAILABLE"),
+    )
+    if higher and not structural:
+        return result | dict(state="HEALTHY", adverse_since_ms=None)
     if not adverse_flow:
         return result | dict(
             state="DEGRADED" if structural or adverse_book else "HEALTHY", adverse_since_ms=None
@@ -74,7 +115,7 @@ def evaluate(signal, observation, previous, now):
     new_window = observation.get("window_end_ms", 0) > previous.get("observation", {}).get("window_end_ms", 0)
     if structural and adverse_book and now - since >= hold and new_window:
         result.update(
-            state="TOXIC", withdraw=result["production_enabled"], reason="TOXIC_FLOW_WITH_STRUCTURAL_FAILURE"
+            state="TOXIC", withdraw=result["production_enabled"], reason="THESIS_WITHDRAWN_BEFORE_STOP"
         )
     return result
 

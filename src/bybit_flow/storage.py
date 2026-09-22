@@ -62,6 +62,8 @@ class Store:
         CREATE TABLE IF NOT EXISTS segments(id TEXT PRIMARY KEY, at_ms INTEGER, payload TEXT);
         CREATE TABLE IF NOT EXISTS outbox(key TEXT PRIMARY KEY, signal_id TEXT, status TEXT,
             payload TEXT, message_id TEXT, updated_ms INTEGER);
+        CREATE TABLE IF NOT EXISTS terminal_events(signal_id TEXT PRIMARY KEY, payload TEXT NOT NULL,
+            notification_status TEXT NOT NULL, attempts INTEGER DEFAULT 0, next_ms INTEGER DEFAULT 0);
         CREATE TABLE IF NOT EXISTS tv_inbox(event_id TEXT PRIMARY KEY, digest TEXT NOT NULL,
             received_ms INTEGER NOT NULL, payload TEXT NOT NULL, status TEXT NOT NULL,
             result TEXT);
@@ -116,8 +118,43 @@ class Store:
         features.capture(signal, max(now_ms(), signal.created_ms), "generation")
         if signal.evidence.get("score_components"):
             features.capture(signal, max(now_ms(), signal.created_ms), "decision")
-        old = self.db.execute("SELECT state FROM signals WHERE id=?", (signal.id,)).fetchone()
+        old = self.db.execute("SELECT state,payload FROM signals WHERE id=?", (signal.id,)).fetchone()
+        if old:
+            if old[0] in {"INVALIDATED", "EXPIRED", "RESOLVED"}:
+                return  # A stale asynchronous evaluator must never resurrect a terminal setup.
+            saved = json.loads(old[1])
+            for key in ("observed_entry_ms", "tp1_touch_ms", "tp2_touch_ms"):
+                if key in saved.get("evidence", {}):
+                    signal.evidence.setdefault(key, saved["evidence"][key])
+            for key, value in saved.get("coverage", {}).items():
+                if key.startswith("monitor_") or key in {"last_checked_trade_id", "last_monitor_ms"}:
+                    if saved["coverage"].get("last_monitor_ms", 0) > signal.coverage.get(
+                        "last_monitor_ms", 0
+                    ):
+                        signal.coverage[key] = value
         with self.db:
+            if signal.state in {"INVALIDATED", "EXPIRED", "RESOLVED"}:
+                event = dict(
+                    terminal_event_id="terminal:" + signal.id,
+                    signal_id=signal.id,
+                    terminal_state=signal.state,
+                    terminal_reason=signal.coverage.get("terminal_reason", reason),
+                    effective_ms=now_ms(),
+                    detected_ms=now_ms(),
+                    event_price=None,
+                    reference_price=signal.stop,
+                    source=signal.source,
+                    method="LIFECYCLE_RULE",
+                )
+                event.update(signal.evidence.get("terminal_event", {}))
+                delivered = self.db.execute(
+                    "SELECT 1 FROM outbox WHERE signal_id=? AND key LIKE '%:initial' AND status='sent'",
+                    (signal.id,),
+                ).fetchone()
+                self.db.execute(
+                    "INSERT OR IGNORE INTO terminal_events(signal_id,payload,notification_status) VALUES(?,?,?)",
+                    (signal.id, json.dumps(event), "pending" if delivered else "unseen"),
+                )
             preserve_origin(self, signal)
             if not old:
                 counts = self.get("horizon_counts", {})
@@ -154,13 +191,21 @@ class Store:
             register(self, signal, now_ms())
         start(self, signal, now_ms())
 
+    def monitor(self, signal):
+        """Persist only lightweight lifecycle progress, without scoring/ML jobs."""
+        with self.db:
+            self.db.execute(
+                "UPDATE signals SET payload=? WHERE id=? AND state=?",
+                (signal.model_dump_json(), signal.id, signal.state),
+            )
+
     def signals(self, limit=200):
         return [
             json.loads(r[0])
             for r in self.db.execute("SELECT payload FROM signals ORDER BY created_ms DESC LIMIT ?", (limit,))
         ]
 
-    def active_signals(self, limit=2000):
+    def active_signals(self, limit=-1):
         return [
             json.loads(r[0])
             for r in self.db.execute(

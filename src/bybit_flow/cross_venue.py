@@ -43,6 +43,18 @@ def compare(observations, at_ms, max_age=15_000):
     aligned_flow = len(deltas) == len(rows) and len({r.get("window_end") for r in rows}) == 1
     return dict(
         available=True,
+        wick_context="CROSS_VENUE_DISAGREEMENT"
+        if aligned_flow and not (all(d > 0 for d in deltas) or all(d < 0 for d in deltas))
+        else "LOCAL_VENUE_SPIKE"
+        if (max(mids) - min(mids)) / mean(mids) * 10000 > max(10, 3 * max(spreads))
+        else "MARKET_WIDE_SWEEP"
+        if aligned_flow
+        and all(
+            r.get("flow", {}).get("potential_trapped_buyers")
+            or r.get("flow", {}).get("potential_trapped_sellers")
+            for r in rows
+        )
+        else "CROSS_VENUE_UNAVAILABLE",
         event_ms=max(r["event_ms"] for r in rows),
         receipt_ms=at_ms,
         exchanges=[r["exchange"] for r in rows],
@@ -98,13 +110,14 @@ class CrossVenue:
                 try:
                     rows = await api.instruments()
                     available = {r["symbol"] for r in rows if api.parse(r, now_ms())}
-                    selected = [s for s in settings.core_watchlist[:2] if s in available]
+                    scoped_symbols = self.scanner.pending_symbols() + list(self.scanner.streams.selected)
+                    selected = [s for s in dict.fromkeys(scoped_symbols) if s in available][:8]
                     await streams.select(selected)
                     store.put(
                         "cross_health:" + name,
                         {"status": "COLLECTING", "at_ms": now_ms(), "symbols": selected},
                     )
-                    await asyncio.sleep(3600)
+                    await asyncio.sleep(60)
                 except Exception as exc:
                     await streams.select([])
                     store.put(
@@ -119,7 +132,7 @@ class CrossVenue:
 
     def publish(self):
         scanner, now = self.scanner, now_ms()
-        for symbol in scanner.settings.core_watchlist[:2]:
+        for symbol in dict.fromkeys(scanner.pending_symbols() + list(scanner.streams.selected)):
             context = scanner.context.get(symbol)
             if not context:
                 continue

@@ -58,14 +58,49 @@ async def doctor(settings, store, network=True):
     checks["cleanup"] = store.get("storage_health", {})
     runtime = store.get("runtime_health", {})
     checks["runtime"] = runtime | {
-        "status": "FRESH" if 0 <= now_ms() - runtime.get("at_ms", 0) <= 90_000 else "NOT_OBSERVED_OR_STALE"
+        "status": (
+            "FRESH"
+            if runtime.get("streams_fresh")
+            and runtime.get("source_feed_available")
+            and runtime.get("source_ready")
+            else "DEGRADED"
+        )
+        if 0 <= now_ms() - runtime.get("at_ms", 0) <= 90_000
+        else "STALE"
     }
     checks["stream"] = store.get("stream_health", {"status": "NOT_OBSERVED"})
     from .thesis_health import summary as health_summary
 
     checks["thesis_health"] = health_summary(store)
+    from .coverage import summary as coverage_summary
+
+    checks["active_lifecycle"] = store.get("active_lifecycle", {"status": "BOOTSTRAPPING"})
+    checks["candidate_coverage"] = coverage_summary(store, now_ms())
+    checks["market_stream"] = dict(
+        connected=runtime.get("streams_fresh", False),
+        last_market_event_ms=runtime.get("last_market_event_ms"),
+        reconnecting=not runtime.get("source_feed_available", False),
+    )
+    delivery = dict(
+        store.db.execute(
+            "SELECT notification_status,count(*) FROM terminal_events GROUP BY notification_status"
+        )
+    )
+    checks["terminal_delivery"] = dict(
+        terminal_pending_delivery=delivery.get("pending", 0),
+        terminal_failed_delivery=delivery.get("failed", 0),
+        oldest_pending_terminal_ms=store.db.execute(
+            "SELECT min(json_extract(payload,'$.detected_ms')) FROM terminal_events WHERE notification_status='pending'"
+        ).fetchone()[0],
+        last_terminal_delivery_ms=store.get("last_terminal_delivery_ms"),
+        note="Lifecycle state correct; Discord terminal projection pending"
+        if delivery.get("pending")
+        else "No pending terminal projection",
+    )
     checks["macro"] = store.get("macro_health", {"status": "NOT_OBSERVED"})
     checks["recorder_runtime"] = store.get("recorder_health", {"status": "NOT_OBSERVED"})
+    checks["recorder_runtime"]["last_recorder_write_ms"] = checks["recorder_runtime"].get("last_success_ms")
+    checks["recorder_runtime"]["current_enqueue_rate"] = checks["recorder_runtime"].get("enqueue_rate_1m")
     checks["recorder"] = {
         "segments": store.db.execute("SELECT count(*) FROM segments").fetchone()[0],
         "note": "segment count is not proof the running recorder is healthy",

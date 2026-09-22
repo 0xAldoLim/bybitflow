@@ -17,10 +17,10 @@ def observation(sign=1, structural=True):
 def test_persistence_structure_and_symmetry(signal, direction, sign):
     signal.direction, signal.horizon_profile, signal.version = direction, "CORE_INTRADAY", "rules:autonomy-v1"
     state = {}
-    for now in (1000, 61000, 121000):
+    for now in range(1000, 601000, 60000):
         state = evaluate(signal, observation(sign) | dict(window_end_ms=now), state, now)
         assert not state["withdraw"]
-    assert evaluate(signal, observation(sign) | dict(window_end_ms=181000), state, 181000)["withdraw"]
+    assert evaluate(signal, observation(sign) | dict(window_end_ms=601000), state, 601000)["withdraw"]
     assert not evaluate(signal, observation(sign, False) | dict(window_end_ms=181000), state, 181000)[
         "withdraw"
     ]
