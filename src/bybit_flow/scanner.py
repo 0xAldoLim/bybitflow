@@ -892,7 +892,10 @@ class Scanner:
                 if s.source == "tradingview":
                     continue
                 try:
-                    if s.id not in self.reconcile_pending:
+                    if (
+                        s.id not in self.reconcile_pending
+                        and s.coverage.get("monitor_status") != "RECONCILED_PENDING_PATH"
+                    ):
                         await self.monitor_alerted(s, now_ms())
                 except Exception as exc:
                     self.store.put(

@@ -13,6 +13,15 @@ It does not post duplicate withdrawal cards. Missing original message IDs and
 permanent HTTP failures are reported as failed delivery. Unpublished setups do
 not generate withdrawal messages.
 
+Every lifecycle notification requires the exact setup's durable initial outbox
+record to be `sent`, with an original message ID in that delivery channel.
+Suppressed, uncertain, rejected and unseen setups remain internally monitored
+but return `blocked:no-visible-initial`. Visibility metadata is stored under
+`discord_visibility:<channel>:<signal_id>` with `user_visible_initial`,
+`initial_delivery_status`, `initial_message_id` and `initial_channel`. Pause and
+resume notifications are deduplicated by setup and continuous outage start.
+Reconciliation checks the remaining live path before permitting a resume notice.
+
 New intraday plans use structural anchors with volatility and wick-aware stop
 buffers. Unsafe distances are rejected rather than compressed. WICKY short
 intraday reversals require closed five-minute reclaim and hold/retest, supportive

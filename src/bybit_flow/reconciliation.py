@@ -92,10 +92,14 @@ async def reconcile(scanner, signal, now):
     live_covers_tail = bool(fresh and tape.coverage_start is not None and tape.coverage_start <= cursor)
     if live_covers_tail:
         signal.coverage.update(
-            monitor_cursor_event_ms=cursor, last_monitor_ms=now, monitoring="active", monitor_status="FRESH"
+            monitor_cursor_event_ms=cursor,
+            last_monitor_ms=now,
+            monitoring="active",
+            monitor_status="RECONCILED_PENDING_PATH",
         )
         signal.coverage.pop("last_checked_trade_id", None)
-        signal.coverage.pop("pause_since_ms", None)
+        # Keep the outage key until the live path has been checked. Health may
+        # emit one resume only if that path did not discover a terminal event.
         scanner.store.signal(signal, "Historical gap covered; live path resumes")
         scanner.reconcile_pending.discard(signal.id)
         scanner.store.put(key, saved | dict(status="RECONCILED", cursor_ms=cursor, detected_ms=now))

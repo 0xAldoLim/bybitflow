@@ -218,7 +218,32 @@ class Notifier:
 
         self.settings, self.store, self.transport = settings, store, transport
 
+    def was_initially_delivered(self, signal_id, channel):
+        row = self.store.db.execute(
+            "SELECT status,message_id FROM outbox WHERE key=? AND signal_id=?",
+            (f"{channel}:{signal_id}:initial", signal_id),
+        ).fetchone()
+        visible = bool(row and row[0] == "sent" and row[1])
+        self.store.put(
+            f"discord_visibility:{channel}:{signal_id}",
+            dict(
+                user_visible_initial=visible,
+                initial_delivery_status=row[0] if row else "never-attempted",
+                initial_message_id=row[1] if row else None,
+                initial_channel=channel,
+            ),
+        )
+        return visible
+
     async def send_research(self, signal, update=False):
+
+        channel = (
+            "validated"
+            if signal.validation_status == "validated" and not self.settings.research_alerts
+            else "research"
+        )
+        if update and not self.was_initially_delivered(signal.id, channel):
+            return "blocked:no-visible-initial"
 
         if update and signal.state in {"INVALIDATED", "EXPIRED", "RESOLVED"}:
             # Store.signal commits the terminal event first. Delivery belongs to
@@ -295,6 +320,8 @@ class Notifier:
                         "UPDATE terminal_events SET notification_status='failed' WHERE signal_id=?", (ident,)
                     )
                 continue
+            if not self.was_initially_delivered(ident, initial[0].split(":", 1)[0]):
+                continue
             secret = (
                 self.settings.research_webhook
                 if initial[0].startswith("research:")
@@ -367,6 +394,7 @@ class Notifier:
             )
 
         status = await self.deliver(key, signal.id, payload, secret)
+        self.was_initially_delivered(signal.id, key.split(":", 1)[0])
         if status == "sent":
             with self.store.db:
                 self.store.db.execute(
@@ -416,6 +444,11 @@ class Notifier:
         return await self.deliver("connection-test:" + event_id, None, payload, secret)
 
     async def deliver(self, key, signal_id, payload, secret):
+
+        channel = key.split(":", 1)[0]
+        if signal_id is not None and channel in {"research", "validated"} and not key.endswith(":initial"):
+            if not self.was_initially_delivered(signal_id, channel):
+                return "blocked:no-visible-initial"
 
         u = urlparse(secret)
 
@@ -500,6 +533,9 @@ class Notifier:
         return status
 
     async def send_public(self, signal, update=False):
+
+        if update and not self.was_initially_delivered(signal.id, "validated"):
+            return "blocked:no-visible-initial"
 
         from .ml.inference import delivery_eligible
 
