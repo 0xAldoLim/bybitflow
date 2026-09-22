@@ -104,7 +104,7 @@ The real Discord connection test and clearly marked synthetic signal both return
 From Command Prompt:
 
 ```cmd
-cd /d C:\Users\USER\Documents\Codex\bybitflow
+cd /d C:\path\to\bybitflow
 docker compose --profile ml up -d
 docker compose exec desk bybit-flow doctor
 ```

@@ -240,10 +240,12 @@ fill the budget, recording stops explicitly rather than deleting those records.
 
 ## Stop, restart, and update
 
-In Windows CMD, first enter the repository directory:
+In Windows CMD, first enter the repository directory. Replace
+`C:\path\to\bybitflow` with the folder where you cloned or extracted this
+repository:
 
 ```bat
-cd /d "%USERPROFILE%\Documents\Codex\bybitflow"
+cd /d C:\path\to\bybitflow
 ```
 
 Use these commands for everyday operation:

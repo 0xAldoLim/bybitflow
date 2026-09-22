@@ -110,7 +110,7 @@ New cards identify horizon/holding period, entry zone, stop, targets, timing, qu
 From Windows CMD:
 
 ```bat
-cd /d C:\Users\USER\Documents\Codex\bybitflow
+cd /d C:\path\to\bybitflow
 rem Start scanner and automatic ML worker
 docker compose --profile ml up -d
 rem Check services

@@ -20,13 +20,13 @@ never changes an expired trade into a historical win. See the
 ## Start and stop on Windows
 
 Open **Docker Desktop** and wait for its engine to be ready. Then open **Command
-Prompt (CMD)**. These examples assume the project is in the folder below; change
-the path if it is installed elsewhere.
+Prompt (CMD)**. Replace `C:\path\to\bybitflow` with the folder where you cloned
+or extracted this repository.
 
 **Start or resume the scanner and ML worker:**
 
 ```bat
-cd /d "%USERPROFILE%\Documents\Codex\bybitflow"
+cd /d C:\path\to\bybitflow
 docker compose --profile ml up -d
 ```
 
@@ -36,7 +36,7 @@ the password stored in `FLOW_ADMIN_TOKEN` in the private `.env` file.
 **Stop both services and keep recorded data and ML state:**
 
 ```bat
-cd /d "%USERPROFILE%\Documents\Codex\bybitflow"
+cd /d C:\path\to\bybitflow
 docker compose --profile ml down
 ```
 
