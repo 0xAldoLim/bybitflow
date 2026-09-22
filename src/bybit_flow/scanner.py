@@ -795,6 +795,44 @@ class Scanner:
                 structure_timeframe=s.setup_timeframe,
                 window_end_ms=now,
             )
+            sign = 1 if s.direction == "LONG" else -1
+            profile = getattr(
+                self,
+                "swing_profiles" if s.horizon_profile in {"SWING", "EXTENDED_SWING"} else "volume_profiles",
+                {},
+            ).get(s.symbol, {})
+            if profile.get("available") and 0 <= now - profile.get("available_ms", 0) <= 120000:
+                adverse_value = profile.get("value_migration_direction") == ("DOWN" if sign > 0 else "UP")
+                adverse_acceptance = profile.get("acceptance") == (
+                    "BELOW_VALUE" if sign > 0 else "ABOVE_VALUE"
+                )
+                observation["auction_health"] = (
+                    "DEGRADED" if adverse_value and adverse_acceptance else "HEALTHY"
+                )
+            factor_bars = self.candle_cache.get(("BTCUSDT", s.context_timeframe), (None, []))[1]
+            if len(factor_bars) >= 60 and now - factor_bars[-1].end <= DURATIONS[s.context_timeframe] + 60000:
+                factor = candle_features(factor_bars, now)
+                observation["factor_health"] = (
+                    "DEGRADED"
+                    if factor.get("regime") == ("trending down" if sign > 0 else "trending up")
+                    else "HEALTHY"
+                )
+            derivatives = context.get("derivatives", {})
+            if (
+                0 <= now - derivatives.get("collected_ms", 0) <= 360000
+                and derivatives.get("funding_rate") is not None
+            ):
+                observation["derivatives_health"] = (
+                    "DEGRADED" if sign * derivatives["funding_rate"] > 0.001 else "HEALTHY"
+                )
+            cross = self.store.get("cross:" + s.symbol, {})
+            if cross.get("available") and 0 <= now - cross.get("receipt_ms", 0) <= 15000:
+                observation["cross_venue_health"] = (
+                    "DEGRADED" if cross.get("delta_agreement") is False else "HEALTHY"
+                )
+            observation["volatility_liquidity_health"] = (
+                "DEGRADED" if bf.get("spread_bps", 0) > self.settings.max_spread_bps else "HEALTHY"
+            )
             key = "thesis_health:" + s.id
             health = health_evaluate(s, observation, self.store.get(key, {}), now)
             self.store.put(key, health)

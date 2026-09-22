@@ -169,7 +169,17 @@ class CrossVenue:
                         mid=bf["mid"],
                         spread_bps=bf["spread_bps"],
                         window_end=end,
-                        flow={k: flow[k] for k in ("available", "delta_pct", "cvd") if k in flow},
+                        flow={
+                            k: flow[k]
+                            for k in (
+                                "available",
+                                "delta_pct",
+                                "cvd",
+                                "potential_trapped_buyers",
+                                "potential_trapped_sellers",
+                            )
+                            if k in flow
+                        },
                     )
                 )
             result = compare(observations, now)

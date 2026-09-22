@@ -93,6 +93,8 @@ def reclaim_hold(signal, bars, asof):
     closed = [b for b in bars if b.interval == 300000 and trigger.get("available_ms", 0) < b.end <= asof]
     if level is None or extreme is None or len(closed) < 2:
         return False
+    if any(b.low < extreme if sign > 0 else b.high > extreme for b in closed):
+        return False
     reclaim = None
     for b in closed:
         if b.low < extreme if sign > 0 else b.high > extreme:
@@ -321,9 +323,12 @@ def evaluate_intraday_confirmation(signal, flow, bars, asof, alignment=None):
         valid_profile
         and (
             profile.get("rejection_low" if sign > 0 else "rejection_high")
+            or profile.get("excess_low" if sign > 0 else "excess_high")
             or profile.get("value_migration_direction") == ("UP" if sign > 0 else "DOWN")
         )
     )
+    if profile.get("acceptance") == ("BELOW_VALUE" if sign > 0 else "ABOVE_VALUE"):
+        profile_ok = False
     factor_ok = not (alignment or {}).get("blocked", False)
     passed = bool(response and support["state"] == "FLOW_SUPPORTIVE" and part_ok and factor_ok)
     stressed = (

@@ -127,6 +127,7 @@ async def test_stream_timeout_reselect_and_reconcile(settings, signal, monkeypat
     await streams.select([])
     assert streams.tasks[signal.symbol] is not previous
     await streams.stop()
+    assert not streams.tasks and not streams.selected
     book, tape = Book(), Tape()
     book.valid = True
     book.bids, book.asks = {Decimal(99): Decimal(1)}, {Decimal(101): Decimal(1)}

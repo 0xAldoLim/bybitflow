@@ -367,4 +367,5 @@ class NativeStreams:
                         self.sample(symbol)
 
     async def stop(self):
+        self.required_symbols = set()  # Explicit process shutdown releases every socket.
         await self.select([])

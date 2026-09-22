@@ -100,11 +100,31 @@ def evaluate(signal, observation, previous, now):
         cross_venue_health=observation.get("cross_venue_health", "UNAVAILABLE"),
         volatility_liquidity_health=observation.get("volatility_liquidity_health", "UNAVAILABLE"),
     )
+    adverse_auction = result["auction_health"] == "DEGRADED"
+    adverse_factor = result["factor_health"] == "DEGRADED"
     if higher and not structural:
-        return result | dict(state="HEALTHY", adverse_since_ms=None)
+        # Short-term tape is contextual only. Higher horizons need sustained
+        # value/acceptance deterioration with independent factor evidence.
+        if not (adverse_auction and adverse_factor):
+            return result | dict(
+                state="DEGRADED" if adverse_auction or adverse_factor else "HEALTHY", adverse_since_ms=None
+            )
+        continuous = now - previous.get("checked_ms", 0) <= 90000
+        since = previous.get("adverse_since_ms") if continuous else None
+        since = now if since is None else since
+        toxic = now - since >= (14400000 if signal.horizon_profile == "EXTENDED_SWING" else 1800000)
+        return result | dict(
+            state="TOXIC" if toxic else "DEGRADED",
+            withdraw=toxic,
+            adverse_since_ms=since,
+            reason="AUCTION_FAILURE" if toxic else None,
+        )
     if not adverse_flow:
         return result | dict(
-            state="DEGRADED" if structural or adverse_book else "HEALTHY", adverse_since_ms=None
+            state="DEGRADED"
+            if structural or adverse_book or adverse_auction or adverse_factor
+            else "HEALTHY",
+            adverse_since_ms=None,
         )
     # Gaps and delayed observations reset persistence; repeated evaluation of one
     # old window cannot accumulate evidence indefinitely.
@@ -113,7 +133,11 @@ def evaluate(signal, observation, previous, now):
     since = since if since is not None else now
     result.update(state="DEGRADED", adverse_since_ms=since)
     new_window = observation.get("window_end_ms", 0) > previous.get("observation", {}).get("window_end_ms", 0)
-    if structural and adverse_book and now - since >= hold and new_window:
+    if (
+        (structural and adverse_book or adverse_auction and adverse_factor)
+        and now - since >= hold
+        and new_window
+    ):
         result.update(
             state="TOXIC", withdraw=result["production_enabled"], reason="THESIS_WITHDRAWN_BEFORE_STOP"
         )
