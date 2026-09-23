@@ -10,7 +10,7 @@
 - Bounded recording, integrity manifests, source-separated paper labels, and audited clock gaps.
 - Optional ML collection, challenger training, ranking, drift checks, and guarded promotion.
 - Authenticated local dashboard, diagnostics, backup, and retention planning.
-- Optional chart-event API and historical chart research for compatibility.
+- Historical TradingView records remain readable; new chart-event ingestion is retired.
 
 ## Limitations
 

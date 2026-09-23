@@ -1,5 +1,4 @@
 import asyncio
-import contextlib
 import json
 import secrets
 from contextlib import asynccontextmanager
@@ -16,7 +15,6 @@ from .models import Signal
 from .notifications import embed
 from .scanner import Scanner
 from .storage import Recorder, Store, now_ms
-from .tradingview import Gateway, LiquidityObservation, TVEvent
 
 STATIC = Path(__file__).parent / "static"
 
@@ -63,17 +61,9 @@ def create_app(settings=None):
         recorder = Recorder(store, settings)
         scanner = Scanner(settings, store, recorder)
         app.state.store, app.state.recorder, app.state.scanner = store, recorder, scanner
-        app.state.gateway = Gateway(settings, store)
-        app.state.gateway.scanner = scanner
-        gateway_task = asyncio.create_task(app.state.gateway.run()) if settings.tv_enabled else None
-        app.state.gateway_task = gateway_task
         task = asyncio.create_task(recorder.run())
         scanner.start()
         yield
-        if gateway_task:
-            gateway_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await gateway_task
         await scanner.stop()
         recorder.running = False
         await task
@@ -85,17 +75,6 @@ def create_app(settings=None):
 
     @app.middleware("http")
     async def access(request: Request, call_next):
-        # Only this exact route bypasses dashboard auth; a dedicated high-entropy key is required.
-        # Reverse proxy supplies X-TV-Key after checking its capability URL. Never trust client IP headers.
-        if request.url.path == "/webhooks/tradingview" and request.method == "POST":
-            key = settings.tv_token.get_secret_value()
-            if (
-                not settings.tv_enabled
-                or len(key) < 32
-                or not secrets.compare_digest(request.headers.get("x-tv-key", ""), key)
-            ):
-                return JSONResponse({"detail": "Unauthorized integration"}, 401)
-            return await call_next(request)
         token = settings.admin_token.get_secret_value()
         host = request.headers.get("host", "").split(":")[0]
         if token:
@@ -236,50 +215,6 @@ def create_app(settings=None):
             "methodology": "5-second observed depth samples, not every update or hidden liquidity",
         }
 
-    @app.post("/webhooks/tradingview")
-    async def tradingview(request: Request):
-        if request.app.state.gateway_task.done():
-            raise HTTPException(503, "Ingress worker unavailable; inspect health and restart")
-        # Bound streamed body, not just an untrusted Content-Length header. ACK after SQLite commit.
-        body = bytearray()
-        async for chunk in request.stream():
-            body.extend(chunk)
-            if len(body) > 32_768:
-                raise HTTPException(413, "Payload too large")
-        try:
-            event = TVEvent.model_validate_json(body)
-            new = request.app.state.gateway.enqueue(event)
-        except OverflowError:
-            raise HTTPException(503, "Ingress queue full; retry later") from None
-        except ValueError:
-            # Pydantic errors can contain submitted secrets: never echo the payload.
-            raise HTTPException(422, "Invalid, stale, conflicting or unapproved event") from None
-        return JSONResponse({"event_id": event.event_id, "queued": new}, 202 if new else 200)
-
-    @app.post("/api/tradingview/liquidity")
-    async def tv_liquidity(value: LiquidityObservation, request: Request):
-        if not 0 <= now_ms() - value.observed_ms <= 60_000:
-            raise HTTPException(422, "Observation must be fresh; never enter assumed depth")
-        if value.instrument.symbol not in settings.tv_symbols:
-            raise HTTPException(422, "Symbol not approved")
-        request.app.state.store.put("tv_liquidity:" + value.instrument.symbol, value.model_dump(mode="json"))
-        return {"stored": True, "warning": "Operator-attributed observations, not independently verified"}
-
-    @app.get("/api/tradingview")
-    async def tv_status(request: Request):
-        store = request.app.state.store
-        return {
-            "enabled": settings.tv_enabled,
-            "sss_research": settings.sss_research,
-            "queue": [
-                dict(r)
-                for r in store.db.execute(
-                    "SELECT event_id,received_ms,status,result FROM tv_inbox ORDER BY received_ms DESC LIMIT 100"
-                )
-            ],
-            "qualification": "Uncalibrated; validated public tiers remain locked",
-        }
-
     @app.get("/assets/{name}")
     async def asset(name: str):
         if name not in {"app.js", "style.css"}:
@@ -289,21 +224,13 @@ def create_app(settings=None):
     @app.get("/healthz")
     async def health(request: Request):
         rec, scanner = request.app.state.recorder, request.app.state.scanner
-        worker_alive = bool(request.app.state.gateway_task and not request.app.state.gateway_task.done())
-        status = (
-            200
-            if rec.healthy
-            and scanner.status["state"] != "error"
-            and (worker_alive or not settings.tv_enabled)
-            else 503
-        )
+        status = 200 if rec.healthy and scanner.status["state"] != "error" else 503
         return JSONResponse(
             {
                 "ok": status == 200,
                 "scanner": scanner.status,
                 "recording": rec.healthy,
                 "alerts_only": True,
-                "tv_worker_alive": worker_alive,
             },
             status,
         )

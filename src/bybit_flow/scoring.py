@@ -95,6 +95,8 @@ def score(
             unit(abs(flow.get("delta_pct", 0)), 25),
             unit(flow.get("stacked_buy" if sign > 0 else "stacked_sell", 0), 4),
         )
+    if ":flow-quality-v1" in signal.version:
+        flow_strength *= min(1.0, (flow.get("quality", {}).get("flow_trust_score") or 0) / 0.6)
     fractions = {
         "regime": unit(context_features.get("efficiency"), 0.5),
         "structure": unit(setup_features.get("atr", 0) * 2 / distance if distance else 0)

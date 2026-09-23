@@ -222,9 +222,15 @@ def session_baseline(store, signal, flow, book, now, window_end_ms=None):
         cvd_slope=flow.get("cvd_slope"),
         replenishment=flow.get("replenishment_strength"),
         obi=book.get("obi_10bps"),
+        effective_volume=flow.get("quality", {}).get("effective_gross_notional"),
+        effective_trade_intensity=flow.get("quality", {}).get("effective_trade_intensity"),
+        effective_buy_notional=flow.get("quality", {}).get("effective_buy_notional"),
+        effective_sell_notional=flow.get("quality", {}).get("effective_sell_notional"),
+        effective_delta_magnitude=abs(flow.get("quality", {}).get("effective_delta_notional", 0)),
     )
     result = {
         "baseline_samples": len(history),
+        "effective_baseline_samples": sum(h.get("effective_volume") is not None for h in history),
         "normalization": "prior complete execution windows from selected native markets, same symbol, venue, horizon and session",
         "policy": "participation-percentiles-v2",
         "available_ms": now,

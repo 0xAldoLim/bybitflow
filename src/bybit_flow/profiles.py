@@ -5,7 +5,7 @@ from statistics import median
 from .orderflow import footprint
 
 
-def build(tape, tick, atr, start, end, available_ms, source, symbol, previous=None):
+def build(tape, tick, atr, start, end, available_ms, source, symbol, previous=None, book=None):
     result = dict(
         policy="executed-profile-v2",
         available=False,
@@ -33,6 +33,9 @@ def build(tape, tick, atr, start, end, available_ms, source, symbol, previous=No
     if not trades or trades[-1].event_ms < end - 10000 or not complete:
         return result | dict(reason="insufficient continuous executed-trade coverage", trades=len(trades))
     profile = footprint(trades, tick, atr)
+    from .flow_quality import assess as assess_flow_quality
+
+    effective = assess_flow_quality(trades, tick, book or {}, profile, available_ms, start, end)
     bins = profile["profile"]
     volumes = [row["buy"] + row["sell"] for row in bins]
     typical = median(volumes)
@@ -55,7 +58,31 @@ def build(tape, tick, atr, start, end, available_ms, source, symbol, previous=No
         val_shift=None,
         value_overlap=None,
         value_migration_direction="UNAVAILABLE",
+        raw_volume_profile=profile["profile"],
+        effective_volume_profile=effective.get("effective_volume_profile", []),
+        profile_confidence=effective.get("profile_confidence", "LOW"),
+        effective_poc=effective.get("effective_poc"),
+        effective_vah=effective.get("effective_vah"),
+        effective_val=effective.get("effective_val"),
+        effective_hvn=effective.get("effective_hvn"),
+        effective_lvn=effective.get("effective_lvn"),
     )
+    if (
+        context["profile_confidence"] == "HIGH"
+        and context["effective_val"] is not None
+        and context["effective_vah"] is not None
+    ):
+        effective_bins = context["effective_volume_profile"]
+        amounts = [r["volume"] for r in effective_bins]
+        typical_effective = median(amounts)
+        context.update(
+            effective_excess_low=len(amounts) >= 3 and amounts[0] < 0.25 * typical_effective,
+            effective_excess_high=len(amounts) >= 3 and amounts[-1] < 0.25 * typical_effective,
+            effective_rejection_low=min(float(t.price) for t in trades) < context["effective_val"]
+            and close > context["effective_val"],
+            effective_rejection_high=max(float(t.price) for t in trades) > context["effective_vah"]
+            and close < context["effective_vah"],
+        )
     if (
         previous
         and previous.get("available")

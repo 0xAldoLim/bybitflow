@@ -67,13 +67,6 @@ class Settings(BaseSettings):
     rest_requests_per_second: float = Field(3, gt=0, le=10)
     research_alerts: bool = False
     sss_research: bool = False
-    tv_enabled: bool = False
-    tv_proxy_research: bool = False
-    tv_require_native_confirmation: bool = False
-    tv_token: SecretStr = SecretStr("")
-    tv_symbols: list[str] = ["BTCUSDT", "ETHUSDT"]
-    tv_max_age_ms: int = Field(90_000, ge=1000, le=180_000)
-    tv_queue_limit: int = Field(1000, ge=10, le=10000)
     research_webhook: SecretStr = SecretStr("")
     discord_webhook: SecretStr = SecretStr("")
     admin_token: SecretStr = SecretStr("")
@@ -100,5 +93,5 @@ class Settings(BaseSettings):
     def public(self):
         return self.model_dump(
             mode="json",
-            exclude={"research_webhook", "discord_webhook", "admin_token", "tv_token", "ops_webhook"},
+            exclude={"research_webhook", "discord_webhook", "admin_token", "ops_webhook"},
         )

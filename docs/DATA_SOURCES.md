@@ -3,7 +3,8 @@
 ## Native sources
 
 Start with [USER_RUNBOOK.md](USER_RUNBOOK.md); venue schemas and endpoints are audited in
-[MULTI_EXCHANGE.md](MULTI_EXCHANGE.md). TradingView sections below are optional legacy only.
+[MULTI_EXCHANGE.md](MULTI_EXCHANGE.md). Historical TradingView rows remain readable,
+but new TradingView ingestion has been retired.
 Binance aggregate archives use
 `https://data.binance.vision/data/futures/um/daily/aggTrades/{symbol}/{symbol}-aggTrades-{date}.zip`
 plus `.CHECKSUM`. SHA-256, bounded ZIP contents, CSV schema, UTC millisecond dates and
@@ -14,9 +15,6 @@ Archives supply no historical DOM, liquidations or point-in-time instrument memb
 
 Exchange availability is deployment-specific. Diagnose current access with the
 test-market command; preserve TLS verification and source manifests.
-
-The optional [chart compatibility API](TRADINGVIEW_SETUP.md) accepts source-attested
-classifications. It does not reconstruct exchange taker-side trades or missing depth.
 
 ## Bybit REST details
 

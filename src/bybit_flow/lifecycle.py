@@ -89,6 +89,10 @@ async def bootstrap(scanner):
             else NativeStreams(scanner.settings, scanner.store, scanner.recorder, scanner.api)
         )
         scanner.source_ready = True
+        scanner.store.put(
+            "active_exchange",
+            dict(current=source, at_ms=now_ms(), reason="Restored original-source lifecycle feed"),
+        )
     scanner.streams.required_symbols = set(scanner.pending_symbols())
     scanner.recorder.critical_symbols = {s["symbol"] for s in native} | {"BTCUSDT", "ETHUSDT"}
     await scanner.streams.select(scanner.pending_symbols())
@@ -119,18 +123,21 @@ async def tick(scanner, now):
     await scanner.streams.select(list(required) + list(scanner.streams.selected))
     if getattr(scanner, "cross_venue", None):
         await scanner.cross_venue.restore_required()
-    ready = pending = degraded = 0
+    ready = pending = unavailable = stale = 0
     for signal in active:
         try:
             _, streams = source_feed(scanner, signal.source)
             tape = streams.tapes.get(signal.symbol) if streams else None
+            book = streams.books.get(signal.symbol) if streams else None
             cursor = signal.coverage.get("monitor_cursor_event_ms", signal.created_ms)
             gap = not tape or tape.coverage_start is None or tape.coverage_start > cursor
-            fresh = bool(
+            tape_fresh = bool(
                 tape
                 and 0 <= now - tape.last_receipt <= scanner.settings.trade_stale_ms
-                and -1000 <= now - tape.last_event <= scanner.settings.trade_stale_ms
+                and -2000 <= now - tape.last_event <= scanner.settings.trade_stale_ms
             )
+            book_fresh = bool(book and book.fresh(now, scanner.settings.book_stale_ms))
+            fresh = tape_fresh and book_fresh and scanner.recorder.healthy
             if gap:
                 scanner.reconcile_pending.add(signal.id)
             if signal.id in scanner.reconcile_pending:
@@ -140,13 +147,19 @@ async def tick(scanner, now):
                 ]
                 pending += 1
             else:
-                advance_trades(signal, tape, now)
+                if tape_fresh:
+                    advance_trades(signal, tape, now)
+                source_missing = not tape and not book
+                monitor_status = (
+                    "MONITOR_READY" if fresh else "SOURCE_UNAVAILABLE" if source_missing else "FEED_STALE"
+                )
                 signal.coverage.update(
                     monitoring="active" if fresh else "paused",
-                    monitor_status="FRESH" if fresh else "SOURCE_UNAVAILABLE",
+                    monitor_status=monitor_status,
                 )
                 ready += int(fresh)
-                degraded += int(not fresh)
+                unavailable += int(source_missing)
+                stale += int(not fresh and not source_missing)
                 if signal.state not in TERMINAL and now >= (
                     (signal.holding_deadline_ms or signal.expires_ms)
                     if signal.state == "ALERTED"
@@ -169,7 +182,7 @@ async def tick(scanner, now):
             else:
                 scanner.store.monitor(signal)
         except Exception as exc:
-            degraded += 1
+            unavailable += 1
             scanner.store.put("lifecycle_error:" + signal.id, dict(at_ms=now, error_type=type(exc).__name__))
     scanner.store.put(
         "active_lifecycle",
@@ -179,8 +192,16 @@ async def tick(scanner, now):
             unique_symbols=len({s.symbol for s in active}),
             monitor_ready=ready,
             reconciliation_pending=pending,
-            degraded=degraded,
-            status="RECONCILING" if pending else "DEGRADED" if degraded else "FRESH",
+            source_unavailable=unavailable,
+            feed_stale=stale,
+            degraded=unavailable + stale,
+            status="RECONCILIATION_PENDING"
+            if pending
+            else "SOURCE_UNAVAILABLE"
+            if unavailable
+            else "FEED_STALE"
+            if stale
+            else "MONITOR_READY",
             oldest_monitor_age_ms=max(
                 (now - s.coverage.get("last_monitor_ms", now) for s in active), default=0
             ),

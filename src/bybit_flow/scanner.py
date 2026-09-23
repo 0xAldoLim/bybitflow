@@ -185,6 +185,10 @@ class Scanner:
                     snapshot.coverage_start = tape.coverage_start
                     snapshot.last_event = tape.last_event
                     inst = context["instrument"]
+                    book = self.streams.books.get(symbol)
+                    book_features = (
+                        book.features(now) if book and book.fresh(now, self.settings.book_stale_ms) else {}
+                    )
                     atr = candle_features(context["h1"], now)["atr"]
                     result = await asyncio.to_thread(
                         build,
@@ -197,6 +201,7 @@ class Scanner:
                         self.exchange,
                         symbol,
                         self.volume_profiles.get(symbol),
+                        book_features,
                     )
                     result["available_ms"] = now_ms()
                     self.volume_profiles[symbol] = result
@@ -212,12 +217,12 @@ class Scanner:
                         self.exchange,
                         symbol,
                         self.swing_profiles.get(symbol),
+                        book_features,
                     )
                     swing["available_ms"] = now_ms()
                     self.swing_profiles[symbol] = swing
                     # Baselines mature from every complete selected-market window,
                     # independent of whether the strategy generated a candidate.
-                    book = self.streams.books.get(symbol)
                     window = self.settings.execution_window_seconds * 1000
                     start = end - window
                     if (
@@ -229,6 +234,9 @@ class Scanner:
                         from types import SimpleNamespace
 
                         from .evidence import flow_response, session_baseline
+                        from .flow_quality import assess as assess_flow_quality
+                        from .flow_quality import baseline as flow_baseline
+                        from .flow_quality import remember
                         from .horizons import session_context
 
                         trades = snapshot.window(start, end)
@@ -243,6 +251,22 @@ class Scanner:
                                     horizon_profile=horizon,
                                     entry_session=session_context(now)["primary"],
                                 )
+                                key, history = flow_baseline(
+                                    self.store, identity.source, symbol, identity.entry_session, horizon, end
+                                )
+                                quality = assess_flow_quality(
+                                    trades,
+                                    inst.tick,
+                                    bf,
+                                    flow,
+                                    now,
+                                    start,
+                                    end,
+                                    history,
+                                    self.store.get("cross:" + symbol, {}),
+                                )
+                                flow["quality"] = quality
+                                remember(self.store, key, history, quality)
                                 session_baseline(self.store, identity, flow, bf, now, window_end_ms=end)
                     await asyncio.sleep(0.05)
                 self.store.put(
@@ -776,7 +800,7 @@ class Scanner:
         fresh_tape = bool(
             tape
             and 0 <= now - tape.last_receipt <= self.settings.trade_stale_ms
-            and -1000 <= now - tape.last_event <= self.settings.trade_stale_ms
+            and -2000 <= now - tape.last_event <= self.settings.trade_stale_ms
         )
         context_fresh = bool(
             context and 0 <= now - context["asof"] <= self.settings.scan_seconds * 1000 + 60_000
@@ -807,10 +831,31 @@ class Scanner:
             health_window = 60_000 if s.horizon_profile == "SHORT_INTRADAY" else 900_000
             recent = tape.window(now - health_window, now)
             observed = footprint(
-                recent, context["instrument"].tick, feature.get("atr", float(context["instrument"].tick) * 10)
+                recent,
+                context["instrument"].tick,
+                feature.get("atr", float(context["instrument"].tick) * 10),
+                book,
             )
             observed.update(flow_response(recent, book.features(now)))
             bf = book.features(now)
+            if ":flow-quality-v1" in s.version:
+                from .flow_quality import assess as assess_flow_quality
+                from .flow_quality import baseline as flow_baseline
+
+                _, history = flow_baseline(
+                    self.store, s.source, s.symbol, s.entry_session, s.horizon_profile, now
+                )
+                observed["quality"] = assess_flow_quality(
+                    recent,
+                    context["instrument"].tick,
+                    bf,
+                    observed,
+                    now,
+                    now - health_window,
+                    now,
+                    history,
+                    self.store.get("cross:" + s.symbol, {}),
+                )
             structure = (
                 feature.get("bos") == ("down" if s.direction == "LONG" else "up")
                 and bool(setup)
@@ -851,7 +896,26 @@ class Scanner:
             factor_bars = (
                 self.candle_cache.get(("BTCUSDT", s.context_timeframe), (None, []))[1] if same_source else []
             )
-            if len(factor_bars) >= 60 and now - factor_bars[-1].end <= DURATIONS[s.context_timeframe] + 60000:
+            original_alignment = s.evidence.get("market_alignment", {})
+            if original_alignment.get("alignment") == "IDIOSYNCRATIC_DIVERGENCE":
+                from .evidence import factor_context
+
+                original_sign = 1 if s.direction == "LONG" else -1
+                current_factor = (
+                    factor_context(candles(s.context_timeframe), factor_bars, [], asof=now)
+                    if len(factor_bars) >= 60
+                    else {}
+                )
+                threshold = original_alignment.get("residual_threshold", 0.0015)
+                current_residual = original_sign * current_factor.get("residual_btc", 0)
+                if current_factor.get("available"):
+                    observation["factor_health"] = (
+                        "DEGRADED" if current_residual < 0.5 * threshold else "HEALTHY"
+                    )
+                    observation["original_divergence_residual"] = current_residual
+            elif (
+                len(factor_bars) >= 60 and now - factor_bars[-1].end <= DURATIONS[s.context_timeframe] + 60000
+            ):
                 factor = candle_features(factor_bars, now)
                 observation["factor_health"] = (
                     "DEGRADED"
@@ -877,7 +941,7 @@ class Scanner:
             ):
                 observation["cross_venue_health"] = (
                     "DEGRADED"
-                    if cross.get("consensus_delta_sign") == ("NEGATIVE" if sign > 0 else "POSITIVE")
+                    if cross.get("trusted_consensus_delta_sign") == ("NEGATIVE" if sign > 0 else "POSITIVE")
                     else "MIXED"
                     if cross.get("consensus_delta_sign") == "MIXED"
                     else "HEALTHY"
@@ -1055,7 +1119,7 @@ class Scanner:
                 < tape.coverage_start
                 <= start,
                 "latest trade stale": 0 <= now - tape.last_receipt <= self.settings.trade_stale_ms
-                and -1000 <= now - tape.last_event <= self.settings.trade_stale_ms,
+                and -2000 <= now - tape.last_event <= self.settings.trade_stale_ms,
                 "closed candle stale": 0 <= now - candle_end <= DURATIONS[s.execution_timeframe] + 60_000,
                 "execution window stale": 0 <= now - end <= (120_000 if window_ms < 900_000 else 960_000),
                 "market context stale": 0 <= now - c["asof"] <= self.settings.scan_seconds * 1000 + 60_000,
@@ -1096,6 +1160,24 @@ class Scanner:
                         current_flow.update(
                             flow_response([t for t in tape.window(start, end) if t.receipt_ms <= now], {})
                         )
+                        if ":flow-quality-v1" in s.version:
+                            from .flow_quality import assess as assess_flow_quality
+                            from .flow_quality import baseline as flow_baseline
+
+                            _, history = flow_baseline(
+                                self.store, s.source, s.symbol, s.entry_session, s.horizon_profile, end
+                            )
+                            current_flow["quality"] = assess_flow_quality(
+                                [t for t in tape.window(start, end) if t.receipt_ms <= now],
+                                c["instrument"].tick,
+                                book.features(now),
+                                current_flow,
+                                now,
+                                start,
+                                end,
+                                history,
+                                self.store.get("cross:" + s.symbol, {}),
+                            )
                         support = flow_support(
                             current_flow,
                             1 if s.direction == "LONG" else -1,
@@ -1162,6 +1244,46 @@ class Scanner:
             window_book.valid = book.valid
             window_book.changes.extend(x for x in book.changes if x[0] <= end)
             flow = footprint(trades, c["instrument"].tick, execution_features["atr"], window_book)
+            bf = book.features(now)
+            from .evidence import flow_response
+
+            prior_trades = tape.window(start - window_ms, start)
+            flow.update(flow_response(trades, bf, flow_response(prior_trades, bf)))
+            from .flow_quality import assess as assess_flow_quality
+            from .flow_quality import baseline as flow_baseline
+
+            _, quality_history = flow_baseline(
+                self.store, s.source, s.symbol, s.entry_session, s.horizon_profile, end
+            )
+            quality = assess_flow_quality(
+                trades,
+                c["instrument"].tick,
+                bf,
+                flow,
+                now,
+                start,
+                end,
+                quality_history,
+                self.store.get("cross:" + s.symbol, {}),
+            )
+            flow["quality"] = quality
+            s.evidence["flow_quality"] = quality
+            if ":flow-quality-v1" not in s.version:
+                flow.pop("quality")
+            s.evidence["effective_volume_profile"] = {
+                "policy": quality["flow_quality_policy"],
+                "available": quality["flow_quality_state"] != "UNAVAILABLE",
+                "coverage_complete": healthy,
+                "profile_confidence": quality.get("profile_confidence", "LOW"),
+                "poc": quality.get("effective_poc"),
+                "vah": quality.get("effective_vah"),
+                "val": quality.get("effective_val"),
+                "hvn": quality.get("effective_hvn"),
+                "lvn": quality.get("effective_lvn"),
+                "raw_vs_effective_profile_shift": quality.get("raw_vs_effective_profile_shift"),
+                "available_ms": now,
+                "end_ms": end,
+            }
             flow_ok = confirm(s, flow, execution_bars)
             if flow_ok and not production_v2:
                 emit(self.store, "flow_confirmed", now, signal=s, key=f"flow:{s.id}:{end}")
@@ -1173,13 +1295,18 @@ class Scanner:
             s.gates.extend(normal_spread["reasons"])
             if not flow_ok and not production_v2:
                 s.gates.append("executed order flow did not confirm family trigger")
+            if (
+                ":flow-quality-v1" in s.version
+                and quality.get("flow_trust_score") is not None
+                and quality["flow_trust_score"] < 0.6
+            ):
+                s.gates.append("LOW_INFORMATION_EXECUTED_FLOW")
             if now - end > 900_000:
                 s.gates.append("execution trigger expired")
             if end < s.evidence["trigger_bar_end"]:
                 s.gates.append("execution confirmation predates setup")
             if mid is None or not s.zone[0] <= mid <= s.zone[1]:
                 s.gates.append("current price outside planned entry zone")
-            bf = book.features(now)
             if bf["spread_bps"] > self.settings.max_spread_bps:
                 s.gates.append("current spread exceeds gate")
             d = dict(c["derivatives"])
@@ -1220,16 +1347,12 @@ class Scanner:
                     derivatives_context,
                     execution_context,
                     factor_context,
-                    flow_response,
                     range_context,
                     session_baseline,
                 )
                 from .observations import recommend
 
                 setup_bars = self.candle_cache.get((s.symbol, s.setup_timeframe), (None, c["h1"]))[1]
-                prior_trades = tape.window(start - window_ms, start)
-                response = flow_response(trades, bf, flow_response(prior_trades, bf))
-                flow.update(response)
                 previous_flow = footprint(
                     tape.window(start - window_ms, start), c["instrument"].tick, execution_features["atr"]
                 )
@@ -1291,6 +1414,21 @@ class Scanner:
                         structure_response(s, execution_bars, now),
                     )
                     s.evidence["market_alignment"] = alignment
+                    if alignment.get("policy") == "market-alignment-v3":
+                        history = self.store.get("market-alignment-history-v3", [])
+                        identity = f"{s.id}:{end}"
+                        if not any(row["identity"] == identity for row in history):
+                            history.append(
+                                dict(
+                                    identity=identity,
+                                    at_ms=now,
+                                    source=s.source,
+                                    state=alignment["market_alignment_state"],
+                                    timeframe_context=alignment.get("timeframe_context"),
+                                    blocked=alignment.get("blocked", False),
+                                )
+                            )
+                            self.store.put("market-alignment-history-v3", history[-1000:])
                     if s.horizon_profile in INTRADAY and s.family in REVERSALS:
                         confirmation = evaluate_intraday_confirmation(s, flow, execution_bars, now, alignment)
                         s.evidence["confirmation"] = confirmation

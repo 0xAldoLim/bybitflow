@@ -23,7 +23,7 @@ def fresh_comparison(result, at_ms, primary):
     if (
         result.get("available")
         and primary in result.get("exchanges", [])
-        and 0 <= at_ms - result.get("event_ms", 0) <= 15_000
+        and -2000 <= at_ms - result.get("event_ms", 0) <= 15_000
         and 0 <= at_ms - result.get("receipt_ms", 0) <= 15_000
     ):
         return result
@@ -31,7 +31,7 @@ def fresh_comparison(result, at_ms, primary):
 
 
 def compare(observations, at_ms, max_age=15_000):
-    rows = [r for r in observations if -1000 <= at_ms - r["event_ms"] <= max_age and r["mid"] > 0]
+    rows = [r for r in observations if -2000 <= at_ms - r["event_ms"] <= max_age and r["mid"] > 0]
     if (
         len({r["exchange"] for r in rows}) < 2
         or max(r["event_ms"] for r in rows) - min(r["event_ms"] for r in rows) > 5000
@@ -64,17 +64,52 @@ def compare(observations, at_ms, max_age=15_000):
         if aligned_flow
         else "UNAVAILABLE"
     )
+    trusted = [
+        r
+        for r in rows
+        if r.get("flow", {}).get("quality", {}).get("flow_trust_score", 0) >= 0.6
+        and (
+            r["flow"]["quality"].get("effective_delta_notional", 0)
+            * r["flow"]["quality"].get("price_displacement_bps", 0)
+            > 0
+            or r["flow"]["quality"].get("flow_quality_state") == "GENUINE_ABSORPTION"
+        )
+    ]
+    trusted_signs = [
+        1
+        if r["flow"]["quality"].get("effective_delta_notional", 0) > 0
+        else -1
+        if r["flow"]["quality"].get("effective_delta_notional", 0) < 0
+        else 0
+        for r in trusted
+    ]
+    trusted_consensus = (
+        (
+            "POSITIVE"
+            if len(trusted_signs) >= 2 and all(s > 0 for s in trusted_signs)
+            else "NEGATIVE"
+            if len(trusted_signs) >= 2 and all(s < 0 for s in trusted_signs)
+            else "MIXED"
+            if len(trusted_signs) >= 2
+            else "UNAVAILABLE"
+        )
+        if aligned_flow
+        else "UNAVAILABLE"
+    )
     return dict(
         available=True,
         mean_delta_pct=mean(deltas) if aligned_flow else None,
         consensus_delta_sign=consensus,
+        trusted_consensus_delta_sign=trusted_consensus,
+        cross_venue_trusted_flow_agreement=trusted_consensus in {"POSITIVE", "NEGATIVE"},
+        trusted_flow_venues=len(trusted) if aligned_flow else 0,
         aligned_flow_venues=len(rows) if aligned_flow else 0,
         wick_context="CROSS_VENUE_DISAGREEMENT"
-        if aligned_flow and not (all(d > 0 for d in deltas) or all(d < 0 for d in deltas))
+        if trusted_consensus == "MIXED"
         else "LOCAL_VENUE_SPIKE"
         if (max(mids) - min(mids)) / mean(mids) * 10000 > max(10, 3 * max(spreads))
         else "MARKET_WIDE_SWEEP"
-        if aligned_flow
+        if trusted_consensus in {"POSITIVE", "NEGATIVE"}
         and all(
             r.get("flow", {}).get("potential_trapped_buyers")
             or r.get("flow", {}).get("potential_trapped_sellers")
@@ -247,6 +282,25 @@ class CrossVenue:
                     )
                     flow = footprint(tape.window(end - 900_000, end), tick, atr)
                 bf = book.features(now)
+                if flow.get("available"):
+                    from .evidence import flow_response
+                    from .flow_quality import assess as assess_flow_quality
+
+                    recent = tape.window(end - 900_000, end)
+                    flow.update(flow_response(recent, bf))
+                    quality = assess_flow_quality(recent, tick, bf, flow, now, end - 900_000, end)
+                    flow["quality"] = {
+                        key: quality.get(key)
+                        for key in (
+                            "flow_quality_state",
+                            "flow_trust_score",
+                            "effective_delta_notional",
+                            "price_displacement_bps",
+                            "book_response_consistency",
+                            "microprice_displacement",
+                            "effective_volume_ratio",
+                        )
+                    }
                 observations.append(
                     dict(
                         exchange=name,
@@ -264,6 +318,7 @@ class CrossVenue:
                                 "cvd",
                                 "potential_trapped_buyers",
                                 "potential_trapped_sellers",
+                                "quality",
                             )
                             if k in flow
                         },

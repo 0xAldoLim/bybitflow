@@ -139,13 +139,15 @@ def entry_position(signal, price, spread_bps=0):
     )
 
 
-def participation(metrics, sign, threshold):
+def participation(metrics, sign, threshold, trusted=False):
     """Count categories, not correlated volume/count/intensity aliases."""
-    mature = metrics.get("baseline_samples", 0) >= 20
+    mature = metrics.get("effective_baseline_samples" if trusted else "baseline_samples", 0) >= 20
     groups = {
-        "activity": ("trade_count", "trade_intensity"),
-        "size": ("volume", "aggressive_buy_notional" if sign > 0 else "aggressive_sell_notional"),
-        "imbalance": ("delta_magnitude",),
+        "activity": ("effective_trade_intensity",) if trusted else ("trade_count", "trade_intensity"),
+        "size": ("effective_volume", "effective_buy_notional" if sign > 0 else "effective_sell_notional")
+        if trusted
+        else ("volume", "aggressive_buy_notional" if sign > 0 else "aggressive_sell_notional"),
+        "imbalance": ("effective_delta_magnitude",) if trusted else ("delta_magnitude",),
     }
     support = {
         name: any(
@@ -172,9 +174,14 @@ def flow_support(flow, sign, response):
     stack = flow.get("stacked_buy" if sign > 0 else "stacked_sell", 0) >= 3
     acceleration = sign * (flow.get("cvd_acceleration") or 0) > 0
     run = flow.get("same_side_buy_run" if sign > 0 else "same_side_sell_run", 0) >= 5
+    quality = flow.get("quality", {})
+    trusted = "quality" not in flow or (
+        quality.get("flow_trust_score") is not None and quality["flow_trust_score"] >= 0.6
+    )
     opposing = delta <= -10 and slope < 0 and persistence >= 0.6
     supportive = (
         flow.get("available", False)
+        and trusted
         and not opposing
         and (
             (
@@ -198,6 +205,7 @@ def flow_support(flow, sign, response):
         cvd_acceleration=acceleration,
         raw_fallback=bool(
             flow.get("available")
+            and trusted
             and delta >= 15
             and persistence >= 0.60
             and slope > 0
@@ -205,11 +213,14 @@ def flow_support(flow, sign, response):
         ),
         strong=bool(
             flow.get("available")
+            and trusted
             and delta >= 20
             and persistence >= 0.75
             and slope > 0
             and (initiative or absorption or stack or run or acceleration)
         ),
+        flow_trust=quality.get("flow_trust_score"),
+        flow_quality_state=quality.get("flow_quality_state"),
     )
 
 
@@ -229,6 +240,8 @@ def structure_response(signal, bars, asof):
 
 
 def market_alignment(signal, btc_features, eth_features, asof, response=False):
+    if ":flow-quality-v1" in signal.version:
+        return market_alignment_v7(signal, asof, response)
     sign = 1 if signal.direction == "LONG" else -1
     result = dict(
         policy="market-alignment-v2",
@@ -287,7 +300,9 @@ def market_alignment(signal, btc_features, eth_features, asof, response=False):
     residual = sign * factor.get("residual_btc", 0)
     threshold = max(0.001, 0.5 * abs(factor.get("expected_return_btc", 0)))
     flow = flow_support(signal.evidence.get("flow", {}), sign, response)
-    part = participation(signal.evidence.get("session_metrics", {}), sign, 0.70)
+    part = participation(
+        signal.evidence.get("session_metrics", {}), sign, 0.70, ":flow-quality-v1" in signal.version
+    )
     passed = (
         residual > threshold and flow["strong"] and (part["passed"] if part["mode"] == "PERCENTILE" else True)
     )
@@ -305,12 +320,139 @@ def market_alignment(signal, btc_features, eth_features, asof, response=False):
     return result
 
 
+def market_alignment_v7(signal, asof, response=False):
+    """Higher-timeframe BTC prior with a causal, demanding intraday override."""
+    sign = 1 if signal.direction == "LONG" else -1
+    result = dict(
+        policy="market-alignment-v3",
+        alignment="FACTOR_RELATIONSHIP_UNCERTAIN",
+        market_alignment_state="FACTOR_RELATIONSHIP_UNCERTAIN",
+        blocked=False,
+        available_ms=asof,
+        horizon=signal.horizon_profile,
+        reasons=[],
+        contrarian_override_passed=False,
+    )
+    if signal.symbol == "BTCUSDT":
+        return result | dict(alignment="MARKET_NEUTRAL", market_alignment_state="MARKET_NEUTRAL")
+    frames = signal.evidence.get("factor_timeframes", {})
+    regimes = signal.evidence.get("factor_regimes", {})
+    context_tf = signal.context_timeframe
+    setup_tf = signal.setup_timeframe
+    execution_tf = signal.execution_timeframe
+    factor = frames.get(context_tf, {})
+    btc = regimes.get(context_tf, {}).get("btc", {})
+    eth = regimes.get(context_tf, {}).get("eth", {})
+    beta, corr, stability = (
+        factor.get(k) for k in ("beta_to_btc", "correlation_to_btc", "beta_stability_btc")
+    )
+    direction = {"trending up": 1, "trending down": -1}.get(btc.get("regime"), 0)
+    eth_direction = {"trending up": 1, "trending down": -1}.get(eth.get("regime"), 0)
+    if (
+        not factor.get("available")
+        or factor.get("available_ms", asof + 1) > asof
+        or beta is None
+        or beta <= 0
+        or corr is None
+        or corr < 0.5
+        or stability is None
+        or stability > 0.5
+        or not direction
+        or btc.get("efficiency", 0) < 0.35
+        or (eth_direction and eth_direction != direction)
+    ):
+        return result | dict(reason="FACTOR_RELATIONSHIP_UNCERTAIN")
+    result.update(
+        htf_factor_direction="BULLISH" if direction > 0 else "BEARISH",
+        htf_factor_strength=btc.get("efficiency"),
+        timeframe=context_tf,
+        factor=factor,
+        factor_timeframes=[context_tf],
+    )
+    setup_regime = regimes.get(setup_tf, {}).get("btc", {}).get("regime")
+    execution_regime = regimes.get(execution_tf, {}).get("btc", {}).get("regime")
+    setup_direction = {"trending up": 1, "trending down": -1}.get(setup_regime, 0)
+    execution_direction = {"trending up": 1, "trending down": -1}.get(execution_regime, 0)
+    pullback = setup_direction == direction and execution_direction == -direction
+    if (
+        setup_direction == -direction
+        and regimes.get(setup_tf, {}).get("btc", {}).get("efficiency", 0) >= 0.35
+    ):
+        result["timeframe_context"] = "FACTOR_REGIME_TRANSITION"
+    elif pullback:
+        result["timeframe_context"] = "HTF_TREND_WITH_LTF_PULLBACK"
+    elif execution_direction == -direction:
+        result["timeframe_context"] = "HTF_TREND_WITH_LTF_REVERSAL_ATTEMPT"
+    if sign == direction:
+        state = (
+            "FACTOR_REGIME_TRANSITION"
+            if result.get("timeframe_context") == "FACTOR_REGIME_TRANSITION"
+            else "HTF_TREND_WITH_LTF_PULLBACK"
+            if pullback
+            else "MARKET_ALIGNED"
+        )
+        return result | dict(alignment=state, market_alignment_state=state)
+    if signal.horizon_profile not in INTRADAY:
+        return result | dict(alignment="MARKET_NEUTRAL", market_alignment_state="MARKET_NEUTRAL")
+    flow = signal.evidence.get("flow", {})
+    quality = flow.get("quality", {})
+    auction = signal.evidence.get("auction", {})
+    profile = signal.evidence.get("volume_profile", {})
+    residual = sign * factor.get("residual_btc", factor.get("residual_return", 0))
+    expected = abs(factor.get("expected_return_btc", 0))
+    threshold = max(0.0015, 0.75 * expected)
+    support = flow_support(flow, sign, response)
+    price_response = (
+        sign * quality.get("price_displacement_bps", 0) >= 3
+        or quality.get("flow_quality_state") == "GENUINE_ABSORPTION"
+        and response
+    )
+    acceptance = bool(
+        response
+        and (
+            auction.get("acceptance_above" if sign > 0 else "acceptance_below")
+            or profile.get("acceptance") == ("ABOVE_VALUE" if sign > 0 else "BELOW_VALUE")
+            or profile.get("value_migration_direction") == ("UP" if sign > 0 else "DOWN")
+        )
+    )
+    part = participation(signal.evidence.get("session_metrics", {}), sign, 0.70, True)
+    trusted_participation = part["passed"] if part["mode"] == "PERCENTILE" else True
+    passed = bool(
+        residual > threshold
+        and support["strong"]
+        and price_response
+        and acceptance
+        and trusted_participation
+        and (quality.get("flow_trust_score") or 0) >= 0.6
+        and quality.get("flow_quality_state") != "REPETITIVE_TWO_SIDED_CHURN"
+    )
+    state = "IDIOSYNCRATIC_DIVERGENCE" if passed else "MARKET_CONTRARIAN_WEAK"
+    result.update(
+        alignment=state,
+        market_alignment_state=state,
+        blocked=not passed,
+        reason=None if passed else "HTF_MARKET_CONFLICT_WITHOUT_STRONG_DIVERGENCE",
+        reasons=[] if passed else ["HTF_MARKET_CONFLICT_WITHOUT_STRONG_DIVERGENCE"],
+        directional_residual=residual,
+        residual_threshold=threshold,
+        contrarian_override_passed=passed,
+        flow=support,
+        price_response=price_response,
+        auction_acceptance=acceptance,
+        participation=part,
+        cross_venue_support=signal.evidence.get("cross_exchange", {}).get(
+            "cross_venue_trusted_flow_agreement"
+        ),
+    )
+    return result
+
+
 def evaluate_intraday_confirmation(signal, flow, bars, asof, alignment=None):
     sign = 1 if signal.direction == "LONG" else -1
     response = structure_response(signal, bars, asof)
     support = flow_support(flow, sign, response)
     metrics = signal.evidence.get("session_metrics", {})
-    part = participation(metrics, sign, 0.60)
+    part = participation(metrics, sign, 0.60, ":flow-quality-v1" in signal.version)
     part_ok = part["passed"] if part["mode"] == "PERCENTILE" else support["raw_fallback"]
     profile = signal.evidence.get("volume_profile", {})
     valid_profile = (
@@ -319,11 +461,18 @@ def evaluate_intraday_confirmation(signal, flow, bars, asof, alignment=None):
         and profile.get("available_ms", asof + 1) <= asof
         and profile.get("end_ms", asof + 1) <= asof
     )
+    trusted_profile = ":flow-quality-v1" in signal.version
     profile_ok = bool(
         valid_profile
+        and (profile.get("profile_confidence") == "HIGH" if trusted_profile else True)
         and (
-            profile.get("rejection_low" if sign > 0 else "rejection_high")
-            or profile.get("excess_low" if sign > 0 else "excess_high")
+            profile.get(
+                ("effective_" if trusted_profile else "")
+                + ("rejection_low" if sign > 0 else "rejection_high")
+            )
+            or profile.get(
+                ("effective_" if trusted_profile else "") + ("excess_low" if sign > 0 else "excess_high")
+            )
             or profile.get("value_migration_direction") == ("UP" if sign > 0 else "DOWN")
         )
     )
@@ -341,7 +490,10 @@ def evaluate_intraday_confirmation(signal, flow, bars, asof, alignment=None):
         passed = passed and hold_ok and profile_ok
     reasons = [] if passed else ["UNCONFIRMED_LIQUIDITY_SWEEP"]
     if not factor_ok:
-        reasons.append("CONTRARIAN_EVIDENCE_INSUFFICIENT")
+        reasons.append((alignment or {}).get("reason") or "CONTRARIAN_EVIDENCE_INSUFFICIENT")
+    if trusted_profile and (flow.get("quality", {}).get("flow_trust_score") or 0) < 0.6:
+        passed = False
+        reasons.append("LOW_INFORMATION_EXECUTED_FLOW")
     return dict(
         policy="intraday-confirmation-v2",
         passed=passed,

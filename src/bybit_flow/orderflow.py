@@ -62,7 +62,7 @@ class Book:
 
     def fresh(self, now, max_age=5000):
         return (
-            self.valid and 0 <= now - self.receipt_ms <= max_age and -1000 <= now - self.event_ms <= max_age
+            self.valid and 0 <= now - self.receipt_ms <= max_age and -2000 <= now - self.event_ms <= max_age
         )
 
     def impact(self, side, notional):

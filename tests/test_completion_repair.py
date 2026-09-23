@@ -18,7 +18,7 @@ from bybit_flow.ml.registry import Registry
 from bybit_flow.ml.store import canonical, digest
 from bybit_flow.models import Trade
 from bybit_flow.native_streams import NativeStreams
-from bybit_flow.orderflow import Tape
+from bybit_flow.orderflow import Book, Tape
 from bybit_flow.storage import Store, now_ms
 from bybit_flow.thesis_health import evaluate
 
@@ -49,7 +49,7 @@ async def test_original_bybit_lifecycle_with_binance_primary(settings, signal):
     assert signal.symbol in original.required_symbols
     result = store.db.execute("SELECT state FROM signals WHERE id=?", (signal.id,)).fetchone()[0]
     assert result == "INVALIDATED"
-    assert store.get("active_lifecycle")["monitor_ready"] == 1
+    assert store.get("active_lifecycle")["feed_stale"] == 1
     store.close()
 
 
@@ -85,7 +85,8 @@ def test_two_stage_immaturity_trains_real_baseline(settings, signal, monkeypatch
     settings.ml_two_stage = True
     store.db.execute("INSERT INTO segments VALUES('test',0,'{}')")
     store.db.commit()
-    store.put("active_exchange", {"current": signal.source})
+    store.put("active_exchange", {"current": "okx"})
+    store.put("runtime_health", dict(at_ms=now_ms(), source=signal.source))
     store.put("ml_monitor", {"last_success_ms": now_ms()})
     path = settings.data_dir / "software-test.parquet"
     pq.write_table(pa.Table.from_pylist([{"payload": canonical(row)} for row in dataset(signal)]), path)
@@ -94,6 +95,7 @@ def test_two_stage_immaturity_trains_real_baseline(settings, signal, monkeypatch
     assert Registry(store).get(ident)["model"]["kind"] in {"logistic", "lightgbm"}
     assert store.get("ml_training_mode")["kinds"] == ["logistic", "lightgbm"]
     assert store.get("ml_training_mode")["sequences_ready"] == 0
+    assert store.get("ml_training_mode")["source"] == signal.source
     store.close()
 
 
@@ -192,3 +194,7 @@ async def test_failed_probe_cannot_override_live_persistent_feed(settings, monke
 def test_probe_accepts_bounded_skew_not_stale_transport(event_age, receipt_age, skew, expected):
     trade = SimpleNamespace(event_ms=100000 - event_age, receipt_ms=100000 - receipt_age)
     assert probe_freshness(trade, 100000, 10000, skew) is expected
+    book = Book()
+    book.valid = True
+    book.event_ms, book.receipt_ms = trade.event_ms, trade.receipt_ms
+    assert book.fresh(100000, 10000) is expected

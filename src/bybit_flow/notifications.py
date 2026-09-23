@@ -109,6 +109,40 @@ def embed(signal, dashboard_url):
 
         field("Setup", summary)
 
+        alignment = s.evidence.get("market_alignment", {})
+        if alignment.get("alignment") == "IDIOSYNCRATIC_DIVERGENCE":
+            prior = alignment.get("htf_factor_direction", "uncertain").lower()
+            timeframe = alignment.get("timeframe", s.context_timeframe)
+            field(
+                "Market context",
+                f"BTC {timeframe}M: {prior} · {s.direction} against market trend\n"
+                "Override: idiosyncratic divergence",
+            )
+            reasons = [
+                "beta-adjusted relative move",
+                "trusted persistent executed flow",
+                "price response",
+                "acceptance beyond structure or value",
+            ]
+            if alignment.get("cross_venue_support"):
+                reasons.append("trusted cross-venue support")
+            field("Why override passed", " · ".join(reasons))
+        local_quality = s.evidence.get("flow_quality", {})
+        if local_quality.get("flow_trust_score") is not None and local_quality["flow_trust_score"] < 0.6:
+            cross = s.evidence.get("cross_exchange", {})
+            if cross.get("cross_venue_trusted_flow_agreement"):
+                field(
+                    "Flow quality",
+                    "MIXED LOCAL / CONFIRMED CROSS-VENUE · local printed volume was de-emphasized",
+                )
+            else:
+                detail = (
+                    "repetitive two-sided prints had weak price or book response"
+                    if local_quality.get("flow_quality_state") == "REPETITIVE_TWO_SIDED_CHURN"
+                    else "local printed volume did not provide trusted directional evidence"
+                )
+                field("Flow quality", "LOW · " + detail)
+
         if s.horizon_profile != "LEGACY":
             a, f, d, market, execution = (
                 s.evidence.get(k, {})

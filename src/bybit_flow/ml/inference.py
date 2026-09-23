@@ -16,12 +16,7 @@ def compatibility_reasons(model, signal, row, now, registry):
         reasons.append("feature schema changed; retraining required")
     if now < model.get("created_ms", now + 1):
         reasons.append("model was not available at this decision timestamp")
-    chart = (
-        model.get("stage") == "chart"
-        and signal.source == "tradingview"
-        and not signal.coverage.get("liquidity_observed")
-    )
-    if model.get("source") != signal.source or (model.get("stage") != "decision" and not chart):
+    if model.get("source") != signal.source or model.get("stage") != "decision":
         reasons.append("model source/stage does not match this candidate")
     if signal.version not in model.get("strategy_versions", []):
         reasons.append("strategy version not covered by this model")

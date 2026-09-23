@@ -229,21 +229,6 @@ async def test_quote_refresh_does_not_refresh_old_funding(settings):
         store.close()
 
 
-def test_legacy_gateway_never_calls_binance_tape_bybit(settings):
-    from types import SimpleNamespace
-
-    from bybit_flow.tradingview import Gateway
-
-    store = Store(settings.data_dir)
-    try:
-        gateway = Gateway(settings, store)
-        gateway.scanner = SimpleNamespace(exchange="binance")
-        liquidity, evidence = gateway.native_observations(None)
-        assert liquidity is None and not evidence["available"]
-    finally:
-        store.close()
-
-
 async def test_diagnostics_and_nontrade_discord(tmp_path):
     settings = Settings(data_dir=tmp_path, research_webhook="https://discord.com/api/webhooks/test/SECRET")
     store = Store(tmp_path)

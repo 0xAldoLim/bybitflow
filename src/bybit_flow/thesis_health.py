@@ -70,8 +70,14 @@ def evaluate(signal, observation, previous, now):
     if not observation.get("coverage_complete"):
         return result | dict(state="DEGRADED", reasons=["Insufficient live evidence"], adverse_since_ms=None)
     flow = observation.get("flow", {})
+    quality = flow.get("quality", {})
+    trusted_flow = "quality" not in flow or (
+        quality.get("flow_trust_score") is not None and quality["flow_trust_score"] >= 0.6
+    )
+    low_information_flow = quality.get("flow_quality_state") == "REPETITIVE_TWO_SIDED_CHURN"
     adverse_flow = (
-        sign * flow.get("delta_pct", 0) <= -20
+        trusted_flow
+        and sign * flow.get("delta_pct", 0) <= -20
         and sign * flow.get("cvd_slope", 0) < 0
         and flow.get("delta_persistence", 0) >= 0.75
     )
@@ -91,7 +97,7 @@ def evaluate(signal, observation, previous, now):
             state="HARD_FAILURE", withdraw=True, reason="STRUCTURAL_FAILURE", structure_health="HARD_FAILURE"
         )
     result.update(
-        flow_health="DEGRADED" if adverse_flow else "HEALTHY",
+        flow_health="DEGRADED" if adverse_flow or low_information_flow else "HEALTHY",
         liquidity_health="DEGRADED" if adverse_book else "HEALTHY",
         structure_health="DEGRADED" if structural else "HEALTHY",
         auction_health=observation.get("auction_health", "UNAVAILABLE"),

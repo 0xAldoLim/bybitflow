@@ -7,7 +7,11 @@ def stream_counts(streams, symbols, settings, now):
         book = streams.books.get(symbol) if streams else None
         tape = streams.tapes.get(symbol) if streams else None
         book_fresh = bool(book and book.fresh(now, settings.book_stale_ms))
-        tape_fresh = bool(tape and 0 <= now - tape.last_receipt <= settings.trade_stale_ms)
+        tape_fresh = bool(
+            tape
+            and 0 <= now - tape.last_receipt <= settings.trade_stale_ms
+            and -2000 <= now - tape.last_event <= settings.trade_stale_ms
+        )
         alive += int(book_fresh or tape_fresh)
         fresh += int(book_fresh and tape_fresh)
     return dict(total=len(set(symbols)), alive=alive, fresh=fresh)

@@ -19,7 +19,12 @@ def cycle(settings, store):
 
     if not store.db.execute("SELECT 1 FROM segments LIMIT 1").fetchone():
         raise ValueError("No verified real recording segments; weekly training abstains")
-    source = store.get("active_exchange", {}).get("current") or store.get("scanner", {}).get("exchange")
+    runtime = store.get("runtime_health", {})
+    source = (
+        (runtime.get("source") if 0 <= now_ms() - runtime.get("at_ms", 0) <= 90000 else None)
+        or store.get("active_exchange", {}).get("current")
+        or store.get("scanner", {}).get("exchange")
+    )
     if source not in {"bybit", "binance", "okx"}:
         raise ValueError("No recorded active venue for source-specific training")
     # Materialize causal outcomes before choosing a model family. Missing LSTM
@@ -136,11 +141,6 @@ def run(arguments, settings, store):
     export = sub.add_parser("export")
     export.add_argument("--stage", choices=("generation", "decision"), default="decision")
     export.add_argument("--source", choices=("binance", "bybit", "okx", "tradingview"))
-    chart = sub.add_parser("chart-label")
-    chart.add_argument("events", type=Path)
-    chart.add_argument("candles", type=Path)
-    chart.add_argument("--symbol", required=True)
-    sub.add_parser("chart-export")
     train = sub.add_parser("train")
     train.add_argument("dataset", type=Path)
     train.add_argument(
@@ -169,12 +169,6 @@ def run(arguments, settings, store):
         from .labels import label_recordings
 
         result = label_recordings(store, segment_rows(args.paths), settings, args.stage)
-    elif args.command == "chart-label":
-        from .labels import label_chart
-
-        result = label_chart(store, args.events, args.candles, settings, args.symbol)
-    elif args.command == "chart-export":
-        result = str(FeatureStore(store).export(now_ms(), policy="chart-v1", stage="chart"))
     elif args.command == "export":
         result = str(FeatureStore(store).export(now_ms(), stage=args.stage, source=args.source))
     elif args.command == "train":

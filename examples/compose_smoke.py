@@ -34,7 +34,6 @@ def main():
                                 "FLOW_OPS_WEBHOOK": "",
                                 "FLOW_RESEARCH_ALERTS": "false",
                                 "FLOW_SSS_RESEARCH": "false",
-                                "FLOW_TV_ENABLED": "false",
                                 "FLOW_ML_ENABLED": "false",
                             }
                         }

@@ -107,6 +107,38 @@ CATALOG.update(
         ),
     }
 )
+for _key in (
+    "flow_trust_score",
+    "gross_notional",
+    "effective_gross_notional",
+    "effective_volume_ratio",
+    "net_to_gross_ratio",
+    "aggressor_side_alternation_rate",
+    "same_price_alternation_rate",
+    "same_size_repeat_ratio",
+    "mirror_pair_ratio",
+    "size_entropy",
+    "size_concentration",
+    "impact_persistence",
+    "book_response_consistency",
+    "raw_vs_effective_profile_shift",
+):
+    CATALOG[_key] = (
+        "orderflow",
+        "evidence.flow.quality." + _key,
+        "Causal flow-quality-v1 decision-window observation",
+    )
+CATALOG["cross_venue_trusted_flow_agreement"] = (
+    "cross_market",
+    "evidence.cross_exchange.cross_venue_trusted_flow_agreement",
+    "Two causally aligned venues with trusted effective delta direction",
+)
+for _key in ("htf_factor_strength", "directional_residual", "contrarian_override_passed"):
+    CATALOG[_key] = (
+        "market_alignment",
+        "evidence.market_alignment." + _key,
+        "Causal higher-timeframe market prior at decision time",
+    )
 
 CONTEXT = (
     "family",
@@ -117,6 +149,9 @@ CONTEXT = (
     "score_profile",
     "horizon_profile",
     "entry_session",
+    "flow_quality_state",
+    "market_alignment_state",
+    "htf_factor_direction",
 )
 for _group, _fields in {
     "range": ("location", "width_atr", "compression", "boundary_interactions", "breakout_distance_atr"),
@@ -199,33 +234,6 @@ for _category in (
         "quality",
         "evidence.score_components." + _category + ".earned",
         "Frozen earned category points",
-    )
-
-# Source-specific fields; TV classified volumes never populate native buy_base/sell_base.
-for _key in (
-    "regime_slope_atr",
-    "regime_efficiency",
-    "atr",
-    "buy_volume",
-    "sell_volume",
-    "level",
-    "setup_low",
-    "setup_high",
-    "setup_close",
-    "bos_level",
-    "fvg_low",
-    "fvg_high",
-    "turnover_median_7d",
-    "continuous_days",
-):
-    CATALOG["tv_" + _key] = (
-        "orderflow"
-        if _key in {"buy_volume", "sell_volume"}
-        else "smc"
-        if _key in {"level", "setup_low", "setup_high", "setup_close", "bos_level", "fvg_low", "fvg_high"}
-        else "regime",
-        "evidence.observations." + _key,
-        "TradingView source-attested Observation." + _key + "; see Pine tv-1 definition",
     )
 
 
@@ -319,7 +327,15 @@ def snapshot(signal, decision_ms, stage, membership=None):
             missing=value is None,
         )
     for key in CONTEXT:
-        values[key] = getattr(signal, key, None)
+        values[key] = (
+            signal.evidence.get("flow", {}).get("quality", {}).get("flow_quality_state")
+            if key == "flow_quality_state"
+            else signal.evidence.get("market_alignment", {}).get("market_alignment_state")
+            if key == "market_alignment_state"
+            else signal.evidence.get("market_alignment", {}).get("htf_factor_direction")
+            if key == "htf_factor_direction"
+            else getattr(signal, key, None)
+        )
     values["liquidity_bucket"] = "observed" if membership and membership["eligible"] else "unknown"
     values["score_profile"] = signal.evidence.get("score_profile", "unscored")
     for key in CONTEXT:

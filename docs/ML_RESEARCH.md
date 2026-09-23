@@ -94,10 +94,9 @@ Exports are limited to 10,000 rows, 128 MB Parquet files, and 256 MB uncompresse
 groups. The worker rescans retained segments; incremental checkpoints are not
 implemented. Large histories require capacity planning.
 
-The [chart compatibility API](TRADINGVIEW_SETUP.md) supports separate `chart-v1`
-labels from recorded chart events and actual OHLC data. Chart classifications do
-not substitute for native execution observations. Manual journal outcomes are not
-automatically imported into training.
+Historical `chart-v1` rows remain readable for audit, but TradingView ingestion and
+new chart labels are retired. Manual journal outcomes are not automatically imported
+into training.
 
 Datasets, recordings, models, audit files, and failed experiments belong in persistent
 research storage, outside Git. See [operations](OPERATIONS.md) for backup and restore.

@@ -5,10 +5,112 @@ import json
 import shutil
 import tempfile
 from importlib.metadata import version
+from statistics import median
 
 from .exchanges import VENUES, market_probe
 from .notifications import Notifier, iso
 from .storage import now_ms
+
+
+def flow_quality_status(store, settings, at_ms):
+    """Summarize retained causal windows without treating prints as venue reputation."""
+    names = {
+        "INFORMATIVE_DIRECTIONAL_FLOW": "informative_pct",
+        "GENUINE_ABSORPTION": "absorption_pct",
+        "NORMAL_TWO_SIDED_AUCTION": "normal_auction_pct",
+        "LOW_INFORMATION_VOLUME": "low_information_pct",
+        "REPETITIVE_TWO_SIDED_CHURN": "repetitive_churn_pct",
+        "LIQUIDITY_DRIVEN_REPRICING": "liquidity_repricing_pct",
+    }
+    windows = {}
+    for key, payload in store.db.execute(
+        "SELECT key,payload FROM kv WHERE key LIKE 'flow-quality-baseline-v1:%'"
+    ):
+        parts = key.split(":")
+        if len(parts) != 5:
+            continue
+        venue, symbol = parts[1:3]
+        for row in json.loads(payload):
+            end = row.get("window_end_ms", 0)
+            if 0 <= at_ms - end <= 3_600_000:
+                windows.setdefault((venue, symbol, end), row | {"venue": venue})
+
+    def aggregate(rows):
+        rows = list(rows)
+        return dict(
+            windows_1h=len(rows),
+            **{
+                label: round(100 * sum(r.get("flow_quality_state") == state for r in rows) / len(rows), 1)
+                if rows
+                else 0.0
+                for state, label in names.items()
+            },
+            median_flow_trust=median(
+                r["flow_trust_score"] for r in rows if r.get("flow_trust_score") is not None
+            )
+            if any(r.get("flow_trust_score") is not None for r in rows)
+            else None,
+            median_effective_volume_ratio=median(
+                r["effective_volume_ratio"] for r in rows if r.get("effective_volume_ratio") is not None
+            )
+            if any(r.get("effective_volume_ratio") is not None for r in rows)
+            else None,
+        )
+
+    rows = list(windows.values())
+    feeds = {name: [] for name in VENUES}
+    for key, payload in store.db.execute("SELECT key,payload FROM kv WHERE key LIKE 'feed:%'"):
+        parts = key.split(":", 2)
+        if len(parts) == 3 and parts[1] in feeds:
+            row = json.loads(payload)
+            if 0 <= at_ms - row.get("at_ms", 0) <= 60_000:
+                feeds[parts[1]].append(row)
+    prices = {name: [] for name in VENUES}
+    for _, payload in store.db.execute("SELECT key,payload FROM kv WHERE key LIKE 'cross:%'"):
+        row = json.loads(payload)
+        if not row.get("available") or not 0 <= at_ms - row.get("receipt_ms", 0) <= 60_000:
+            continue
+        for name in row.get("exchanges", []):
+            if name in prices:
+                prices[name].append(row.get("price_dislocation_bps", float("inf")) <= 10)
+    venue = {}
+    for name in VENUES:
+        scoped = [r for r in rows if r["venue"] == name]
+        measured = feeds[name]
+
+        def fraction(predicate):
+            return round(sum(predicate(row) for row in measured) / len(measured), 3) if measured else None
+
+        venue[name] = dict(
+            **aggregate(scoped),
+            stream_integrity=fraction(lambda row: row.get("status") == "HEALTHY"),
+            book_continuity=fraction(
+                lambda row: 0 <= at_ms - row.get("book_event_ms", 0) <= settings.book_stale_ms
+            ),
+            trade_freshness=fraction(
+                lambda row: -2000 <= at_ms - row.get("trade_event_ms", 0) <= settings.trade_stale_ms
+            ),
+            cross_venue_price_consistency=(
+                round(sum(prices[name]) / len(prices[name]), 3) if prices[name] else None
+            ),
+        )
+    states = {
+        "MARKET_ALIGNED": "aligned",
+        "MARKET_NEUTRAL": "neutral",
+        "HTF_TREND_WITH_LTF_PULLBACK": "htf_pullback",
+        "MARKET_CONTRARIAN_WEAK": "contrarian_weak_blocked",
+        "IDIOSYNCRATIC_DIVERGENCE": "idiosyncratic_divergence",
+        "FACTOR_REGIME_TRANSITION": "regime_transition",
+        "FACTOR_RELATIONSHIP_UNCERTAIN": "uncertain",
+    }
+    history = [
+        r for r in store.get("market-alignment-history-v3", []) if 0 <= at_ms - r.get("at_ms", 0) <= 3_600_000
+    ]
+    alignment = {
+        label: sum(r.get("state") == state or r.get("timeframe_context") == state for r in history)
+        for state, label in states.items()
+    }
+    return aggregate(rows), venue, alignment
 
 
 async def doctor(settings, store, network=True):
@@ -17,7 +119,6 @@ async def doctor(settings, store, network=True):
         "status": "OK",
         "market_source": settings.market_source,
         "alerts_only": True,
-        "tradingview_required": False,
     }
     checks["database"] = {
         "status": "OK" if store.db.execute("SELECT 1").fetchone()[0] == 1 else "FAIL",
@@ -85,6 +186,9 @@ async def doctor(settings, store, network=True):
     checks["probe_health"] = {name: checks[name] for name in names}
     checks["primary_persistent_stream_health"] = runtime.get("primary_persistent_stream_health", {})
     checks["active_lifecycle_stream_health"] = runtime.get("active_lifecycle_stream_health", {})
+    checks["flow_quality"], checks["venue_flow_quality"], checks["market_alignment_1h"] = flow_quality_status(
+        store, settings, now_ms()
+    )
     checks["market_stream"]["reconnecting"] = not checks["market_stream"]["connected"]
     for key in (
         "selected_streams_total",
