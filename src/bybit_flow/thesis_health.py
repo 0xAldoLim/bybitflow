@@ -102,6 +102,10 @@ def evaluate(signal, observation, previous, now):
     )
     adverse_auction = result["auction_health"] == "DEGRADED"
     adverse_factor = result["factor_health"] == "DEGRADED"
+    secondary = sum(
+        result[key + "_health"] == "DEGRADED"
+        for key in ("derivatives", "cross_venue", "volatility_liquidity")
+    )
     if higher and not structural:
         # Short-term tape is contextual only. Higher horizons need sustained
         # value/acceptance deterioration with independent factor evidence.
@@ -134,7 +138,12 @@ def evaluate(signal, observation, previous, now):
     result.update(state="DEGRADED", adverse_since_ms=since)
     new_window = observation.get("window_end_ms", 0) > previous.get("observation", {}).get("window_end_ms", 0)
     if (
-        (structural and adverse_book or adverse_auction and adverse_factor)
+        (
+            structural
+            and (adverse_book or secondary >= 1)
+            or adverse_auction
+            and (adverse_factor or secondary >= 2)
+        )
         and now - since >= hold
         and new_window
     ):

@@ -429,6 +429,11 @@ class VenueAPI:
             await self.bybit.close()
 
 
+def probe_freshness(trade, now, stale_limit, clock_skew_ms=0):
+    tolerance = min(5000, max(2000, -clock_skew_ms + 250))
+    return 0 <= now - trade.receipt_ms <= stale_limit and -tolerance <= now - trade.event_ms <= stale_limit
+
+
 async def market_probe(name, settings, timeout=12):
     """Independent REST + public trade WS tests. Never calls private APIs or writes candidates."""
     api = VenueAPI(name, settings)
@@ -484,7 +489,12 @@ async def market_probe(name, settings, timeout=12):
                             continue
                         age = now_ms() - trade.event_ms
                         report.update(
-                            ws="HEALTHY" if -1000 <= age <= settings.trade_stale_ms else "STALE",
+                            ws="HEALTHY"
+                            if probe_freshness(
+                                trade, now_ms(), settings.trade_stale_ms, report.get("clock_skew_ms", 0)
+                            )
+                            else "STALE",
+                            receipt_freshness_ms=now_ms() - trade.receipt_ms,
                             symbol=trade.symbol,
                             public_trade_price=str(trade.price),
                             freshness_ms=age,

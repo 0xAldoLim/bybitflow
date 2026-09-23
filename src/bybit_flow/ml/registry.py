@@ -172,20 +172,26 @@ class Registry:
     def cached_summary(self):
         """Operator views use the worker's summary, never a full label scan."""
         cached = self.store.get("ml_summary_cache", {})
-        return cached | dict(
-            summary_status="CACHED" if cached else "AWAITING_WORKER_SUMMARY",
-            models=cached.get("models", []),
-            champion=self.store.get("ml_champion"),
-            pipeline=self.store.get("ml_pipeline"),
-            monitoring=self.store.get("ml_monitor"),
-            cycle=self.store.get("ml_cycle"),
-            horizon_model=self.store.get("horizon_model"),
-            score_profile_research=self.store.get("score_profile_research"),
-            swing_stop_study=self.store.get("swing_stop_study"),
-            confirmation_policy_research=self.store.get("confirmation_policy_research"),
-            replay_progress=self.store.get("ml_replay_progress"),
-            recording_audit=self.store.get("ml_recordings"),
-            learning_note="Training uses complete independent outcomes and chronological validation; no automatic promotion.",
+        from .operations import status
+
+        return (
+            cached
+            | status(self.store, cached)
+            | dict(
+                summary_status="CACHED" if cached else "AWAITING_WORKER_SUMMARY",
+                models=cached.get("models", []),
+                champion=self.store.get("ml_champion"),
+                pipeline=self.store.get("ml_pipeline"),
+                monitoring=self.store.get("ml_monitor"),
+                cycle=self.store.get("ml_cycle"),
+                horizon_model=self.store.get("horizon_model"),
+                score_profile_research=self.store.get("score_profile_research"),
+                swing_stop_study=self.store.get("swing_stop_study"),
+                confirmation_policy_research=self.store.get("confirmation_policy_research"),
+                replay_progress=self.store.get("ml_replay_progress"),
+                recording_audit=self.store.get("ml_recordings"),
+                learning_note="Training uses complete independent outcomes and chronological validation; no automatic promotion.",
+            )
         )
 
     def summary(self):
@@ -200,7 +206,7 @@ class Registry:
                     "promotion_reasons": promotion_reasons(m),
                 }
             )
-        return dict(
+        result = dict(
             pipeline=self.store.get("ml_pipeline"),
             score_profile_research=self.store.get("score_profile_research"),
             swing_stop_study=self.store.get("swing_stop_study"),
@@ -238,3 +244,6 @@ class Registry:
             ).fetchone()[0],
             history=[dict(r) for r in self.db.execute("SELECT * FROM ml_history ORDER BY id DESC LIMIT 100")],
         )
+        from .operations import status
+
+        return result | status(self.store, result)

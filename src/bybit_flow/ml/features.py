@@ -128,6 +128,13 @@ for _group, _fields in {
         "cvd_slope",
         "cvd_acceleration",
         "same_side_run",
+        "signed_aggressor_notional",
+        "directional_price_change",
+        "impact_per_signed_notional",
+        "flow_efficiency",
+        "impact_persistence",
+        "absorption_ratio",
+        "reversal_after_flow",
     ),
     "book": ("obi_touch", "obi_5bps", "obi_10bps", "obi_25bps", "obi_persistence", "microprice_minus_mid"),
     "market_factor": (

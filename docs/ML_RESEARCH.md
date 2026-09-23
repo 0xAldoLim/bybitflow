@@ -104,6 +104,14 @@ research storage, outside Git. See [operations](OPERATIONS.md) for backup and re
 
 ## Two-stage outcome models
 
+When two-stage mode is enabled but fewer than 500 compatible complete sequences are
+available, the worker attempts the Logistic Regression/LightGBM tabular baseline.
+Chronological partitions and class requirements remain unchanged. Feature schema
+`candidate-v7` adds the existing causal flow-response fields; historical snapshots
+remain immutable and incompatible schemas are not silently pooled for training.
+Advisory inference skips incompatible or degraded artifacts. Models are never
+automatically promoted, and deterministic setup scores are not replaced by ML scores.
+
 Set `FLOW_ML_ENABLED=true` and `FLOW_ML_TWO_STAGE=true` to collect causal sequences
 and run the two-stage research pipeline. Stage one uses LightGBM, Random Forest
 and a CPU LSTM. Stage two compares Logistic Regression, an RBF SVM, and Random

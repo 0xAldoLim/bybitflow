@@ -163,9 +163,17 @@ fills are excluded. It does not read a personal trading account or know actual f
 
 **Enabling ML starts collection and background processing, not an instantly trained
 model.** Two-stage training requires at least 500 complete sequence-labelled outcomes,
-plus enough data and both outcome classes in each partition. Readiness is checked
+plus enough data and both outcome classes in each partition. Below that sequence
+threshold, the worker attempts a Logistic Regression/LightGBM baseline using complete
+tabular outcomes. The baseline still requires chronological training, calibration,
+validation and holdout partitions; incomplete outcomes never count. Readiness is checked
 every 15 minutes; successful training cycles remain weekly. New models remain research
 candidates until reviewed. There is no automatic promotion to validated probability.
+
+Advisory inference selects the newest compatible, non-degraded challenger when no
+compatible champion is available. `doctor` and `ml status` report the worker heartbeat,
+training mode, complete outcomes, recent predictions and abstention reasons. No model
+means deterministic confirmed alerts continue, with ML explicitly abstaining.
 
 With `FLOW_ML_FILTER_RESEARCH=false`, an unavailable or untrained model does not
 block otherwise confirmed Discord research signals. See [ML research](docs/ML_RESEARCH.md)

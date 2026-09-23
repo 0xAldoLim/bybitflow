@@ -46,6 +46,7 @@ async def test_one_stale_symbol_does_not_reset_other_native_feeds(monkeypatch):
     scanner.pending_symbols = lambda: []
     scanner.settings = SimpleNamespace(market_source="auto", scan_enabled=True)
     scanner.store = Mock()
+    scanner.store.active_signals.return_value = []
     scanner.api = SimpleNamespace(name="binance")
     scanner.recorder = SimpleNamespace(healthy=True, reason="ready")
     scanner.status = {"state": "collecting"}
@@ -55,6 +56,7 @@ async def test_one_stale_symbol_does_not_reset_other_native_feeds(monkeypatch):
     streams = NativeStreams.__new__(NativeStreams)
     streams.selection_lock = asyncio.Lock()
     streams.tapes = {}
+    streams.books = {}
     streams.selected = ("BTCUSDT", "QUIETUSDT")
     streams.connected_for = lambda symbol: symbol == "BTCUSDT"
     streams.select = AsyncMock()

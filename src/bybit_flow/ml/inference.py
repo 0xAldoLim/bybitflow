@@ -10,6 +10,55 @@ from .store import FeatureStore
 from .validation import accepted
 
 
+def compatibility_reasons(model, signal, row, now, registry):
+    reasons = []
+    if model.get("feature_schema_version") != row.get("schema_version", signal.feature_schema_version):
+        reasons.append("feature schema changed; retraining required")
+    if now < model.get("created_ms", now + 1):
+        reasons.append("model was not available at this decision timestamp")
+    chart = (
+        model.get("stage") == "chart"
+        and signal.source == "tradingview"
+        and not signal.coverage.get("liquidity_observed")
+    )
+    if model.get("source") != signal.source or (model.get("stage") != "decision" and not chart):
+        reasons.append("model source/stage does not match this candidate")
+    if signal.version not in model.get("strategy_versions", []):
+        reasons.append("strategy version not covered by this model")
+    for key, vocabulary in model.get("contexts", {}).items():
+        if row["values"].get(key) not in vocabulary:
+            reasons.append("unseen model context: " + key)
+    if row["data_coverage"] < model.get("minimum_coverage", 1):
+        reasons.append("required training feature coverage lost")
+    if any(row["values"].get(key) is None for key in model.get("required_features", [])):
+        reasons.append("a normally present model feature is missing")
+    if now - model.get("periods", {}).get("holdout", {}).get("end", 0) > 90 * 86400000:
+        reasons.append("model evidence older than 90 days")
+    if registry.is_degraded(model["id"]):
+        reasons.append("model degraded")
+    if model.get("model", {}).get("kind", "").startswith("two_stage_") and len(row.get("sequence", [])) != 16:
+        reasons.append("required sequence unavailable")
+    return reasons
+
+
+def select_compatible(registry, signal, row, now):
+    champion = registry.store.get("ml_champion")
+    ids = ([champion] if champion else []) + [
+        r[0] for r in registry.db.execute("SELECT id FROM ml_models ORDER BY created_ms DESC")
+    ]
+    skipped = []
+    for ident in dict.fromkeys(ids):
+        try:
+            model = registry.get(ident)
+            reasons = compatibility_reasons(model, signal, row, now, registry)
+        except (ValueError, KeyError, TypeError):
+            reasons = ["unreadable or corrupt artifact"]
+        if not reasons:
+            return model, ident == champion, skipped
+        skipped.append(dict(model_id=ident, reasons=reasons))
+    return None, False, skipped
+
+
 def apply(signal, settings, store, at_ms=None):
     # Never retain yesterday's probability/approval while reassessing a plan or disabling ML.
     if signal.validation_status == "validated":
@@ -29,46 +78,33 @@ def apply(signal, settings, store, at_ms=None):
     row = json.loads(store.db.execute("SELECT payload FROM ml_snapshots WHERE id=?", (ident,)).fetchone()[0])
     signal.data_coverage = row["data_coverage"]
     try:
-        champion = registry.champion()
-        latest = store.db.execute("SELECT id FROM ml_models ORDER BY created_ms DESC LIMIT 1").fetchone()
-        model = champion or (registry.get(latest[0]) if latest else None)
+        model, champion, skipped = select_compatible(registry, signal, row, now)
+        store.put(
+            "ml_advisory_status",
+            dict(
+                at_ms=now,
+                signal_id=signal.id,
+                source=signal.source,
+                compatible_challenger=model["id"] if model else None,
+                skipped=skipped[:10],
+            ),
+        )
         if not model:
-            signal.qualification["ml_reason"] = "No trained model; deterministic research only"
+            signal.validation_status = "abstained" if skipped else "unvalidated"
+            signal.qualification["ml_reason"] = (
+                "; ".join(skipped[0]["reasons"])
+                if skipped
+                else "No trained model; deterministic research only"
+            )
+            from .operations import abstain
+
+            abstain(store, now, signal.qualification["ml_reason"])
+            if skipped and settings.ml_filter_research:
+                signal.gates.append("ML abstained: " + signal.qualification["ml_reason"])
+                signal.final_tier = "REJECTED"
             return signal
         signal.model_version = model["id"]
         signal.validation_status = "research_challenger"
-        reasons = []
-        if model["feature_schema_version"] != signal.feature_schema_version:
-            reasons.append("feature schema changed; retraining required")
-        if now < model["created_ms"]:
-            reasons.append("model was not available at this decision timestamp")
-        chart_compatible = (
-            model["stage"] == "chart"
-            and signal.source == "tradingview"
-            and not signal.coverage.get("liquidity_observed")
-        )
-        if model["source"] != signal.source or (model["stage"] != "decision" and not chart_compatible):
-            reasons.append("model source/stage does not match this candidate")
-        if signal.version not in model.get("strategy_versions", []):
-            reasons.append("strategy version not covered by this model")
-        for key, vocabulary in model["contexts"].items():
-            if row["values"].get(key) not in vocabulary:
-                reasons.append("unseen model context: " + key)
-        if row["data_coverage"] < model["minimum_coverage"]:
-            reasons.append("required training feature coverage lost")
-        if any(row["values"].get(key) is None for key in model.get("required_features", [])):
-            reasons.append("a normally present model feature is missing")
-        if now - model["periods"]["holdout"]["end"] > 90 * 86_400_000:
-            reasons.append("model evidence older than 90 days")
-        if registry.is_degraded(model["id"]):
-            reasons.append("model degraded")
-        if reasons:
-            signal.validation_status = "abstained"
-            signal.qualification["ml_reason"] = "; ".join(reasons)
-            if settings.ml_filter_research:
-                signal.gates.append("ML abstained: " + "; ".join(reasons))
-                signal.final_tier = "REJECTED"
-            return signal
         p = float(predict(model["model"], [row])[0])
         qualifies = accepted(row, p, model["model"]["thresholds"])
         signal.evidence["ml"] = dict(
@@ -116,6 +152,9 @@ def apply(signal, settings, store, at_ms=None):
     except (ValueError, KeyError, TypeError, OverflowError) as exc:
         signal.validation_status = "abstained"
         signal.qualification["ml_reason"] = type(exc).__name__ + ": inference unavailable"
+        from .operations import abstain
+
+        abstain(store, now, signal.qualification["ml_reason"])
         if settings.ml_filter_research:
             signal.gates.append("ML inference unavailable")
             signal.final_tier = "REJECTED"

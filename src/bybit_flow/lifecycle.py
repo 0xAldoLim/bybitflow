@@ -8,6 +8,13 @@ from .storage import now_ms
 TERMINAL = {"INVALIDATED", "EXPIRED", "RESOLVED"}
 
 
+def source_feed(scanner, source):
+    if source == scanner.exchange:
+        return scanner.api, scanner.streams
+    manager = getattr(scanner, "cross_venue", None)
+    return manager.peers.get(source, (None, None)) if manager else (None, None)
+
+
 def advance_trades(signal, tape, now):
     cursor = signal.coverage.get("monitor_cursor_event_ms", signal.created_ms)
     last_id = signal.coverage.get("last_checked_trade_id")
@@ -63,7 +70,7 @@ def advance_trades(signal, tape, now):
 
 
 async def bootstrap(scanner):
-    """Restore subscriptions before broad discovery; other venues remain explicitly paused."""
+    """Restore original-venue subscriptions before broad discovery and reconcile gaps."""
     scanner.store.put("active_lifecycle", dict(status="BOOTSTRAPPING", at_ms=now_ms()))
     active = scanner.store.active_signals()
     native = [s for s in active if s["source"] != "tradingview"]
@@ -85,6 +92,8 @@ async def bootstrap(scanner):
     scanner.streams.required_symbols = set(scanner.pending_symbols())
     scanner.recorder.critical_symbols = {s["symbol"] for s in native} | {"BTCUSDT", "ETHUSDT"}
     await scanner.streams.select(scanner.pending_symbols())
+    if getattr(scanner, "cross_venue", None):
+        await scanner.cross_venue.restore_required()
     for payload in native:
         signal = Signal.model_validate(payload)
         signal.coverage.update(monitoring="paused", monitor_status="RECONCILIATION_PENDING")
@@ -97,13 +106,24 @@ async def tick(scanner, now):
         Signal.model_validate(p) for p in scanner.store.active_signals() if p["source"] != "tradingview"
     ]
     required = {s.symbol for s in active if s.source == scanner.exchange}
+    scanner.store.put(
+        "required_candidate_symbols:" + scanner.exchange,
+        sorted({s.symbol for s in active if s.source == scanner.exchange and s.state != "ALERTED"}),
+    )
+    scanner.store.put(
+        "active_lifecycle_symbols:" + scanner.exchange,
+        sorted({s.symbol for s in active if s.source == scanner.exchange and s.state == "ALERTED"}),
+    )
     scanner.streams.required_symbols = required
     scanner.recorder.critical_symbols = {s.symbol for s in active} | {"BTCUSDT", "ETHUSDT"}
     await scanner.streams.select(list(required) + list(scanner.streams.selected))
+    if getattr(scanner, "cross_venue", None):
+        await scanner.cross_venue.restore_required()
     ready = pending = degraded = 0
     for signal in active:
         try:
-            tape = scanner.streams.tapes.get(signal.symbol) if signal.source == scanner.exchange else None
+            _, streams = source_feed(scanner, signal.source)
+            tape = streams.tapes.get(signal.symbol) if streams else None
             cursor = signal.coverage.get("monitor_cursor_event_ms", signal.created_ms)
             gap = not tape or tape.coverage_start is None or tape.coverage_start > cursor
             fresh = bool(

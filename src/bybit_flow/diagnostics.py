@@ -77,10 +77,22 @@ async def doctor(settings, store, network=True):
     checks["active_lifecycle"] = store.get("active_lifecycle", {"status": "BOOTSTRAPPING"})
     checks["candidate_coverage"] = coverage_summary(store, now_ms())
     checks["market_stream"] = dict(
-        connected=runtime.get("streams_fresh", False),
+        connected=checks["runtime"]["status"] != "STALE"
+        and runtime.get("persistent_connected", runtime.get("source_feed_available", False)),
         last_market_event_ms=runtime.get("last_market_event_ms"),
         reconnecting=not runtime.get("source_feed_available", False),
     )
+    checks["probe_health"] = {name: checks[name] for name in names}
+    checks["primary_persistent_stream_health"] = runtime.get("primary_persistent_stream_health", {})
+    checks["active_lifecycle_stream_health"] = runtime.get("active_lifecycle_stream_health", {})
+    checks["market_stream"]["reconnecting"] = not checks["market_stream"]["connected"]
+    for key in (
+        "selected_streams_total",
+        "selected_streams_fresh",
+        "active_required_streams_total",
+        "active_required_streams_fresh",
+    ):
+        checks["market_stream"][key] = runtime.get(key, 0)
     delivery = dict(
         store.db.execute(
             "SELECT notification_status,count(*) FROM terminal_events GROUP BY notification_status"
@@ -120,19 +132,16 @@ async def doctor(settings, store, network=True):
     from .ml.registry import Registry
 
     summary = Registry(store).cached_summary()
-    checks["ml"] = {
-        "status": "OK",
-        "enabled": settings.ml_enabled,
-        "champion": summary.get("champion"),
-        "snapshots": store.db.execute("SELECT count(*) FROM ml_snapshots").fetchone()[0],
-        "labels": store.db.execute("SELECT count(*) FROM ml_labels").fetchone()[0],
-        "late_labels": store.db.execute("SELECT count(*) FROM research_labels").fetchone()[0],
-    }
+    from .ml.operations import status as ml_status
+
+    checks["ml"] = ml_status(store, summary, settings.ml_enabled)
     warnings = []
     if not settings.scan_enabled:
         warnings.append("Scanner disabled: FLOW_SCAN_ENABLED=false")
-    if network and not any(checks[n].get("status") == "HEALTHY" for n in names):
-        warnings.append("No tested source has healthy REST and genuine trade WS data; no trade")
+    if not checks["market_stream"]["connected"]:
+        warnings.append("No healthy live source; no trade")
+    elif network and not any(checks[n].get("status") == "HEALTHY" for n in names):
+        warnings.append("Public connectivity probe degraded; persistent feed remains active.")
     if not settings.admin_token.get_secret_value():
         warnings.append("Dashboard password unset; Docker remote bind requires FLOW_ADMIN_TOKEN")
     return {"at_ms": now_ms(), "checks": checks, "warnings": warnings}

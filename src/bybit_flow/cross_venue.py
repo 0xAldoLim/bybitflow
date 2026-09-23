@@ -40,9 +40,35 @@ def compare(observations, at_ms, max_age=15_000):
     mids = [r["mid"] for r in rows]
     spreads = [r["spread_bps"] for r in rows]
     deltas = [r["flow"]["delta_pct"] for r in rows if r.get("flow", {}).get("available")]
-    aligned_flow = len(deltas) == len(rows) and len({r.get("window_end") for r in rows}) == 1
+    aligned_flow = (
+        len(deltas) == len(rows)
+        and len({r.get("window_start") for r in rows}) == 1
+        and len({r.get("window_end") for r in rows}) == 1
+        and all(
+            r.get("window_start") is not None
+            and r.get("window_end", at_ms + 1) <= at_ms
+            and r["window_start"] < r["window_end"]
+            for r in rows
+        )
+    )
+    consensus = (
+        (
+            "NEGATIVE"
+            if all(d < 0 for d in deltas)
+            else "POSITIVE"
+            if all(d > 0 for d in deltas)
+            else "ZERO"
+            if all(d == 0 for d in deltas)
+            else "MIXED"
+        )
+        if aligned_flow
+        else "UNAVAILABLE"
+    )
     return dict(
         available=True,
+        mean_delta_pct=mean(deltas) if aligned_flow else None,
+        consensus_delta_sign=consensus,
+        aligned_flow_venues=len(rows) if aligned_flow else 0,
         wick_context="CROSS_VENUE_DISAGREEMENT"
         if aligned_flow and not (all(d > 0 for d in deltas) or all(d < 0 for d in deltas))
         else "LOCAL_VENUE_SPIKE"
@@ -74,6 +100,69 @@ def compare(observations, at_ms, max_age=15_000):
 class CrossVenue:
     def __init__(self, scanner):
         self.scanner, self.peers, self.jobs = scanner, {}, {}
+        self.contexts, self.candles = {}, {}
+
+    async def refresh_active_context(self, name, api, rows):
+        from .features import validate_bars
+
+        now = now_ms()
+        instruments = {r["symbol"]: api.parse(r, now) for r in rows}
+        active = [s for s in self.scanner.store.active_signals() if s["source"] == name]
+        symbols = {s["symbol"] for s in active}
+        for cache in (self.contexts, self.candles):
+            for key in list(cache):
+                if key[0] == name and key[1] not in symbols:
+                    cache.pop(key)
+        for symbol in self.required(name):
+            inst = instruments.get(symbol)
+            if not inst:
+                continue
+            intervals = {"240", "60", "15"} | {
+                s.get(key, "60")
+                for s in active
+                if s["symbol"] == symbol
+                for key in ("setup_timeframe", "context_timeframe")
+            }
+            bars = {}
+            for interval in intervals:
+                bars[interval] = await api.candles(symbol, interval, now, limit=200)
+                validate_bars(bars[interval], now)
+                self.candles[name, symbol, interval] = bars[interval]
+            self.contexts[name, symbol] = dict(
+                instrument=inst, asof=now, h4=bars["240"], h1=bars["60"], m15=bars["15"], derivatives={}
+            )
+
+    def required(self, name):
+        active = [s for s in self.scanner.store.active_signals() if s["source"] == name]
+        lifecycle = {s["symbol"] for s in active if s["state"] == "ALERTED"}
+        pending = {s["symbol"] for s in active if s["state"] != "ALERTED"}
+        self.scanner.store.put("required_candidate_symbols:" + name, sorted(pending))
+        self.scanner.store.put("active_lifecycle_symbols:" + name, sorted(lifecycle))
+        return lifecycle | pending
+
+    def ensure_peer(self, name):
+        if name not in self.peers:
+            scanner = self.scanner
+            api = VenueAPI(name, scanner.settings, scanner.recorder)
+            scoped = ScopedStore(scanner.store, name)
+            streams = (
+                Streams(scanner.settings, scoped, scanner.recorder)
+                if name == "bybit"
+                else NativeStreams(scanner.settings, scoped, scanner.recorder, api)
+            )
+            self.peers[name] = (api, streams)
+        return self.peers[name]
+
+    async def restore_required(self):
+        for name in VENUES:
+            if name == self.scanner.exchange:
+                continue
+            required = self.required(name)
+            if not required and name not in self.peers:
+                continue
+            _, streams = self.ensure_peer(name)
+            streams.required_symbols = required
+            await streams.select(sorted(required) + list(streams.selected))
 
     async def run(self):
         try:
@@ -96,15 +185,8 @@ class CrossVenue:
                     await task
 
     async def collect(self, name):
-        settings, store, recorder = self.scanner.settings, self.scanner.store, self.scanner.recorder
-        api = VenueAPI(name, settings, recorder)
-        scoped = ScopedStore(store, name)
-        streams = (
-            Streams(settings, scoped, recorder)
-            if name == "bybit"
-            else NativeStreams(settings, scoped, recorder, api)
-        )
-        self.peers[name] = (api, streams)
+        store = self.scanner.store
+        api, streams = self.ensure_peer(name)
         try:
             while True:
                 try:
@@ -112,23 +194,27 @@ class CrossVenue:
                     available = {r["symbol"] for r in rows if api.parse(r, now_ms())}
                     scoped_symbols = self.scanner.pending_symbols() + list(self.scanner.streams.selected)
                     selected = [s for s in dict.fromkeys(scoped_symbols) if s in available][:8]
+                    streams.required_symbols = self.required(name)
                     await streams.select(selected)
+                    await self.refresh_active_context(name, api, rows)
                     store.put(
                         "cross_health:" + name,
                         {"status": "COLLECTING", "at_ms": now_ms(), "symbols": selected},
                     )
                     await asyncio.sleep(60)
                 except Exception as exc:
-                    await streams.select([])
+                    streams.required_symbols = self.required(name)
+                    await streams.select(sorted(streams.required_symbols))
                     store.put(
                         "cross_health:" + name,
                         {"status": "UNAVAILABLE", "at_ms": now_ms(), "error_type": type(exc).__name__},
                     )
-                    await asyncio.sleep(600)
+                    await asyncio.sleep(30)
         finally:
-            await streams.stop()
-            await api.close()
-            self.peers.pop(name, None)
+            if self.peers.get(name) == (api, streams):
+                await streams.stop()
+                await api.close()
+                self.peers.pop(name, None)
 
     def publish(self):
         scanner, now = self.scanner, now_ms()
@@ -136,7 +222,7 @@ class CrossVenue:
             context = scanner.context.get(symbol)
             if not context:
                 continue
-            end = context["m15"][-1].end
+            end = now // 60000 * 60000
             from .features import candle_features
 
             atr = candle_features(context["m15"], now)["atr"]
@@ -169,6 +255,7 @@ class CrossVenue:
                         mid=bf["mid"],
                         spread_bps=bf["spread_bps"],
                         window_end=end,
+                        window_start=end - 900000,
                         flow={
                             k: flow[k]
                             for k in (

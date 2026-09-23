@@ -153,6 +153,7 @@ def test_cross_venue_requires_independent_fresh_sources():
         mid=100,
         spread_bps=1,
         window_end=9000,
+        window_start=1000,
         flow={"available": True, "delta_pct": 25},
     )
     two = one | {"exchange": "bybit", "mid": 101}

@@ -42,6 +42,9 @@ class Scanner:
         self.tasks = []
         self.scan_lock = asyncio.Lock()
         self.lifecycle_bootstrapped = asyncio.Event()
+        from .cross_venue import CrossVenue
+
+        self.cross_venue = CrossVenue(self)
         self.status = {"state": "disabled", "at_ms": now_ms(), "eligible": 0, "errors": 0}
 
     @property
@@ -79,14 +82,19 @@ class Scanner:
             if report["status"] != "HEALTHY":
                 continue
             previous = self.exchange
-            await self.streams.stop()
-            await self.api.close()
-            self.api = VenueAPI(name, self.settings, self.recorder)
-            self.streams = (
-                Streams(self.settings, self.store, self.recorder)
-                if name == "bybit"
-                else NativeStreams(self.settings, self.store, self.recorder, self.api)
-            )
+            if name == previous:
+                self.source_ready = True
+                return
+            if self.pending_symbols():
+                self.cross_venue.peers[previous] = (self.api, self.streams)
+            else:
+                await self.streams.stop()
+                await self.api.close()
+            self.api, self.streams = self.cross_venue.ensure_peer(name)
+            self.cross_venue.peers.pop(name)
+            job = self.cross_venue.jobs.pop(name, None)
+            if job:
+                job.cancel()
             self.context.clear()
             self.candle_cache.clear()
             self.source_ready = True
@@ -311,13 +319,24 @@ class Scanner:
         tape = self.streams.tapes.get(symbol)
         book = self.streams.books.get(symbol)
         start = now // 60000 * 60000 - self.settings.execution_window_seconds * 1000
-        return bool(
+        ready = bool(
             tape
             and book
             and book.fresh(now, self.settings.book_stale_ms)
             and 0 < tape.coverage_start <= start
             and 0 <= now - tape.last_receipt <= self.settings.trade_stale_ms
         )
+        self.store.put(
+            f"flow_warmup:{self.exchange}:{symbol}",
+            dict(
+                ready=ready,
+                coverage_start_ms=tape.coverage_start if tape else None,
+                tape_last_event_ms=tape.last_event if tape else None,
+                book_last_event_ms=book.event_ms if book else None,
+                required_window_ms=self.settings.execution_window_seconds * 1000,
+            ),
+        )
+        return ready
 
     def entry_ready(self, signal, book, now):
         from .production import entry_position
@@ -390,6 +409,9 @@ class Scanner:
         failed_since = None
         while True:
             await asyncio.sleep(30)
+            from .feed_health import persistent_health
+
+            persistent = persistent_health(self, now_ms())
             # Native symbols reconnect independently. One quiet or stale symbol
             # must not destroy continuous history for the rest of the universe.
             source_feed_available = (
@@ -413,6 +435,7 @@ class Scanner:
                     source_feed_available=source_feed_available,
                     last_market_event_ms=max((t.last_event for t in self.streams.tapes.values()), default=0),
                     last_recorder_write_ms=getattr(self.recorder, "last_success_ms", None),
+                    **persistent,
                 ),
             )
             if not self.source_ready or not self.streams.selected or source_feed_available:
@@ -734,11 +757,21 @@ class Scanner:
             return self.status
 
     async def monitor_alerted(self, s, now):
+        from .lifecycle import source_feed
+
         previous = dict(s.coverage)
         same_source = s.source == self.exchange
-        book = self.streams.books.get(s.symbol) if same_source else None
-        tape = self.streams.tapes.get(s.symbol) if same_source else None
-        context = self.context.get(s.symbol) if same_source else None
+        _, streams = source_feed(self, s.source)
+        book = streams.books.get(s.symbol) if streams else None
+        tape = streams.tapes.get(s.symbol) if streams else None
+        context = (
+            self.context.get(s.symbol) if same_source else self.cross_venue.contexts.get((s.source, s.symbol))
+        )
+        candles = (
+            (lambda interval: self.candle_cache.get((s.symbol, interval), (None, []))[1])
+            if same_source
+            else (lambda interval: self.cross_venue.candles.get((s.source, s.symbol, interval), []))
+        )
         fresh_book = bool(book and book.fresh(now, self.settings.book_stale_ms))
         fresh_tape = bool(
             tape
@@ -749,7 +782,7 @@ class Scanner:
             context and 0 <= now - context["asof"] <= self.settings.scan_seconds * 1000 + 60_000
         )
         reasons = []
-        if not same_source:
+        if not streams:
             reasons.append("Original exchange feed unavailable")
         if not fresh_book or not fresh_tape:
             reasons.append("Live prices unavailable or stale")
@@ -769,7 +802,7 @@ class Scanner:
             from .evidence import flow_response
             from .thesis_health import evaluate as health_evaluate
 
-            setup = self.candle_cache.get((s.symbol, s.setup_timeframe), (None, []))[1]
+            setup = candles(s.setup_timeframe)
             feature = candle_features(setup, now) if len(setup) >= 60 else {}
             health_window = 60_000 if s.horizon_profile == "SHORT_INTRADAY" else 900_000
             recent = tape.window(now - health_window, now)
@@ -796,11 +829,17 @@ class Scanner:
                 window_end_ms=now,
             )
             sign = 1 if s.direction == "LONG" else -1
-            profile = getattr(
-                self,
-                "swing_profiles" if s.horizon_profile in {"SWING", "EXTENDED_SWING"} else "volume_profiles",
-                {},
-            ).get(s.symbol, {})
+            profile = (
+                getattr(
+                    self,
+                    "swing_profiles"
+                    if s.horizon_profile in {"SWING", "EXTENDED_SWING"}
+                    else "volume_profiles",
+                    {},
+                ).get(s.symbol, {})
+                if same_source
+                else {}
+            )
             if profile.get("available") and 0 <= now - profile.get("available_ms", 0) <= 120000:
                 adverse_value = profile.get("value_migration_direction") == ("DOWN" if sign > 0 else "UP")
                 adverse_acceptance = profile.get("acceptance") == (
@@ -809,7 +848,9 @@ class Scanner:
                 observation["auction_health"] = (
                     "DEGRADED" if adverse_value and adverse_acceptance else "HEALTHY"
                 )
-            factor_bars = self.candle_cache.get(("BTCUSDT", s.context_timeframe), (None, []))[1]
+            factor_bars = (
+                self.candle_cache.get(("BTCUSDT", s.context_timeframe), (None, []))[1] if same_source else []
+            )
             if len(factor_bars) >= 60 and now - factor_bars[-1].end <= DURATIONS[s.context_timeframe] + 60000:
                 factor = candle_features(factor_bars, now)
                 observation["factor_health"] = (
@@ -820,15 +861,26 @@ class Scanner:
             derivatives = context.get("derivatives", {})
             if (
                 0 <= now - derivatives.get("collected_ms", 0) <= 360000
-                and derivatives.get("funding_rate") is not None
+                and derivatives.get("oi_change_pct") is not None
             ):
                 observation["derivatives_health"] = (
-                    "DEGRADED" if sign * derivatives["funding_rate"] > 0.001 else "HEALTHY"
+                    "DEGRADED"
+                    if sign * observed.get("delta_pct", 0) <= -20 and abs(derivatives["oi_change_pct"]) >= 2
+                    else "HEALTHY"
                 )
             cross = self.store.get("cross:" + s.symbol, {})
-            if cross.get("available") and 0 <= now - cross.get("receipt_ms", 0) <= 15000:
+            if (
+                cross.get("available")
+                and s.source in cross.get("exchanges", [])
+                and cross.get("aligned_flow_venues", 0) >= 2
+                and 0 <= now - cross.get("receipt_ms", 0) <= 45000
+            ):
                 observation["cross_venue_health"] = (
-                    "DEGRADED" if cross.get("delta_agreement") is False else "HEALTHY"
+                    "DEGRADED"
+                    if cross.get("consensus_delta_sign") == ("NEGATIVE" if sign > 0 else "POSITIVE")
+                    else "MIXED"
+                    if cross.get("consensus_delta_sign") == "MIXED"
+                    else "HEALTHY"
                 )
             observation["volatility_liquidity_health"] = (
                 "DEGRADED" if bf.get("spread_bps", 0) > self.settings.max_spread_bps else "HEALTHY"
@@ -860,9 +912,9 @@ class Scanner:
             facts = facts_asof(self.store, context["instrument"].base, now)
             context_bars = context["h4"]
             if s.horizon_profile != "LEGACY":
-                cached = self.candle_cache.get((s.symbol, s.context_timeframe))
+                cached = candles(s.context_timeframe)
                 if cached:
-                    context_bars = cached[1]
+                    context_bars = cached
             regime = candle_features(context_bars, now)["regime"]
             supportive = regime in {"range", "trending up" if s.direction == "LONG" else "trending down"}
             if s.horizon_profile == "LEGACY" and (not supportive or any(f["major_event"] for f in facts)):
@@ -1514,9 +1566,7 @@ class Scanner:
             start_task("volume_profiles", self.profile_loop)
             start_task("pending", self.refresh_pending)
             start_task("source", self.source_watchdog)
-            from .cross_venue import CrossVenue
-
-            start_task("cross_venue", CrossVenue(self).run)
+            start_task("cross_venue", self.cross_venue.run)
 
     async def stop(self):
         for task in self.tasks:

@@ -12,6 +12,7 @@ from .store import FeatureStore
 
 
 def cycle(settings, store):
+    from . import SCHEMA_VERSION
     from .labels import label_recordings
     from .recordings import worker_rows
     from .training import train
@@ -21,23 +22,36 @@ def cycle(settings, store):
     source = store.get("active_exchange", {}).get("current") or store.get("scanner", {}).get("exchange")
     if source not in {"bybit", "binance", "okx"}:
         raise ValueError("No recorded active venue for source-specific training")
+    # Materialize causal outcomes before choosing a model family. Missing LSTM
+    # sequences must not prevent tabular training on otherwise complete labels.
+    recent = store.get("ml_monitor", {}).get("last_success_ms") or 0
+    if now_ms() - recent > 900000:
+        label_recordings(store, worker_rows(store), settings)
+    ready = 0
     if settings.ml_two_stage:
         ready = store.db.execute(
             "SELECT COUNT(DISTINCT coalesce(c.candidate_identity,s.signal_id)) FROM ml_snapshots s JOIN ml_labels l ON l.snapshot_id=s.id LEFT JOIN candidate_identities c ON c.signal_id=s.signal_id "
             "WHERE s.stage='decision' AND l.policy='prints-v1' "
             "AND json_extract(l.payload,'$.complete')=1 AND json_array_length(s.payload,'$.sequence')=16 "
-            "AND json_extract(s.payload,'$.source')=?",
-            (source,),
+            "AND json_extract(s.payload,'$.source')=? AND s.schema_version=?",
+            (source, SCHEMA_VERSION),
         ).fetchone()[0]
-        if ready < 500:
-            raise ValueError(
-                f"Two-stage training collecting data: {ready}/500 complete outcomes with 16-observation sequences"
-            )
-    label_recordings(store, worker_rows(store), settings)
-    path = FeatureStore(store).export(now_ms(), source=source)
     from .stacking import KINDS
 
-    return train(store, path, kinds=KINDS if settings.ml_two_stage else ("logistic", "lightgbm"))["id"]
+    two_stage = settings.ml_two_stage and ready >= 500
+    store.put(
+        "ml_training_mode",
+        dict(
+            at_ms=now_ms(),
+            source=source,
+            requested_two_stage=settings.ml_two_stage,
+            sequences_ready=ready,
+            mode="TWO_STAGE" if two_stage else "BASELINE",
+            kinds=list(KINDS) if two_stage else ["logistic", "lightgbm"],
+        ),
+    )
+    path = FeatureStore(store).export(now_ms(), source=source)
+    return train(store, path, kinds=KINDS if two_stage else ("logistic", "lightgbm"))["id"]
 
 
 def monitor(settings, store):
@@ -210,8 +224,11 @@ def run(arguments, settings, store):
     elif args.command in {"cycle", "worker"}:
         # Separate-process advisory lock prevents duplicate trainers and holdout races.
         import os
+        from contextlib import ExitStack
 
-        with (store.root / "ml-worker.lock").open("a+") as lock:
+        from .operations import heartbeat
+
+        with (store.root / "ml-worker.lock").open("a+") as lock, ExitStack() as background:
             if os.name == "nt":
                 import msvcrt
 
@@ -223,6 +240,7 @@ def run(arguments, settings, store):
                 import fcntl
 
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            background.enter_context(heartbeat(store.root))
             first_monitor = True
             while True:
                 if first_monitor or now_ms() - store.get("ml_monitor", {}).get("at_ms", 0) >= 900_000:

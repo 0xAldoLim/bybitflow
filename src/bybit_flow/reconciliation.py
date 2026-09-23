@@ -79,11 +79,13 @@ async def reconcile(scanner, signal, now):
         or signal.created_ms
     )
     cursor = max(initial, saved.get("cursor_ms", 0))
-    book = scanner.streams.books.get(signal.symbol) if signal.source == scanner.exchange else None
-    tape = scanner.streams.tapes.get(signal.symbol) if signal.source == scanner.exchange else None
+    from .lifecycle import source_feed
+
+    original_api, streams = source_feed(scanner, signal.source)
+    book = streams.books.get(signal.symbol) if streams else None
+    tape = streams.tapes.get(signal.symbol) if streams else None
     fresh = bool(
-        scanner.source_ready
-        and scanner.recorder.healthy
+        scanner.recorder.healthy
         and book
         and book.fresh(now, scanner.settings.book_stale_ms)
         and tape
@@ -108,14 +110,14 @@ async def reconcile(scanner, signal, now):
         return False
     from .exchanges import VenueAPI
 
-    api = scanner.api if signal.source == scanner.exchange else VenueAPI(signal.source, scanner.settings)
+    api = original_api or VenueAPI(signal.source, scanner.settings)
     try:
         bars = await api.candles(signal.symbol, "1", now, start=cursor // 60_000 * 60_000, limit=300)
         result = advance(signal, bars, cursor, now, now)
     except Exception as exc:
         result = dict(cursor_ms=cursor, coverage_complete=False, error_type=type(exc).__name__)
     finally:
-        if api is not scanner.api:
+        if api is not original_api:
             await api.close()
     result.update(last_attempt_ms=now, status="CATCHING_UP_LIFECYCLE")
     scanner.store.put(key, result)
