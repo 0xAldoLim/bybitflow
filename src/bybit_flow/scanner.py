@@ -243,7 +243,7 @@ class Scanner:
                         flow = await asyncio.to_thread(footprint, trades, inst.tick, atr)
                         if flow.get("available"):
                             bf = book.features(now)
-                            flow.update(flow_response(trades, bf))
+                            flow.update(await asyncio.to_thread(flow_response, trades, bf))
                             for horizon in self.settings.horizon_profiles:
                                 identity = SimpleNamespace(
                                     source=self.exchange,
@@ -254,7 +254,8 @@ class Scanner:
                                 key, history = flow_baseline(
                                     self.store, identity.source, symbol, identity.entry_session, horizon, end
                                 )
-                                quality = assess_flow_quality(
+                                quality = await asyncio.to_thread(
+                                    assess_flow_quality,
                                     trades,
                                     inst.tick,
                                     bf,
@@ -830,13 +831,14 @@ class Scanner:
             feature = candle_features(setup, now) if len(setup) >= 60 else {}
             health_window = 60_000 if s.horizon_profile == "SHORT_INTRADAY" else 900_000
             recent = tape.window(now - health_window, now)
-            observed = footprint(
+            observed = await asyncio.to_thread(
+                footprint,
                 recent,
                 context["instrument"].tick,
                 feature.get("atr", float(context["instrument"].tick) * 10),
                 book,
             )
-            observed.update(flow_response(recent, book.features(now)))
+            observed.update(await asyncio.to_thread(flow_response, recent, book.features(now)))
             bf = book.features(now)
             if ":flow-quality-v1" in s.version:
                 from .flow_quality import assess as assess_flow_quality
@@ -845,7 +847,8 @@ class Scanner:
                 _, history = flow_baseline(
                     self.store, s.source, s.symbol, s.entry_session, s.horizon_profile, now
                 )
-                observed["quality"] = assess_flow_quality(
+                observed["quality"] = await asyncio.to_thread(
+                    assess_flow_quality,
                     recent,
                     context["instrument"].tick,
                     bf,
@@ -1167,7 +1170,8 @@ class Scanner:
                             _, history = flow_baseline(
                                 self.store, s.source, s.symbol, s.entry_session, s.horizon_profile, end
                             )
-                            current_flow["quality"] = assess_flow_quality(
+                            current_flow["quality"] = await asyncio.to_thread(
+                                assess_flow_quality,
                                 [t for t in tape.window(start, end) if t.receipt_ms <= now],
                                 c["instrument"].tick,
                                 book.features(now),
@@ -1243,19 +1247,23 @@ class Scanner:
             window_book = Book()
             window_book.valid = book.valid
             window_book.changes.extend(x for x in book.changes if x[0] <= end)
-            flow = footprint(trades, c["instrument"].tick, execution_features["atr"], window_book)
+            flow = await asyncio.to_thread(
+                footprint, trades, c["instrument"].tick, execution_features["atr"], window_book
+            )
             bf = book.features(now)
             from .evidence import flow_response
 
             prior_trades = tape.window(start - window_ms, start)
-            flow.update(flow_response(trades, bf, flow_response(prior_trades, bf)))
+            previous_response = await asyncio.to_thread(flow_response, prior_trades, bf)
+            flow.update(await asyncio.to_thread(flow_response, trades, bf, previous_response))
             from .flow_quality import assess as assess_flow_quality
             from .flow_quality import baseline as flow_baseline
 
             _, quality_history = flow_baseline(
                 self.store, s.source, s.symbol, s.entry_session, s.horizon_profile, end
             )
-            quality = assess_flow_quality(
+            quality = await asyncio.to_thread(
+                assess_flow_quality,
                 trades,
                 c["instrument"].tick,
                 bf,

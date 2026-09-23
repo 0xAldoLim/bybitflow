@@ -132,6 +132,31 @@ def compare(observations, at_ms, max_age=15_000):
     )
 
 
+def observed_flow(recent, tick, atr, book_features, now, start, end):
+    """Compute a compact cross-venue observation away from the socket event loop."""
+    from .evidence import flow_response
+    from .flow_quality import assess as assess_flow_quality
+
+    flow = footprint(recent, tick, atr)
+    if not flow.get("available"):
+        return flow
+    flow.update(flow_response(recent, book_features))
+    quality = assess_flow_quality(recent, tick, book_features, flow, now, start, end)
+    flow["quality"] = {
+        key: quality.get(key)
+        for key in (
+            "flow_quality_state",
+            "flow_trust_score",
+            "effective_delta_notional",
+            "price_displacement_bps",
+            "book_response_consistency",
+            "microprice_displacement",
+            "effective_volume_ratio",
+        )
+    }
+    return flow
+
+
 class CrossVenue:
     def __init__(self, scanner):
         self.scanner, self.peers, self.jobs = scanner, {}, {}
@@ -210,7 +235,7 @@ class CrossVenue:
                             await self.jobs.pop(name)
                     for name in desired - set(self.jobs):
                         self.jobs[name] = asyncio.create_task(self.collect(name))
-                    self.publish()
+                    await self.publish()
                 await asyncio.sleep(30)
         finally:
             for task in self.jobs.values():
@@ -251,7 +276,7 @@ class CrossVenue:
                 await api.close()
                 self.peers.pop(name, None)
 
-    def publish(self):
+    async def publish(self):
         scanner, now = self.scanner, now_ms()
         for symbol in dict.fromkeys(scanner.pending_symbols() + list(scanner.streams.selected)):
             context = scanner.context.get(symbol)
@@ -270,6 +295,7 @@ class CrossVenue:
                 if not book or not tape or not book.fresh(now, scanner.settings.book_stale_ms):
                     continue
                 flow = {"available": False}
+                bf = book.features(now)
                 if (
                     tape.coverage_start > 0
                     and tape.coverage_start <= end - 900_000
@@ -280,27 +306,10 @@ class CrossVenue:
                         if symbol in getattr(api, "metadata", {})
                         else context["instrument"].tick
                     )
-                    flow = footprint(tape.window(end - 900_000, end), tick, atr)
-                bf = book.features(now)
-                if flow.get("available"):
-                    from .evidence import flow_response
-                    from .flow_quality import assess as assess_flow_quality
-
                     recent = tape.window(end - 900_000, end)
-                    flow.update(flow_response(recent, bf))
-                    quality = assess_flow_quality(recent, tick, bf, flow, now, end - 900_000, end)
-                    flow["quality"] = {
-                        key: quality.get(key)
-                        for key in (
-                            "flow_quality_state",
-                            "flow_trust_score",
-                            "effective_delta_notional",
-                            "price_displacement_bps",
-                            "book_response_consistency",
-                            "microprice_displacement",
-                            "effective_volume_ratio",
-                        )
-                    }
+                    flow = await asyncio.to_thread(
+                        observed_flow, recent, tick, atr, bf, now, end - 900_000, end
+                    )
                 observations.append(
                     dict(
                         exchange=name,
