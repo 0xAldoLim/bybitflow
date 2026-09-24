@@ -371,7 +371,10 @@ class CrossVenue:
 
     async def publish(self):
         scanner = self.scanner
+        remote_symbols = {symbol for _, streams in self.peers.values() for symbol in streams.selected}
         for symbol in dict.fromkeys(scanner.pending_symbols() + list(scanner.streams.selected)):
+            if symbol not in remote_symbols:
+                continue
             # Flow calculation can take time across a full watchlist. Compare
             # every symbol against its own current book and receipt time.
             now = now_ms()
