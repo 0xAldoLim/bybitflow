@@ -456,7 +456,9 @@ class Scanner:
                     source_ready=self.source_ready,
                     selected=list(self.streams.selected),
                     streams_fresh=self.streams.connected
-                    and all(self.flow_ready(s, now_ms()) for s in self.streams.selected),
+                    and all(self.flow_ready(s, now_ms()) for s in self.streams.selected)
+                    and persistent["active_lifecycle_stream_health"]["fresh"]
+                    == persistent["active_lifecycle_stream_health"]["total"],
                     source_feed_available=source_feed_available,
                     last_market_event_ms=max((t.last_event for t in self.streams.tapes.values()), default=0),
                     last_recorder_write_ms=getattr(self.recorder, "last_success_ms", None),
@@ -936,7 +938,23 @@ class Scanner:
                     else "HEALTHY"
                 )
             cross = self.store.get("cross:" + s.symbol, {})
-            if (
+            if s.evidence.get("flow_confirmation_mode") == "CROSS_VENUE_SUBSTITUTION":
+                original_sign = s.evidence.get("flow_substitution", {}).get("trusted_consensus_delta_sign")
+                support_persists = bool(
+                    cross.get("available")
+                    and 0 <= now - cross.get("receipt_ms", 0) <= 45_000
+                    and cross.get("trusted_consensus_delta_sign") == original_sign
+                )
+                current_quality = observed.get("quality", {})
+                adverse_local = bool(
+                    (current_quality.get("flow_trust_score") or 0) >= 0.6
+                    and sign * observed.get("delta_pct", 0) <= -20
+                    and sign * observed.get("cvd_slope", 0) < 0
+                )
+                observation["cross_venue_health"] = (
+                    "HEALTHY" if support_persists else "DEGRADED" if adverse_local and structure else "MIXED"
+                )
+            elif (
                 cross.get("available")
                 and s.source in cross.get("exchanges", [])
                 and cross.get("aligned_flow_venues", 0) >= 2
@@ -1043,7 +1061,7 @@ class Scanner:
         for payload in self.store.active_signals():
             s = Signal.model_validate(payload)
             if s.source == "tradingview":
-                continue  # TradingView has its own source freshness and lifecycle worker.
+                continue  # Legacy chart rows are retired at startup, not live-monitored.
             if s.state in TERMINAL:
                 continue
             if s.id in getattr(self, "reconcile_pending", set()):
@@ -1303,12 +1321,6 @@ class Scanner:
             s.gates.extend(normal_spread["reasons"])
             if not flow_ok and not production_v2:
                 s.gates.append("executed order flow did not confirm family trigger")
-            if (
-                ":flow-quality-v1" in s.version
-                and quality.get("flow_trust_score") is not None
-                and quality["flow_trust_score"] < 0.6
-            ):
-                s.gates.append("LOW_INFORMATION_EXECUTED_FLOW")
             if now - end > 900_000:
                 s.gates.append("execution trigger expired")
             if end < s.evidence["trigger_bar_end"]:
@@ -1349,6 +1361,30 @@ class Scanner:
                 fundamentals=facts,
                 cross_market=self.market_context(now),
             )
+            s.evidence["flow_confirmation_mode"] = "NONE"
+            if ":cross-venue-flow-substitution-v1" in s.version:
+                from .cross_venue import substitution
+                from .production import structure_response
+
+                remote = substitution(
+                    s,
+                    flow,
+                    s.evidence["cross_exchange"],
+                    start,
+                    end,
+                    now,
+                    structure_response(s, execution_bars, now),
+                )
+                s.evidence["flow_substitution"] = remote
+                if remote["passed"]:
+                    s.evidence["flow_confirmation_mode"] = "CROSS_VENUE_SUBSTITUTION"
+            if (
+                ":flow-quality-v1" in s.version
+                and quality.get("flow_trust_score") is not None
+                and quality["flow_trust_score"] < 0.6
+                and not s.evidence.get("flow_substitution", {}).get("passed")
+            ):
+                s.gates.append("LOW_INFORMATION_EXECUTED_FLOW")
             if s.horizon_profile != "LEGACY":
                 from .evidence import (
                     auction_context,
@@ -1441,8 +1477,16 @@ class Scanner:
                         confirmation = evaluate_intraday_confirmation(s, flow, execution_bars, now, alignment)
                         s.evidence["confirmation"] = confirmation
                         flow_ok = confirmation["passed"]
+                        s.evidence["flow_confirmation_mode"] = confirmation["flow_confirmation_mode"]
                         s.gates.extend(confirmation["reason_codes"])
                     else:
+                        flow_ok = flow_ok or s.evidence.get("flow_substitution", {}).get("passed", False)
+                        if flow_ok and s.evidence["flow_confirmation_mode"] == "NONE":
+                            s.evidence["flow_confirmation_mode"] = (
+                                "LOCAL_GENUINE_ABSORPTION"
+                                if quality.get("flow_quality_state") == "GENUINE_ABSORPTION"
+                                else "LOCAL_TRUSTED_FLOW"
+                            )
                         if not flow_ok:
                             s.gates.append("executed order flow did not confirm family trigger")
                         if alignment["blocked"]:

@@ -310,7 +310,8 @@ complete executable-return samples. The original live stop remains unchanged.
 Confirmation and stop challengers use separate chronological partitions, purging
 and an embargo. Descriptive results do not automatically promote a policy.
 
-Feature schema `candidate-v6` adds participation percentiles. Earlier snapshots,
+Current feature schema `candidate-v8` includes participation, flow-quality and
+market-alignment features. Earlier snapshots,
 labels and model files remain intact. Old decisions are not recaptured under the
 new schema. New training cohorts must satisfy the existing validation requirements.
 

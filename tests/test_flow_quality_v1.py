@@ -132,6 +132,21 @@ def test_bearish_htf_prior_blocks_ordinary_alt_long(signal):
     assert result["blocked"] and result["reason"] == "HTF_MARKET_CONFLICT_WITHOUT_STRONG_DIVERGENCE"
 
 
+def test_cross_venue_flow_does_not_replace_contrarian_factor_or_acceptance(signal):
+    aligned_signal(signal, "SHORT", "trending up", strong=False)
+    signal.evidence["flow"]["quality"].update(
+        flow_trust_score=0.2, flow_quality_state="REPETITIVE_TWO_SIDED_CHURN"
+    )
+    signal.evidence["flow_substitution"] = {"passed": True}
+    signal.evidence["flow_confirmation_mode"] = "CROSS_VENUE_SUBSTITUTION"
+    weak = market_alignment(signal, {}, {}, 2000, True)
+    assert weak["blocked"] and weak["reason"] == "HTF_MARKET_CONFLICT_WITHOUT_STRONG_DIVERGENCE"
+    signal.evidence["factor_timeframes"]["60"]["residual_btc"] = -0.004
+    signal.evidence["auction"]["acceptance_below"] = True
+    strong = market_alignment(signal, {}, {}, 2000, True)
+    assert strong["alignment"] == "IDIOSYNCRATIC_DIVERGENCE" and not strong["blocked"]
+
+
 def test_large_low_trust_venue_does_not_overrule_trusted_cross_venue_flow():
     rows = []
     for name, raw_delta, effective_delta, trust in (
@@ -167,7 +182,11 @@ def test_retired_tradingview_endpoint_preserves_historical_rows(settings, signal
     signal.source = "tradingview"
     signal.state = "RESOLVED"
     store = Store(settings.data_dir)
-    store.signal(signal, "historical outcome")
+    with store.db:
+        store.db.execute(
+            "INSERT INTO signals VALUES(?,?,?,?,?)",
+            (signal.id, signal.symbol, signal.created_ms, signal.state, signal.model_dump_json()),
+        )
     app = create_app(settings)
     assert not any(route.path.startswith("/webhooks/tradingview") for route in app.routes)
     assert store.db.execute("SELECT state FROM signals WHERE id=?", (signal.id,)).fetchone()[0] == "RESOLVED"

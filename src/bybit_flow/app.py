@@ -57,6 +57,9 @@ def create_app(settings=None):
     @asynccontextmanager
     async def lifespan(app):
         store = Store(settings.data_dir)
+        from .lifecycle import retire_tradingview
+
+        store.put("tradingview_retirement", dict(at_ms=now_ms(), retired=retire_tradingview(store)))
         store.put("post_terminal_checkpoints", settings.post_terminal_checkpoints)
         recorder = Recorder(store, settings)
         scanner = Scanner(settings, store, recorder)

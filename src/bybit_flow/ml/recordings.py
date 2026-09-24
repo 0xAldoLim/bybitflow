@@ -7,6 +7,7 @@ Integrity failures remain fatal and preflight finishes before any label is writt
 
 import hashlib
 import json
+import zipfile
 from pathlib import Path
 
 from ..packing import manifest_for, packed_record, raw_bytes, raw_stream
@@ -71,24 +72,32 @@ def _worker_rows(store, lease=None, after_ms=None):
         if not path.exists() and not packed_record(path):
             reason = "committed recording missing from active storage"
         else:
-            if hashlib.sha256(raw_bytes(path)).hexdigest() != manifest["sha256"]:
-                raise ValueError("Raw segment integrity mismatch")
-            if manifest_for(path) != manifest:
-                raise ValueError("Committed recording manifest mismatch")
-            previous, low, high, count = -1, None, None, 0
-            with raw_stream(path) as stream:
-                for line in stream:
-                    if lease:
-                        lease.heartbeat()
-                    receipt = json.loads(line)["receipt_ms"]
-                    if receipt < previous:
-                        reason = "non-monotonic receipt time"
-                    previous = receipt
-                    low = receipt if low is None else min(low, receipt)
-                    high = receipt if high is None else max(high, receipt)
-                    count += 1
-            if (low, high, count) != (start, end, manifest["rows"]):
-                raise ValueError("Committed recording bounds mismatch")
+            try:
+                data = raw_bytes(path)
+            except zipfile.BadZipFile:
+                # An unreadable pack has no trustworthy tape. Preserve its bytes and
+                # manifest, but make an explicit audited replay gap instead of
+                # blocking all later, independent outcome windows.
+                reason = "unreadable packed recording archive"
+            if reason is None:
+                if hashlib.sha256(data).hexdigest() != manifest["sha256"]:
+                    raise ValueError("Raw segment integrity mismatch")
+                if manifest_for(path) != manifest:
+                    raise ValueError("Committed recording manifest mismatch")
+                previous, low, high, count = -1, None, None, 0
+                with raw_stream(path) as stream:
+                    for line in stream:
+                        if lease:
+                            lease.heartbeat()
+                        receipt = json.loads(line)["receipt_ms"]
+                        if receipt < previous:
+                            reason = "non-monotonic receipt time"
+                        previous = receipt
+                        low = receipt if low is None else min(low, receipt)
+                        high = receipt if high is None else max(high, receipt)
+                        count += 1
+                if (low, high, count) != (start, end, manifest["rows"]):
+                    raise ValueError("Committed recording bounds mismatch")
         spans.append(dict(start=start, end=end, manifest=manifest, reason=reason))
         if len(spans) % 1000 == 0:
             store.put(

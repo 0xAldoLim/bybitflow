@@ -402,8 +402,13 @@ def market_alignment_v7(signal, asof, response=False):
     expected = abs(factor.get("expected_return_btc", 0))
     threshold = max(0.0015, 0.75 * expected)
     support = flow_support(flow, sign, response)
+    remote = signal.evidence.get("flow_substitution", {})
+    remote_ok = (
+        remote.get("passed") and signal.evidence.get("flow_confirmation_mode") == "CROSS_VENUE_SUBSTITUTION"
+    )
     price_response = (
-        sign * quality.get("price_displacement_bps", 0) >= 3
+        remote_ok
+        or sign * quality.get("price_displacement_bps", 0) >= 3
         or quality.get("flow_quality_state") == "GENUINE_ABSORPTION"
         and response
     )
@@ -419,12 +424,15 @@ def market_alignment_v7(signal, asof, response=False):
     trusted_participation = part["passed"] if part["mode"] == "PERCENTILE" else True
     passed = bool(
         residual > threshold
-        and support["strong"]
+        and (support["strong"] or remote_ok)
         and price_response
         and acceptance
-        and trusted_participation
-        and (quality.get("flow_trust_score") or 0) >= 0.6
-        and quality.get("flow_quality_state") != "REPETITIVE_TWO_SIDED_CHURN"
+        and (trusted_participation or remote_ok)
+        and (
+            remote_ok
+            or (quality.get("flow_trust_score") or 0) >= 0.6
+            and quality.get("flow_quality_state") != "REPETITIVE_TWO_SIDED_CHURN"
+        )
     )
     state = "IDIOSYNCRATIC_DIVERGENCE" if passed else "MARKET_CONTRARIAN_WEAK"
     result.update(
@@ -451,6 +459,8 @@ def evaluate_intraday_confirmation(signal, flow, bars, asof, alignment=None):
     sign = 1 if signal.direction == "LONG" else -1
     response = structure_response(signal, bars, asof)
     support = flow_support(flow, sign, response)
+    remote = signal.evidence.get("flow_substitution", {})
+    remote_ok = bool(remote.get("passed") and response)
     metrics = signal.evidence.get("session_metrics", {})
     part = participation(metrics, sign, 0.60, ":flow-quality-v1" in signal.version)
     part_ok = part["passed"] if part["mode"] == "PERCENTILE" else support["raw_fallback"]
@@ -479,7 +489,7 @@ def evaluate_intraday_confirmation(signal, flow, bars, asof, alignment=None):
     if profile.get("acceptance") == ("BELOW_VALUE" if sign > 0 else "ABOVE_VALUE"):
         profile_ok = False
     factor_ok = not (alignment or {}).get("blocked", False)
-    passed = bool(response and support["state"] == "FLOW_SUPPORTIVE" and part_ok and factor_ok)
+    passed = bool(response and (support["state"] == "FLOW_SUPPORTIVE" and part_ok or remote_ok) and factor_ok)
     stressed = (
         signal.horizon_profile == "SHORT_INTRADAY"
         and signal.family in REVERSALS
@@ -491,16 +501,26 @@ def evaluate_intraday_confirmation(signal, flow, bars, asof, alignment=None):
     reasons = [] if passed else ["UNCONFIRMED_LIQUIDITY_SWEEP"]
     if not factor_ok:
         reasons.append((alignment or {}).get("reason") or "CONTRARIAN_EVIDENCE_INSUFFICIENT")
-    if trusted_profile and (flow.get("quality", {}).get("flow_trust_score") or 0) < 0.6:
+    if trusted_profile and (flow.get("quality", {}).get("flow_trust_score") or 0) < 0.6 and not remote_ok:
         passed = False
         reasons.append("LOW_INFORMATION_EXECUTED_FLOW")
+    mode = (
+        "CROSS_VENUE_SUBSTITUTION"
+        if passed and remote_ok
+        else "LOCAL_GENUINE_ABSORPTION"
+        if passed and flow.get("quality", {}).get("flow_quality_state") == "GENUINE_ABSORPTION"
+        else "LOCAL_TRUSTED_FLOW"
+        if passed
+        else "NONE"
+    )
     return dict(
         policy="intraday-confirmation-v2",
         passed=passed,
         reason_codes=reasons,
         structure_support=response,
-        flow_support=support["state"],
-        participation_support=bool(part_ok),
+        flow_support="CROSS_VENUE_SUPPORTIVE" if passed and remote_ok else support["state"],
+        flow_confirmation_mode=mode,
+        participation_support=bool(part_ok or remote_ok),
         factor_support=factor_ok,
         profile_support=profile_ok,
         reclaim_hold_support=hold_ok,

@@ -76,13 +76,17 @@ host to establish its actual REST and normalized trade WS evidence.
 `FLOW_MARKET_SOURCE=auto` probes Binance, Bybit, then OKX, retaining a working primary
 until a failure requires requalification. `binance`, `bybit` and `okx` are fixed modes;
 they never silently switch. `multi` uses the same primary selection and bounded,
-separate secondary collectors for at most the first two configured core symbols.
-Primary default deep capacity is eight symbols. This is not maximum-depth subscription
+separate secondary collectors for a bounded subset of up to eight selected symbols.
+Primary deep capacity is configurable. This is not maximum-depth subscription
 to the whole exchange. A source transition clears continuity-dependent state and is
 persisted; old-venue BTC/ETH regimes and stale cross-venue comparisons cannot earn credit.
 
-Current cross-venue outputs are aligned price dislocation, spread dispersion and
-same-window delta agreement. Tapes and contract units are never pooled. Predictive
+Current cross-venue outputs include aligned price dislocation, spread dispersion,
+trusted effective-flow agreement, and same-window delta. New candidates may use
+`cross-venue-flow-substitution-v1` when local prints are low quality and two independent
+remote venues have trusted same-direction effective flow, price response and book
+response in the closed decision window. Local structure, entry, spread, risk, macro
+and coverage gates still apply. Tapes and contract units are never pooled. Predictive
 weight is zero pending OOS testing. Cross-venue funding/OI dispersion, CVD agreement
 and liquidation clusters are explicitly unavailable. Bybit liquidation events and
 Binance's sampled forceOrder events retain their different semantics; OKX liquidation

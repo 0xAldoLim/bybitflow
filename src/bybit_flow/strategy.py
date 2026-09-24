@@ -184,9 +184,11 @@ def candidates(
             )
     for signal in plans:
         if horizon:
-            signal.version += ":production-v2:flow-score-v2:lifecycle-v62"
+            signal.version += ":production-v2:flow-score-v2:lifecycle-v62:cross-venue-flow-substitution-v1"
             signal.id = hashlib.sha256(
-                (signal.id + ":production-v2:flow-score-v2:lifecycle-v62").encode()
+                (
+                    signal.id + ":production-v2:flow-score-v2:lifecycle-v62:cross-venue-flow-substitution-v1"
+                ).encode()
             ).hexdigest()[:24]
         if (signal.evidence.get("stop_plan") or {}).get("reasons"):
             signal.gates = list(signal.evidence["stop_plan"]["reasons"])

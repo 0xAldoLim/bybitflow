@@ -76,6 +76,26 @@ def test_integrity_failure_precedes_any_output(settings):
         next(worker_rows(store))
 
 
+def test_unreadable_pack_becomes_audited_gap_without_fabricating_outcome(settings):
+    store = Store(settings.data_dir)
+    recorder = Recorder(store, settings)
+    recorder.flush([event(500)])
+    manifest = store.rows("segments")[0]
+    archive = store.root / "packs" / "invalid.zip"
+    archive.parent.mkdir(exist_ok=True)
+    archive.write_bytes(b"")
+    with store.db:
+        store.db.execute("INSERT INTO segment_packs VALUES(?,?,?)", (manifest["id"], str(archive), 0))
+    Path(manifest["raw"]).unlink()
+    rows = list(worker_rows(store))
+    assert rows and all(row["source"] == "control/gap" for row in rows)
+    audit = store.get("ml_recordings")
+    assert audit["excluded"] == 1
+    assert "unreadable packed recording archive" in Path(audit["audit"]).read_text()
+    assert archive.read_bytes() == b""
+    store.close()
+
+
 def test_live_cutoff_freezes_missing_history_as_incomplete_not_a_win(settings, signal):
     store = Store(settings.data_dir)
     FeatureStore(store).capture(signal, 1000, "decision")

@@ -8,6 +8,24 @@ from .storage import now_ms
 TERMINAL = {"INVALIDATED", "EXPIRED", "RESOLVED"}
 
 
+def retire_tradingview(store):
+    """Close legacy nonterminal chart setups once, preserving their frozen plans."""
+    retired = 0
+    for payload in store.active_signals():
+        if payload.get("source") != "tradingview":
+            continue
+        signal = Signal.model_validate(payload)
+        signal.state = "INVALIDATED"
+        signal.invalidation = "TRADINGVIEW_SUBSYSTEM_RETIRED"
+        signal.coverage["terminal_reason"] = signal.invalidation
+        signal.evidence["terminal_event"] = dict(
+            source="tradingview", method="SUBSYSTEM_RETIREMENT", detected_ms=now_ms()
+        )
+        store.signal(signal, signal.invalidation)
+        retired += 1
+    return retired
+
+
 def source_feed(scanner, source):
     if source == scanner.exchange:
         return scanner.api, scanner.streams

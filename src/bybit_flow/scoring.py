@@ -97,6 +97,21 @@ def score(
         )
     if ":flow-quality-v1" in signal.version:
         flow_strength *= min(1.0, (flow.get("quality", {}).get("flow_trust_score") or 0) / 0.6)
+    if e.get("flow_confirmation_mode") == "CROSS_VENUE_SUBSTITUTION":
+        # One order-flow category: independently trusted remote price response
+        # replaces low-quality local credit rather than adding to it.
+        observations = e.get("flow_substitution", {}).get("observations", [])
+        flow_strength = min(
+            (
+                min(
+                    unit(row.get("flow_trust_score"), 0.8),
+                    unit(sign * row.get("price_displacement_bps", 0), 8),
+                )
+                for row in observations
+            ),
+            default=0,
+        )
+        e["orderflow_score_basis"] = "trusted independent cross-venue flow and price response"
     fractions = {
         "regime": unit(context_features.get("efficiency"), 0.5),
         "structure": unit(setup_features.get("atr", 0) * 2 / distance if distance else 0)

@@ -67,7 +67,10 @@ def embed(signal, dashboard_url):
         if s.state == "INVALIDATED" and s.coverage.get("reasons"):
             reason += " · " + "; ".join(s.coverage["reasons"])
 
-        field("Update", s.coverage.get("terminal_reason", reason))
+        terminal_reason = s.coverage.get("terminal_reason", reason)
+        if terminal_reason == "TRADINGVIEW_SUBSYSTEM_RETIRED":
+            terminal_reason = "TradingView subsystem retired"
+        field("Update", terminal_reason)
 
         field("Original plan", f"Entry {s.entry:g} · SL {s.stop:g} · TP1 {s.tp1:g} · TP2 {s.tp2:g}")
 
@@ -129,11 +132,10 @@ def embed(signal, dashboard_url):
             field("Why override passed", " · ".join(reasons))
         local_quality = s.evidence.get("flow_quality", {})
         if local_quality.get("flow_trust_score") is not None and local_quality["flow_trust_score"] < 0.6:
-            cross = s.evidence.get("cross_exchange", {})
-            if cross.get("cross_venue_trusted_flow_agreement"):
+            if s.evidence.get("flow_confirmation_mode") == "CROSS_VENUE_SUBSTITUTION":
                 field(
                     "Flow quality",
-                    "MIXED LOCAL / CONFIRMED CROSS-VENUE · local printed volume was de-emphasized",
+                    "MIXED LOCAL / CONFIRMED CROSS-VENUE · local printed volume was de-emphasized; independent trusted venue flow confirmed the setup",
                 )
             else:
                 detail = (
@@ -282,8 +284,6 @@ class Notifier:
         if update and signal.state in {"INVALIDATED", "EXPIRED", "RESOLVED"}:
             # Store.signal commits the terminal event first. Delivery belongs to
             # the independent durable worker, never to lifecycle monitoring.
-            if signal.source == "tradingview":
-                await self.retry_terminals()
             return "terminal-persisted"
 
         if signal.synthetic:

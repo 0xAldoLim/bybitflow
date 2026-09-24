@@ -30,6 +30,94 @@ def fresh_comparison(result, at_ms, primary):
     return {"available": False, "reason": "Missing, stale or incompatible primary-venue comparison"}
 
 
+SUBSTITUTION_POLICY = "cross-venue-flow-substitution-v1"
+
+
+def substitution(signal, local_flow, comparison, start, end, at_ms, structure_valid):
+    """Return independent remote proof for one closed decision window, or no proof."""
+    quality = local_flow.get("quality", {})
+    sign = 1 if signal.direction == "LONG" else -1
+    result = dict(
+        passed=False,
+        policy=SUBSTITUTION_POLICY,
+        local_flow_quality_state=quality.get("flow_quality_state"),
+        local_flow_trust_score=quality.get("flow_trust_score"),
+        confirming_venues=[],
+        trusted_flow_venues=0,
+        trusted_consensus_delta_sign=comparison.get("trusted_consensus_delta_sign"),
+        cross_venue_effective_delta_sign=None,
+        cross_venue_price_response={},
+        cross_venue_observation_ms=comparison.get("event_ms"),
+        primary_source=signal.source,
+        decision_ms=end,
+    )
+    opposite = (
+        (quality.get("flow_trust_score") or 0) >= 0.6
+        and sign * (quality.get("effective_delta_notional") or 0) < 0
+        and sign * (local_flow.get("delta_pct") or 0) <= -10
+        and sign * (local_flow.get("cvd_slope") or 0) < 0
+        and (local_flow.get("delta_persistence") or 0) >= 0.6
+    )
+    if opposite:
+        return result | {"reason": "CROSS_VENUE_DISAGREEMENT"}
+    if (
+        quality.get("flow_quality_state") not in {"LOW_INFORMATION_VOLUME", "REPETITIVE_TWO_SIDED_CHURN"}
+        or (quality.get("flow_trust_score") or 0) >= 0.6
+    ):
+        return result | {"reason": "LOCAL_FLOW_NOT_SUBSTITUTABLE"}
+    if not structure_valid:
+        return result | {"reason": "LOCAL_STRUCTURE_UNCONFIRMED"}
+    if (
+        not comparison.get("available")
+        or signal.source not in comparison.get("exchanges", [])
+        or not comparison.get("cross_venue_trusted_flow_agreement")
+        or comparison.get("trusted_consensus_delta_sign") != ("POSITIVE" if sign > 0 else "NEGATIVE")
+        or not 0 <= at_ms - comparison.get("receipt_ms", -1) <= 15_000
+    ):
+        return result | {"reason": "CROSS_VENUE_EVIDENCE_UNAVAILABLE"}
+    confirmed = []
+    for row in comparison.get("observations", []):
+        if row.get("exchange") == signal.source or not row.get("flow", {}).get("available"):
+            continue
+        q = row["flow"].get("quality", {})
+        if (
+            row.get("window_start") != start
+            or row.get("window_end") != end
+            or not -2_000 <= at_ms - row.get("event_ms", 0) <= 15_000
+            or (q.get("flow_trust_score") or 0) < 0.6
+            or sign * (q.get("effective_delta_notional") or 0) <= 0
+            or sign * (q.get("price_displacement_bps") or 0) < 3
+            or (q.get("book_response_consistency") or 0) < 0.4
+        ):
+            continue
+        confirmed.append(row)
+    if len({row["exchange"] for row in confirmed}) < 2:
+        return result | {"reason": "TWO_TRUSTED_REMOTE_VENUES_REQUIRED"}
+    result.update(
+        passed=True,
+        confirming_venues=[row["exchange"] for row in confirmed],
+        trusted_flow_venues=len(confirmed),
+        cross_venue_effective_delta_sign="POSITIVE" if sign > 0 else "NEGATIVE",
+        cross_venue_price_response={
+            row["exchange"]: row["flow"]["quality"]["price_displacement_bps"] for row in confirmed
+        },
+        observations=[
+            dict(
+                exchange=row["exchange"],
+                flow_trust_score=row["flow"]["quality"]["flow_trust_score"],
+                effective_delta_notional=row["flow"]["quality"]["effective_delta_notional"],
+                price_displacement_bps=row["flow"]["quality"]["price_displacement_bps"],
+                book_response_consistency=row["flow"]["quality"]["book_response_consistency"],
+                event_ms=row["event_ms"],
+                window_start_ms=start,
+                window_end_ms=end,
+            )
+            for row in confirmed
+        ],
+    )
+    return result
+
+
 def compare(observations, at_ms, max_age=15_000):
     rows = [r for r in observations if -2000 <= at_ms - r["event_ms"] <= max_age and r["mid"] > 0]
     if (
@@ -283,6 +371,7 @@ class CrossVenue:
             if not context:
                 continue
             end = now // 60000 * 60000
+            window_ms = scanner.settings.execution_window_seconds * 1000
             from .features import candle_features
 
             atr = candle_features(context["m15"], now)["atr"]
@@ -298,7 +387,7 @@ class CrossVenue:
                 bf = book.features(now)
                 if (
                     tape.coverage_start > 0
-                    and tape.coverage_start <= end - 900_000
+                    and tape.coverage_start <= end - window_ms
                     and 0 <= now - tape.last_receipt <= scanner.settings.trade_stale_ms
                 ):
                     tick = (
@@ -306,9 +395,9 @@ class CrossVenue:
                         if symbol in getattr(api, "metadata", {})
                         else context["instrument"].tick
                     )
-                    recent = tape.window(end - 900_000, end)
+                    recent = tape.window(end - window_ms, end)
                     flow = await asyncio.to_thread(
-                        observed_flow, recent, tick, atr, bf, now, end - 900_000, end
+                        observed_flow, recent, tick, atr, bf, now, end - window_ms, end
                     )
                 observations.append(
                     dict(
@@ -318,7 +407,7 @@ class CrossVenue:
                         mid=bf["mid"],
                         spread_bps=bf["spread_bps"],
                         window_end=end,
-                        window_start=end - 900000,
+                        window_start=end - window_ms,
                         flow={
                             k: flow[k]
                             for k in (

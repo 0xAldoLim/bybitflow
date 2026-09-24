@@ -164,6 +164,8 @@ async def doctor(settings, store, network=True):
             if runtime.get("streams_fresh")
             and runtime.get("source_feed_available")
             and runtime.get("source_ready")
+            and runtime.get("active_required_streams_fresh", 0)
+            == runtime.get("active_required_streams_total", 0)
             else "DEGRADED"
         )
         if 0 <= now_ms() - runtime.get("at_ms", 0) <= 90_000

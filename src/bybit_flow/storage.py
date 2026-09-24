@@ -112,13 +112,15 @@ class Store:
 
         if signal.synthetic:
             raise ValueError("Synthetic signals must never enter research storage")
+        old = self.db.execute("SELECT state,payload FROM signals WHERE id=?", (signal.id,)).fetchone()
+        if signal.source == "tradingview" and not old:
+            raise ValueError("TRADINGVIEW_SUBSYSTEM_RETIRED")
 
         # Capture before lifecycle overwrites; both accepted and rejected decisions survive.
         features = FeatureStore(self)
         features.capture(signal, max(now_ms(), signal.created_ms), "generation")
         if signal.evidence.get("score_components"):
             features.capture(signal, max(now_ms(), signal.created_ms), "decision")
-        old = self.db.execute("SELECT state,payload FROM signals WHERE id=?", (signal.id,)).fetchone()
         if old:
             if old[0] in {"INVALIDATED", "EXPIRED", "RESOLVED"}:
                 return  # A stale asynchronous evaluator must never resurrect a terminal setup.

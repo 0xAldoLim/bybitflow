@@ -2,7 +2,7 @@
 
 ## Collection and labels
 
-Feature schema `candidate-v4` stores immutable generation snapshots and the first
+Current feature schema `candidate-v8` stores immutable generation snapshots and the first
 scored decision for each setup. Source identity, strategy version, event time,
 availability time, missingness, and point-in-time membership accompany the features.
 Exports are source- and schema-specific. Lifecycle states, predictions, and outcomes
@@ -15,8 +15,9 @@ deadline. TP2 is informational. Missing continuity, late exits, and unresolved
 positions do not become complete training outcomes.
 
 The worker preflights committed raw hashes, manifests, row counts, bounds, and
-ordering. Missing, clock-damaged, and overlapping intervals become audited global
-gaps. Original files remain unchanged. Integrity mismatches halt processing.
+ordering. Missing, unreadable packed, clock-damaged, and overlapping intervals become
+audited global gaps. Original files and packs remain unchanged. Hash and manifest
+mismatches on readable evidence halt processing.
 Strict explicit replay continues to reject unordered input.
 
 Snapshot queries materialize a bounded result before yielding. This releases SQLite
@@ -49,6 +50,9 @@ bybit-flow ml infer MODEL_ID DATASET.parquet
 Training requires at least 200 training, 100 calibration, 100 validation, and 100
 holdout outcomes after chronological partitioning, purging, and embargo. These
 minimums do not establish promotion eligibility.
+Millions of recorded events do not substitute for complete, independent outcomes.
+`ml status` reports complete labels, recent worker activity, abstention reasons, and
+whether a compatible challenger exists. Network gaps can leave many labels incomplete.
 
 The pipeline fits preprocessing on training rows only, then trains regularized
 logistic or shallow LightGBM models. Calibration uses independent data. Bounded
@@ -106,10 +110,12 @@ research storage, outside Git. See [operations](OPERATIONS.md) for backup and re
 When two-stage mode is enabled but fewer than 500 compatible complete sequences are
 available, the worker attempts the Logistic Regression/LightGBM tabular baseline.
 Chronological partitions and class requirements remain unchanged. Feature schema
-`candidate-v7` adds the existing causal flow-response fields; historical snapshots
+`candidate-v8` includes causal flow-quality and market-alignment fields; historical snapshots
 remain immutable and incompatible schemas are not silently pooled for training.
 Advisory inference skips incompatible or degraded artifacts. Models are never
 automatically promoted, and deterministic setup scores are not replaced by ML scores.
+The V7.1 flow confirmation mode is retained as signal provenance without changing
+the `candidate-v8` model input schema or forcing retraining.
 
 Set `FLOW_ML_ENABLED=true` and `FLOW_ML_TWO_STAGE=true` to collect causal sequences
 and run the two-stage research pipeline. Stage one uses LightGBM, Random Forest
@@ -131,7 +137,7 @@ Successful cycles remain weekly. LSTM training is confined to the CPU worker; li
 inference reads JSON weights using NumPy, without loading PyTorch or pickle files.
 `FLOW_ML_FILTER_RESEARCH=false` keeps incomplete or abstaining models from blocking
 otherwise confirmed research signals. Model rankings are not validated win rates;
-there is no automatic promotion. The 10 GB recording budget and retention policy
+there is no automatic promotion. The configured recording budget and retention policy
 remain independent of model choice.
 
 Implementation references: [PyTorch LSTM](https://docs.pytorch.org/docs/2.14/generated/torch.nn.LSTM.html),

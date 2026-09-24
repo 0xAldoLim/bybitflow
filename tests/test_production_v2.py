@@ -2,15 +2,18 @@ from decimal import Decimal
 
 import pytest
 
+from bybit_flow.cross_venue import compare, substitution
 from bybit_flow.funnel import reject, status
 from bybit_flow.levels import build_stop_plan, targets
 from bybit_flow.models import Candle
+from bybit_flow.notifications import embed
 from bybit_flow.production import (
     evaluate_intraday_confirmation,
     market_alignment,
     participation,
     structure_response,
 )
+from bybit_flow.scoring import score
 from bybit_flow.storage import Store
 
 
@@ -112,6 +115,102 @@ def test_original_trigger_and_post_trigger_response_required(signal):
     signal.evidence["structural_trigger"]["valid"] = True
     signal.evidence["trigger_bar_end"] = 120000
     assert not evaluate_intraday_confirmation(signal, flow, bars, 60000)["passed"]
+
+
+def remote_rows(trust=0.85, displacement=-6, include_okx=True):
+    rows = []
+    for name in ["binance", "bybit", "okx"] if include_okx else ["binance", "bybit"]:
+        rows.append(
+            dict(
+                exchange=name,
+                event_ms=60000,
+                mid=100,
+                spread_bps=1,
+                window_start=0,
+                window_end=60000,
+                flow=dict(
+                    available=True,
+                    delta_pct=-30,
+                    quality=dict(
+                        flow_trust_score=0.2 if name == "binance" else trust,
+                        effective_delta_notional=-1000,
+                        price_displacement_bps=displacement,
+                        book_response_consistency=0.8,
+                    ),
+                ),
+            )
+        )
+    return compare(rows, 61000)
+
+
+def test_two_trusted_remote_venues_substitute_only_low_quality_local_flow(signal):
+    flow, bars = setup(signal, "SHORT", mature=False)
+    signal.source = "binance"
+    signal.version += ":flow-quality-v1:cross-venue-flow-substitution-v1"
+    flow["quality"] = dict(flow_quality_state="REPETITIVE_TWO_SIDED_CHURN", flow_trust_score=0.2)
+    flow.update(delta_pct=0, cvd_slope=0)
+    remote = substitution(signal, flow, remote_rows(), 0, 60000, 61000, True)
+    assert remote["passed"] and remote["confirming_venues"] == ["bybit", "okx"]
+    signal.evidence["flow_substitution"] = remote
+    signal.evidence["flow_confirmation_mode"] = "CROSS_VENUE_SUBSTITUTION"
+    result = evaluate_intraday_confirmation(signal, flow, bars, 60000)
+    assert result["passed"] and result["flow_confirmation_mode"] == "CROSS_VENUE_SUBSTITUTION"
+    assert "LOW_INFORMATION_EXECUTED_FLOW" not in result["reason_codes"]
+
+
+@pytest.mark.parametrize(
+    "comparison", [remote_rows(include_okx=False), remote_rows(trust=0.2), remote_rows(displacement=0)]
+)
+def test_remote_volume_or_one_venue_does_not_rescue(signal, comparison):
+    flow, _ = setup(signal, "SHORT")
+    signal.source = "binance"
+    flow["quality"] = dict(flow_quality_state="LOW_INFORMATION_VOLUME", flow_trust_score=0.2)
+    assert not substitution(signal, flow, comparison, 0, 60000, 61000, True)["passed"]
+
+
+def test_trusted_opposing_local_flow_is_not_substituted(signal):
+    flow, _ = setup(signal, "SHORT")
+    signal.source = "binance"
+    flow.update(delta_pct=30, cvd_slope=10)
+    flow["quality"] = dict(
+        flow_quality_state="INFORMATIVE_DIRECTIONAL_FLOW",
+        flow_trust_score=0.85,
+        effective_delta_notional=1000,
+    )
+    assert (
+        substitution(signal, flow, remote_rows(), 0, 60000, 61000, True)["reason"]
+        == "CROSS_VENUE_DISAGREEMENT"
+    )
+
+
+def test_substitution_cannot_override_missing_local_structure(signal):
+    flow, _ = setup(signal, "SHORT")
+    signal.source = "binance"
+    flow["quality"] = dict(flow_quality_state="LOW_INFORMATION_VOLUME", flow_trust_score=0.2)
+    result = substitution(signal, flow, remote_rows(), 0, 60000, 61000, False)
+    assert not result["passed"] and result["reason"] == "LOCAL_STRUCTURE_UNCONFIRMED"
+
+
+def test_remote_confirmation_scores_one_orderflow_category_and_is_visible(signal):
+    flow, _ = setup(signal, "SHORT")
+    signal.source = "binance"
+    signal.version += ":flow-quality-v1:flow-score-v2"
+    signal.state = "CONFIRMED"
+    signal.risk = {"accepted": True, "net_rr": 2}
+    flow["quality"] = dict(flow_quality_state="REPETITIVE_TWO_SIDED_CHURN", flow_trust_score=0.2)
+    signal.evidence["flow_quality"] = flow["quality"]
+    signal.evidence["flow_confirmation_mode"] = "CROSS_VENUE_SUBSTITUTION"
+    signal.evidence["flow_substitution"] = substitution(signal, flow, remote_rows(), 0, 60000, 61000, True)
+    score(signal, True, False)
+    earned = signal.evidence["score_components"]["orderflow"]["earned"]
+    flow.update(delta_pct=-99, absorption_short=True, defended_notional={"SHORT": 1000000})
+    score(signal, True, False)
+    assert signal.evidence["score_components"]["orderflow"]["earned"] == earned
+    assert earned <= 25
+    card = embed(signal, "http://127.0.0.1:8000")
+    assert any(
+        "MIXED LOCAL / CONFIRMED CROSS-VENUE" in field["value"] for field in card["embeds"][0]["fields"]
+    )
 
 
 def test_future_confirmation_evidence_does_not_change_decision(signal):
