@@ -111,6 +111,7 @@ async def test_auto_source_selection_records_transition_and_resets(settings, mon
         await scanner.select_source()
         assert scanner.exchange == "binance" and not scanner.context and scanner.source_ready
         assert store.get("active_exchange")["current"] == "binance"
+        assert scanner.streams.store is store
         assert not scanner.streams.connected
     finally:
         await scanner.stop()

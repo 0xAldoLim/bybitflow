@@ -10,8 +10,9 @@ This guide covers configuration and recovery in more detail.
 - Network access to the selected exchange's public REST and WebSocket endpoints.
 - Persistent storage and an awake host during collection.
 
-The dashboard binds to `127.0.0.1:8000`. The default Compose limits are 2 GB per
-service, two CPUs for the desk, and one CPU for the trainer.
+The dashboard binds to `127.0.0.1:8000`. The default Compose limits are 4 GB for
+the desk and 2 GB for the trainer, with two CPUs for the desk and one CPU for the
+trainer. The desk limit includes filesystem cache for continuous market recordings.
 
 ## Configuration
 

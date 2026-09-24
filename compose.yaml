@@ -21,7 +21,7 @@ services:
       - /tmp:size=128m
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
-    mem_limit: 2g
+    mem_limit: 4g
     cpus: 2
     stop_grace_period: 90s
     healthcheck:

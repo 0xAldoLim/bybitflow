@@ -92,6 +92,9 @@ class Scanner:
                 await self.api.close()
             self.api, self.streams = self.cross_venue.ensure_peer(name)
             self.cross_venue.peers.pop(name)
+            # A promoted collector is the primary now. Publish its health under
+            # the primary keys rather than the former secondary namespace.
+            self.streams.store = self.store
             job = self.cross_venue.jobs.pop(name, None)
             if job:
                 job.cancel()

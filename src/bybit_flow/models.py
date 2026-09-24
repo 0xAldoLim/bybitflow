@@ -24,7 +24,7 @@ class Candle:
         return self.start + self.interval
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class Trade:
     symbol: str
     event_ms: int
