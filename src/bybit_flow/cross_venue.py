@@ -120,11 +120,16 @@ def substitution(signal, local_flow, comparison, start, end, at_ms, structure_va
 
 def compare(observations, at_ms, max_age=15_000):
     rows = [r for r in observations if -2000 <= at_ms - r["event_ms"] <= max_age and r["mid"] > 0]
-    if (
-        len({r["exchange"] for r in rows}) < 2
-        or max(r["event_ms"] for r in rows) - min(r["event_ms"] for r in rows) > 5000
-    ):
-        return {"available": False, "reason": "Need two independently fresh, time-aligned venue observations"}
+    event_skew = max(r["event_ms"] for r in rows) - min(r["event_ms"] for r in rows) if rows else None
+    if len({r["exchange"] for r in rows}) < 2 or event_skew > 5000:
+        return {
+            "available": False,
+            "reason": "Need two independently fresh, time-aligned venue observations",
+            "observed_exchanges": [r["exchange"] for r in observations],
+            "fresh_exchanges": [r["exchange"] for r in rows],
+            "event_skew_ms": event_skew,
+            "at_ms": at_ms,
+        }
     mids = [r["mid"] for r in rows]
     spreads = [r["spread_bps"] for r in rows]
     deltas = [r["flow"]["delta_pct"] for r in rows if r.get("flow", {}).get("available")]

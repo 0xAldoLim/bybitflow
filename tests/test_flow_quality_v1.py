@@ -178,6 +178,17 @@ def test_large_low_trust_venue_does_not_overrule_trusted_cross_venue_flow():
     assert result["cross_venue_trusted_flow_agreement"]
 
 
+def test_unavailable_comparison_reports_which_venues_were_fresh():
+    rows = [
+        dict(exchange="binance", event_ms=100000, mid=100, spread_bps=1),
+        dict(exchange="bybit", event_ms=80000, mid=100, spread_bps=1),
+    ]
+    result = compare(rows, 101000)
+    assert not result["available"]
+    assert result["observed_exchanges"] == ["binance", "bybit"]
+    assert result["fresh_exchanges"] == ["binance"]
+
+
 def test_retired_tradingview_endpoint_preserves_historical_rows(settings, signal):
     signal.source = "tradingview"
     signal.state = "RESOLVED"
