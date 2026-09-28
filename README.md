@@ -187,10 +187,10 @@ include Docker images or installed training software.
 
 With retention enabled and the ML worker running, cleanup begins at 85% of the
 configured budget and aims back toward 60%. The worker also reclaims eligible old
-recordings in small batches below that threshold after outcomes are recorded. At
-least six recent hours and any evidence needed by active setups or unresolved ML
-outcomes remain protected. Saved feature snapshots, labels, training datasets,
-models and audit hashes are kept. Decisions older than the retained replay boundary
+recordings in small batches below that threshold after outcomes are recorded. It
+keeps the latest 15 minutes of raw tape; active setups, unresolved ML outcomes and
+replay readers protect their evidence for longer. Saved feature snapshots, labels,
+training datasets, models and audit hashes are kept. Decisions older than the retained replay boundary
 are recorded as incomplete, never as wins or losses. Deleted raw history cannot be
 replayed later. If protected data alone fills the budget, recording stops explicitly.
 

@@ -24,18 +24,20 @@ def run(store, asof):
         identity = row[4] or row[0]
         if identity in seen:
             continue
-        seen.add(identity)
-        snapshot = json.loads(
-            store.db.execute("SELECT payload FROM ml_snapshots WHERE id=?", (row[2],)).fetchone()[0]
-        )
         outcome = json.loads(
             store.db.execute(
                 "SELECT payload FROM ml_labels WHERE snapshot_id=? AND policy='prints-v1'", (row[2],)
             ).fetchone()[0]
         )
-        components = snapshot["signal"]["evidence"].get("score_components", {})
-        if not outcome.get("complete") or outcome.get("net_r") is None or set(components) != set(WEIGHTS):
+        if not outcome.get("complete") or outcome.get("net_r") is None:
             continue
+        snapshot = json.loads(
+            store.db.execute("SELECT payload FROM ml_snapshots WHERE id=?", (row[2],)).fetchone()[0]
+        )
+        components = snapshot["signal"]["evidence"].get("score_components", {})
+        if set(components) != set(WEIGHTS):
+            continue
+        seen.add(identity)
         rows.append(
             dict(
                 id=row[0],

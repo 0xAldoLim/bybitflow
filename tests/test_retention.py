@@ -146,6 +146,77 @@ def test_force_retention_prunes_safe_evidence_below_budget(settings):
     store.close()
 
 
+def test_finalized_incomplete_outcome_releases_recent_raw_evidence(settings, signal):
+    store = Store(settings.data_dir)
+    now = 8 * 3_600_000
+    decision = now - 3_600_000
+    recorder = Recorder(store, settings)
+    recorder.flush(
+        [
+            dict(
+                source="control/subscribed",
+                symbol=signal.symbol,
+                event_ms=decision,
+                receipt_ms=decision,
+                schema_version=1,
+                complete=True,
+                payload=json.dumps({"symbols": [signal.symbol]}),
+            )
+        ]
+    )
+    manifest = store.rows("segments")[0]
+    ident = FeatureStore(store).capture(signal, decision, "decision")
+    FeatureStore(store).label(
+        ident,
+        dict(policy="prints-v1", complete=False, classification="incomplete", net_r=None),
+        decision + 1,
+    )
+    cfg = SimpleNamespace(recording_retention_enabled=True, max_storage_gb=1)
+    assert prune_recordings(store, cfg, now)["freed_bytes"] == 0
+    assert prune_recordings(store, cfg, now, force=True)["freed_bytes"] > 0
+    assert not Path(manifest["raw"]).exists()
+    assert store.db.execute("SELECT 1 FROM ml_labels WHERE snapshot_id=?", (ident,)).fetchone()
+    store.close()
+
+
+def test_incomplete_label_does_not_release_active_setup_evidence(settings, signal):
+    store = Store(settings.data_dir)
+    now = 8 * 3_600_000
+    decision = now - 3_600_000
+    signal.created_ms = decision
+    signal.expires_ms = now + 3_600_000
+    signal.state = "ALERTED"
+    with store.db:
+        store.db.execute(
+            "INSERT INTO signals VALUES(?,?,?,?,?)",
+            (signal.id, signal.symbol, decision, signal.state, signal.model_dump_json()),
+        )
+    Recorder(store, settings).flush(
+        [
+            dict(
+                source="control/subscribed",
+                symbol=signal.symbol,
+                event_ms=decision,
+                receipt_ms=decision,
+                schema_version=1,
+                complete=True,
+                payload=json.dumps({"symbols": [signal.symbol]}),
+            )
+        ]
+    )
+    raw = Path(store.rows("segments")[0]["raw"])
+    ident = FeatureStore(store).capture(signal, decision, "decision")
+    FeatureStore(store).label(
+        ident,
+        dict(policy="prints-v1", complete=False, classification="incomplete", net_r=None),
+        decision + 1,
+    )
+    cfg = SimpleNamespace(recording_retention_enabled=True, max_storage_gb=1)
+    assert prune_recordings(store, cfg, now, force=True)["freed_bytes"] == 0
+    assert raw.exists()
+    store.close()
+
+
 def test_labels_restart_observed_coverage_after_pruned_subscription(settings, signal):
     store = Store(settings.data_dir)
     store.put("recording_retention", dict(through_ms=1000))

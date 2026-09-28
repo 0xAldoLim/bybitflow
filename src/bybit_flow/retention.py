@@ -104,7 +104,9 @@ def prune_recordings(store, settings, at_ms=None, dry_run=False, force=False, ma
             reason="No deletion scheduled below the pressure threshold",
         )
     # Eligibility is per evidence interval, never gated by global ML health.
-    cutoff = now - 6 * 3_600_000
+    # Forced ML cleanup uses a short recorder boundary. Active setups,
+    # unresolved outcomes and readers still protect their exact ranges below.
+    cutoff = now - (15 * 60_000 if force else 6 * 3_600_000)
     ranges = protection_ranges(store, now)
     from bisect import bisect_right
 

@@ -231,9 +231,9 @@ data without a model. See [ML research](ML_RESEARCH.md) for readiness and approv
 `FLOW_RECORDING_RETENTION_ENABLED=true` enables raw-data cleanup in the ML worker
 after outcome processing. Below 85% of `FLOW_MAX_STORAGE_GB`, the worker removes
 eligible old evidence in batches of about 256 MB per monitoring pass. At 85% it
-removes safe old files toward 60% usage to restore headroom. At least
-six recent hours are protected; older active plans, unresolved labels and replay
-leases can extend that protection. The database,
+removes safe old files toward 60% usage to restore headroom. The worker retains
+the latest 15 minutes of raw tape; older active plans, unresolved labels and replay
+leases can extend that protection. Manual cleanup retains six recent hours. The database,
 feature snapshots, labels, training datasets, models and segment hashes remain.
 Removed raw history cannot be replayed again; unlabelled decisions before the
 retention boundary receive an incomplete label, never an invented win or loss. The

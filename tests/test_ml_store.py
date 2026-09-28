@@ -37,6 +37,34 @@ def test_immutable_rejected_candidate_and_label(settings, signal):
     store.close()
 
 
+def test_incomplete_outcome_does_not_hide_complete_related_candidate(settings, signal):
+    store = Store(settings.data_dir)
+    features = FeatureStore(store)
+    first = features.capture(signal, 2000, "decision")
+    related = signal.model_copy(update={"id": "related-signal", "created_ms": 3000})
+    second = features.capture(related, 3000, "decision")
+    identity = store.db.execute(
+        "SELECT candidate_identity FROM candidate_identities WHERE signal_id=?", (signal.id,)
+    ).fetchone()[0]
+    with store.db:
+        store.db.execute(
+            "UPDATE candidate_identities SET candidate_identity=? WHERE signal_id=?",
+            (identity, related.id),
+        )
+    features.label(
+        first,
+        dict(policy="prints-v1", complete=False, classification="incomplete", net_r=None),
+        4000,
+    )
+    features.label(
+        second,
+        dict(policy="prints-v1", complete=True, classification="win", net_r=1.0, exit_ms=4500),
+        5000,
+    )
+    assert [row["id"] for row in features.dataset(6000)] == [second]
+    store.close()
+
+
 def test_unavailable_future_and_source_distinction(signal):
     signal.source = "tradingview"
     signal.evidence = {"flow": {"delta_pct": 90, "event_ms": 5000}}

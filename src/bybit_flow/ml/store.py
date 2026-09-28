@@ -148,7 +148,6 @@ class FeatureStore:
             opportunity = identity[0] if identity else s["signal_id"]
             if opportunity in seen:
                 continue
-            seen.add(opportunity)
             row = self.db.execute(
                 "SELECT available_ms,payload FROM ml_labels WHERE snapshot_id=? "
                 "AND policy=? AND available_ms<=?",
@@ -159,6 +158,7 @@ class FeatureStore:
             label = json.loads(row[1])
             if not label.get("complete") or label.get("net_r") is None or label["exit_ms"] > asof_ms:
                 continue
+            seen.add(opportunity)
             result.append(
                 {**s, "candidate_identity": opportunity, "label": label, "label_available_ms": row[0]}
             )

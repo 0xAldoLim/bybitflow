@@ -57,7 +57,6 @@ def run(store, asof):
     ).fetchall():
         if (identity or signal_id) in seen:
             continue
-        seen.add(identity or signal_id)
         outcome = json.loads(
             store.db.execute(
                 "SELECT payload FROM ml_labels WHERE snapshot_id=? AND policy='prints-v1'", (ident,)
@@ -107,6 +106,7 @@ def run(store, asof):
                 and sign * flow.get("price_change", 0) > 0
             )
         )
+        seen.add(identity or signal_id)
         rows.append(
             dict(
                 id=ident,
