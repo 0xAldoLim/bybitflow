@@ -185,10 +185,13 @@ Market recordings and ML data are stored **locally in Docker's `research-data`
 volume**. `FLOW_MAX_STORAGE_GB=10` sets the application data budget; it does not
 include Docker images or installed training software.
 
-With retention enabled and the ML worker running, cleanup starts at 8 GB and aims
-back toward 6 GB after outcome processing. It removes the oldest raw recording
-files while protecting at least six recent hours. Saved feature snapshots, labels,
-training datasets, models and audit hashes are kept. Deleted raw history cannot be
+With retention enabled and the ML worker running, cleanup begins at 85% of the
+configured budget and aims back toward 60%. The worker also reclaims eligible old
+recordings in small batches below that threshold after outcomes are recorded. At
+least six recent hours and any evidence needed by active setups or unresolved ML
+outcomes remain protected. Saved feature snapshots, labels, training datasets,
+models and audit hashes are kept. Decisions older than the retained replay boundary
+are recorded as incomplete, never as wins or losses. Deleted raw history cannot be
 replayed later. If protected data alone fills the budget, recording stops explicitly.
 
 ## Updating the program

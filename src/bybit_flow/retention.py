@@ -85,13 +85,15 @@ def storage_status(store, settings):
     return result
 
 
-def prune_recordings(store, settings, at_ms=None, dry_run=False):
+def prune_recordings(store, settings, at_ms=None, dry_run=False, force=False, max_reclaim_bytes=None):
     if not settings.recording_retention_enabled:
         return {"status": "disabled"}
     now = at_ms or now_ms()
     usage = directory_bytes(store.root)
     budget = settings.max_storage_gb * 1e9
-    if usage < budget * 0.85 and store.get("recording_retention", {}).get("status") != "pruning":
+    if usage >= budget * 0.85:
+        max_reclaim_bytes = None  # Emergency cleanup must recover enough headroom.
+    if not force and usage < budget * 0.85 and store.get("recording_retention", {}).get("status") != "pruning":
         return dict(
             status="dry-run" if dry_run else "within budget",
             bytes_before=usage,
@@ -128,11 +130,13 @@ def prune_recordings(store, settings, at_ms=None, dry_run=False):
     manifests = [json.loads(r[0]) for r in store.db.execute("SELECT payload FROM segments")]
     manifests.sort(key=lambda m: m["max_receipt_ms"])
     selected, planned = [], 0
-    pressure = usage >= budget * 0.85
+    pressure = usage >= budget * 0.85 or force
     for m in manifests:
+        if max_reclaim_bytes is not None and planned >= max_reclaim_bytes:
+            break
         end = m["max_receipt_ms"]
         resume = m.get("id") in pruned or end <= through
-        if not resume and (not pressure or end > cutoff or usage - planned <= budget * 0.6):
+        if not resume and (not pressure or end > cutoff or (not force and usage - planned <= budget * 0.6)):
             continue
         if protected(m.get("min_receipt_ms", end), end):
             continue
@@ -153,6 +157,8 @@ def prune_recordings(store, settings, at_ms=None, dry_run=False):
         "min(json_extract(s.payload,'$.min_receipt_ms')) FROM segment_packs p "
         "JOIN segments s ON s.id=p.segment_id GROUP BY p.archive"
     ):
+        if max_reclaim_bytes is not None and planned >= max_reclaim_bytes:
+            break
         p = Path(archive)
         if p.is_symlink() or p.resolve().parent != (store.root / "packs").resolve():
             raise ValueError("Retention path outside managed packs")
@@ -160,7 +166,7 @@ def prune_recordings(store, settings, at_ms=None, dry_run=False):
             pressure
             and end <= cutoff
             and p.exists()
-            and usage - planned > budget * 0.6
+            and (force or usage - planned > budget * 0.6)
             and not protected(start, end)
         ):
             packs.append((p, end, start))

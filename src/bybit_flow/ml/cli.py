@@ -62,7 +62,7 @@ def cycle(settings, store):
 def monitor(settings, store):
     """Resolve paper labels and check drift independently of the weekly fit cadence."""
     from .drift import check
-    from .labels import label_recordings
+    from .labels import close_pre_retention_decisions, label_recordings
     from .recordings import worker_rows
 
     previous = store.get("ml_monitor", {})
@@ -79,6 +79,7 @@ def monitor(settings, store):
     )
     paths = store.db.execute("SELECT 1 FROM segments LIMIT 1").fetchone()
     result = dict(at_ms=now_ms(), status="no-recordings")
+    result["pre_retention_closed"] = close_pre_retention_decisions(store)
     if settings.ml_two_stage:
         store.put(
             "ml_pipeline",
@@ -119,7 +120,9 @@ def monitor(settings, store):
     store.put("ml_monitor", result)
     from ..retention import prune_recordings
 
-    result["retention"] = prune_recordings(store, settings)
+    # Reclaim consumed recordings gradually while under budget. Pressure cleanup
+    # remains unbounded so it can restore the recorder before it drops more data.
+    result["retention"] = prune_recordings(store, settings, force=True, max_reclaim_bytes=256_000_000)
     from .horizon import fit as fit_horizon
 
     result["horizon_model"] = fit_horizon(store, settings, now_ms())

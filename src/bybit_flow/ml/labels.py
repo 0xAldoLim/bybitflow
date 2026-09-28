@@ -12,6 +12,36 @@ from ..models import Signal, Trade
 from .store import FeatureStore, digest
 
 
+def close_pre_retention_decisions(store):
+    """Freeze unverifiable old decisions without inventing a paper outcome."""
+    from ..storage import now_ms
+
+    through = store.get("recording_retention", {}).get("through_ms", 0)
+    if not through:
+        return 0
+    rows = store.db.execute(
+        "SELECT s.id,s.decision_ms FROM ml_snapshots s WHERE s.stage='decision' "
+        "AND s.decision_ms<=? AND NOT EXISTS "
+        "(SELECT 1 FROM ml_labels l WHERE l.snapshot_id=s.id AND l.policy='prints-v1')",
+        (through,),
+    ).fetchall()
+    features = FeatureStore(store)
+    for ident, decision_ms in rows:
+        features.label(
+            ident,
+            dict(
+                policy="prints-v1",
+                complete=False,
+                classification="incomplete",
+                net_r=None,
+                data_gaps=["Decision predates retained replay boundary"],
+                reason="Recorded outcome cannot be verified from the retained replay interval",
+            ),
+            max(now_ms(), decision_ms),
+        )
+    return len(rows)
+
+
 def label_recordings(
     store, rows, settings, stage="decision", max_active=5000, observed_until_ms=None, incremental=False
 ):

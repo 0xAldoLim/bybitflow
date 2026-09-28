@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from bybit_flow.ml.labels import label_recordings
+from bybit_flow.ml.labels import close_pre_retention_decisions, label_recordings
 from bybit_flow.ml.recordings import worker_rows
 from bybit_flow.ml.store import FeatureStore
 from bybit_flow.packing import compact
@@ -100,6 +100,49 @@ def test_retention_keeps_corrupt_pack_and_prunes_independent_pack(settings):
     assert archives[0].exists()
     assert not archives[1].exists()
     assert store.get("recording_retention_errors")["items"][0]["error_type"] == "BadZipFile"
+    store.close()
+
+
+def test_pre_retention_decision_becomes_incomplete_not_a_trade_result(settings, signal):
+    store = Store(settings.data_dir)
+    ident = FeatureStore(store).capture(signal, 2000, "decision")
+    store.put("recording_retention", dict(through_ms=3000))
+    assert close_pre_retention_decisions(store) == 1
+    assert close_pre_retention_decisions(store) == 0
+    label = json.loads(
+        store.db.execute("SELECT payload FROM ml_labels WHERE snapshot_id=?", (ident,)).fetchone()[0]
+    )
+    assert label["classification"] == "incomplete"
+    assert label["net_r"] is None
+    assert not label["complete"]
+    store.close()
+
+
+def test_force_retention_prunes_safe_evidence_below_budget(settings):
+    store = Store(settings.data_dir)
+    recorder = Recorder(store, settings)
+    for at in (1000, 2000):
+        recorder.flush(
+            [
+                dict(
+                    source="control/subscribed",
+                    symbol="TESTUSDT",
+                    event_ms=at,
+                    receipt_ms=at,
+                    schema_version=1,
+                    complete=True,
+                    payload='{"symbols":["TESTUSDT"]}',
+                )
+            ]
+        )
+    manifests = sorted(store.rows("segments"), key=lambda m: m["max_receipt_ms"])
+    cfg = SimpleNamespace(recording_retention_enabled=True, max_storage_gb=1)
+    assert prune_recordings(store, cfg, 8 * 3_600_000)["freed_bytes"] == 0
+    assert prune_recordings(store, cfg, 8 * 3_600_000, force=True, max_reclaim_bytes=1)["freed_bytes"] > 0
+    assert not Path(manifests[0]["raw"]).exists()
+    assert Path(manifests[1]["raw"]).exists()
+    assert prune_recordings(store, cfg, 8 * 3_600_000, force=True, max_reclaim_bytes=1)["freed_bytes"] > 0
+    assert not Path(manifests[1]["raw"]).exists()
     store.close()
 
 
