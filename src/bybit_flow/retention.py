@@ -1,6 +1,7 @@
 """Bound raw recordings while retaining immutable ML and segment audit records."""
 
 import json
+import zipfile
 from pathlib import Path
 
 from .storage import directory_bytes, now_ms
@@ -188,6 +189,7 @@ def prune_recordings(store, settings, at_ms=None, dry_run=False):
     state.update(at_ms=now, status="pruning", bytes_before=usage)
     store.put("recording_retention", state)
     freed = 0
+    skipped = []
 
     def verify(m):
         if hashlib.sha256(raw_bytes(m["raw"])).hexdigest() != m["sha256"] or manifest_for(m["raw"]) != m:
@@ -217,6 +219,10 @@ def prune_recordings(store, settings, at_ms=None, dry_run=False):
                 freed += size
         except BlockingIOError:
             continue
+        except (zipfile.BadZipFile, KeyError, FileNotFoundError, ValueError) as exc:
+            # A damaged archive is evidence of a recording gap. Keep its bytes and
+            # manifest for diagnosis; it must not block unrelated safe cleanup.
+            skipped.append(dict(path=str(path), error_type=type(exc).__name__))
     for m, paths in selected:
         try:
             with RangeLease(
@@ -240,14 +246,19 @@ def prune_recordings(store, settings, at_ms=None, dry_run=False):
                         freed += size
         except BlockingIOError:
             continue
+        except (zipfile.BadZipFile, KeyError, FileNotFoundError, ValueError) as exc:
+            skipped.append(dict(path=str(paths[0]), error_type=type(exc).__name__))
     state.update(
         status="pruned",
         bytes_after=usage - freed,
         freed_bytes=freed,
         total_freed_bytes=state.get("total_freed_bytes", 0) + freed,
         preserved="database, feature snapshots, outcome labels, datasets, models and segment hashes",
+        skipped_unverifiable=len(skipped),
     )
     store.put("recording_retention", state)
+    if skipped:
+        store.put("recording_retention_errors", dict(at_ms=now, items=skipped[:100], total=len(skipped)))
     return state
 
 

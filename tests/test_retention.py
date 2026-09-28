@@ -7,6 +7,7 @@ import pytest
 from bybit_flow.ml.labels import label_recordings
 from bybit_flow.ml.recordings import worker_rows
 from bybit_flow.ml.store import FeatureStore
+from bybit_flow.packing import compact
 from bybit_flow.retention import prune_recordings
 from bybit_flow.storage import Recorder, Store
 
@@ -68,6 +69,37 @@ def test_retention_rejects_paths_outside_segments(settings, tmp_path):
     with pytest.raises(ValueError, match="outside managed"):
         prune_recordings(store, cfg, now)
     assert outside.read_text() == "keep"
+    store.close()
+
+
+def test_retention_keeps_corrupt_pack_and_prunes_independent_pack(settings):
+    store = Store(settings.data_dir)
+    recorder = Recorder(store, settings)
+    archives = []
+    for batch in range(2):
+        for at in (batch * 2 + 1, batch * 2 + 2):
+            recorder.flush(
+                [
+                    dict(
+                        source="control/subscribed",
+                        symbol="TESTUSDT",
+                        event_ms=at,
+                        receipt_ms=at,
+                        schema_version=1,
+                        complete=True,
+                        payload='{"symbols":["TESTUSDT"]}',
+                    )
+                ]
+            )
+        archives.append(Path(compact(store, limit=2)["archive"]))
+    archives[0].write_bytes(b"damaged pack")
+    cfg = SimpleNamespace(recording_retention_enabled=True, max_storage_gb=0.000001)
+    result = prune_recordings(store, cfg, 8 * 3_600_000)
+    assert result["skipped_unverifiable"] == 1
+    assert result["freed_bytes"] > 0
+    assert archives[0].exists()
+    assert not archives[1].exists()
+    assert store.get("recording_retention_errors")["items"][0]["error_type"] == "BadZipFile"
     store.close()
 
 
