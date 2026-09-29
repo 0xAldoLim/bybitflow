@@ -12,34 +12,36 @@ def replayable_boundary(store, oldest=True):
     """Find a verified retained segment, skipping tombstones and damaged evidence."""
     from .packing import manifest_for, raw_bytes
 
-    direction = "ASC" if oldest else "DESC"
     field = "min_event_ms" if oldest else "max_event_ms"
-    cursor = None
-    while True:
-        predicate = (
-            f"AND (json_extract(s.payload,'$.{field}'),s.id){'>' if oldest else '<'}(?,?)" if cursor else ""
-        )
-        rows = store.db.execute(
-            "SELECT s.id,s.payload FROM segments s WHERE NOT EXISTS "
-            "(SELECT 1 FROM kv k WHERE k.key='pruned_segment:'||s.id) "
-            + predicate
-            + f" ORDER BY json_extract(s.payload,'$.{field}') {direction},s.id {direction} LIMIT 100",
-            cursor or (),
-        ).fetchall()
-        if not rows:
-            return None
-        for ident, payload in rows:
-            manifest = json.loads(payload)
-            cursor = (manifest[field], ident)
-            try:
-                raw = raw_bytes(manifest["raw"])
-                if (
-                    hashlib.sha256(raw).hexdigest() == manifest["sha256"]
-                    and manifest_for(manifest["raw"]) == manifest
-                ):
-                    return manifest[field]
-            except (OSError, ValueError, KeyError, zipfile.BadZipFile):
-                continue
+    manifests = {}
+    for path in (store.root / "segments").glob("*.jsonl.gz"):
+        ident = path.name.removesuffix(".jsonl.gz")
+        row = store.db.execute(
+            "SELECT payload FROM segments WHERE id=? AND NOT EXISTS "
+            "(SELECT 1 FROM kv WHERE key='pruned_segment:'||segments.id)",
+            (ident,),
+        ).fetchone()
+        if row:
+            manifests[ident] = json.loads(row[0])
+    for archive in (store.root / "packs").glob("*.zip"):
+        for ident, payload in store.db.execute(
+            "SELECT s.id,s.payload FROM segment_packs p JOIN segments s ON s.id=p.segment_id "
+            "WHERE p.archive=? AND NOT EXISTS "
+            "(SELECT 1 FROM kv WHERE key='pruned_segment:'||s.id)",
+            (str(archive),),
+        ):
+            manifests[ident] = json.loads(payload)
+    for manifest in sorted(manifests.values(), key=lambda m: m[field], reverse=not oldest):
+        try:
+            raw = raw_bytes(manifest["raw"])
+            if (
+                hashlib.sha256(raw).hexdigest() == manifest["sha256"]
+                and manifest_for(manifest["raw"]) == manifest
+            ):
+                return manifest[field]
+        except (OSError, ValueError, KeyError, zipfile.BadZipFile):
+            continue
+    return None
 
 
 def byte_attribution_sample(store, now, cutoff, limit=200):
@@ -62,7 +64,9 @@ def byte_attribution_sample(store, now, cutoff, limit=200):
     for payload, archive, packed_bytes in rows:
         m = json.loads(payload)
         raw = Path(m["raw"])
-        paths = (raw, Path(m["parquet"]), raw.with_name(m["id"] + ".manifest.json"))
+        paths = [raw, raw.with_name(m["id"] + ".manifest.json")]
+        if m.get("parquet"):
+            paths.append(Path(m["parquet"]))
         size = sum(path.stat().st_size for path in paths if path.is_file())
         if not size and archive and Path(archive).is_file():
             size = packed_bytes  # Original member sizes approximate the packed share.

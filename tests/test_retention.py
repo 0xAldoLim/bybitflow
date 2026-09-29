@@ -317,6 +317,29 @@ def test_replayable_boundary_skips_tombstone_and_accepts_verified_pack(settings)
     manifests = sorted(store.rows("segments"), key=lambda row: row["min_event_ms"])
     assert compact(store, limit=2)["status"] == "packed"
     store.put("pruned_segment:" + manifests[0]["id"], {"at_ms": 3000})
+    # Legacy manifests can outnumber retained files by orders of magnitude.
+    with store.db:
+        store.db.executemany(
+            "INSERT INTO segments VALUES(?,?,?)",
+            (
+                (
+                    f"missing-{i}",
+                    0,
+                    json.dumps(
+                        dict(
+                            id=f"missing-{i}",
+                            raw=str(store.root / "segments" / f"missing-{i}.jsonl.gz"),
+                            min_event_ms=i,
+                            max_event_ms=i,
+                            min_receipt_ms=i,
+                            max_receipt_ms=i,
+                            sha256="absent",
+                        )
+                    ),
+                )
+                for i in range(500)
+            ),
+        )
     status = storage_status(store, settings)
     assert status["oldest_replayable_event_ms"] == 2000
     assert status["newest_replayable_event_ms"] == 2000
