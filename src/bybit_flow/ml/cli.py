@@ -12,7 +12,6 @@ from .store import FeatureStore
 
 
 def cycle(settings, store):
-    from . import SCHEMA_VERSION
     from .labels import label_recordings
     from .recordings import worker_rows
     from .training import train
@@ -32,15 +31,13 @@ def cycle(settings, store):
     recent = store.get("ml_monitor", {}).get("last_success_ms") or 0
     if now_ms() - recent > 900000:
         label_recordings(store, worker_rows(store), settings)
-    ready = 0
-    if settings.ml_two_stage:
-        ready = store.db.execute(
-            "SELECT COUNT(DISTINCT coalesce(c.candidate_identity,s.signal_id)) FROM ml_snapshots s JOIN ml_labels l ON l.snapshot_id=s.id LEFT JOIN candidate_identities c ON c.signal_id=s.signal_id "
-            "WHERE s.stage='decision' AND l.policy='prints-v1' "
-            "AND json_extract(l.payload,'$.complete')=1 AND json_array_length(s.payload,'$.sequence')=16 "
-            "AND json_extract(s.payload,'$.source')=? AND s.schema_version=?",
-            (source, SCHEMA_VERSION),
-        ).fetchone()[0]
+    from .operations import trainability
+
+    readiness = trainability(store)["by_source"]
+    ready_sources = [name for name, detail in readiness.items() if detail["baseline_ready"]]
+    if ready_sources and source not in ready_sources:
+        source = max(ready_sources, key=lambda name: readiness[name]["baseline_trainable"])
+    ready = readiness[source]["sequence_ready_16"] if settings.ml_two_stage else 0
     from .stacking import KINDS
 
     two_stage = settings.ml_two_stage and ready >= 500
@@ -129,6 +126,9 @@ def monitor(settings, store):
     from .policy_research import run as policy_research
 
     result["score_profile_research"] = policy_research(store, now_ms())
+    from .operations import trainability
+
+    store.put("ml_trainability_cache", trainability(store))
     from .registry import Registry
 
     store.put("ml_summary_cache", Registry(store).summary() | dict(summary_at_ms=now_ms()))
@@ -240,6 +240,14 @@ def run(arguments, settings, store):
             background.enter_context(heartbeat(store.root))
             first_monitor = True
             while True:
+                if not settings.ml_enabled:
+                    result = dict(at_ms=now_ms(), status="DISABLED")
+                    store.put("ml_worker_state", result)
+                    if args.command == "cycle":
+                        break
+                    time.sleep(30)
+                    continue
+                store.put("ml_worker_state", dict(at_ms=now_ms(), status="RUNNING"))
                 if first_monitor or now_ms() - store.get("ml_monitor", {}).get("at_ms", 0) >= 900_000:
                     first_monitor = False
                     try:
@@ -268,5 +276,5 @@ def run(arguments, settings, store):
                     break
                 time.sleep(30)
     else:
-        result = registry.summary()
+        result = registry.summary(enabled=settings.ml_enabled)
     print(json.dumps(result, indent=2, allow_nan=False))

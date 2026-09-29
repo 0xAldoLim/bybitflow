@@ -138,41 +138,71 @@ class FeatureStore:
                 (snapshot_id, result["policy"], available_ms, text),
             )
 
-    def dataset(self, asof_ms, policy="prints-v1", stage="decision", limit=10_000):
-        result = []
-        seen = set()
-        for s in self.snapshots(stage, limit):
-            identity = self.db.execute(
-                "SELECT candidate_identity FROM candidate_identities WHERE signal_id=?", (s["signal_id"],)
-            ).fetchone()
-            opportunity = identity[0] if identity else s["signal_id"]
-            if opportunity in seen:
-                continue
-            row = self.db.execute(
-                "SELECT available_ms,payload FROM ml_labels WHERE snapshot_id=? "
-                "AND policy=? AND available_ms<=?",
-                (s["id"], policy, asof_ms),
-            ).fetchone()
-            if not row:
-                continue
-            label = json.loads(row[1])
-            if not label.get("complete") or label.get("net_r") is None or label["exit_ms"] > asof_ms:
-                continue
-            seen.add(opportunity)
-            result.append(
-                {**s, "candidate_identity": opportunity, "label": label, "label_available_ms": row[0]}
-            )
-        return result
+    def dataset(
+        self, asof_ms, policy="prints-v1", stage="decision", limit=10_000, source=None, schema_version=None
+    ):
+        """Return at most `limit` causally available, unique completed outcomes.
+
+        SQL excludes unusable snapshots before bounded keyset pagination. The
+        newest eligible observation represents an economic candidate identity.
+        """
+        if limit <= 0:
+            return []
+        limit = min(limit, 10_000)
+        where = [
+            "s.stage=?",
+            "l.policy=?",
+            "l.available_ms<=?",
+            "json_extract(l.payload,'$.complete')=1",
+            "json_extract(l.payload,'$.net_r') IS NOT NULL",
+            "json_extract(l.payload,'$.exit_ms')<=?",
+        ]
+        filters = [stage, policy, asof_ms, asof_ms]
+        if source is not None:
+            where.append("json_extract(s.payload,'$.source')=?")
+            filters.append(source)
+        if schema_version is not None:
+            where.append("s.schema_version=?")
+            filters.append(schema_version)
+        query = (
+            "SELECT s.id,s.payload,l.available_ms,l.payload,"
+            "coalesce(c.candidate_identity,s.signal_id),s.decision_ms "
+            "FROM ml_snapshots s JOIN ml_labels l ON l.snapshot_id=s.id "
+            "LEFT JOIN candidate_identities c ON c.signal_id=s.signal_id WHERE " + " AND ".join(where)
+        )
+        result, seen, cursor = [], set(), None
+        while len(result) < limit:
+            page_where = " AND (s.decision_ms,s.id)<(?,?)" if cursor else ""
+            params = filters + (list(cursor) if cursor else []) + [min(500, max(100, limit * 2))]
+            rows = self.db.execute(
+                query + page_where + " ORDER BY s.decision_ms DESC,s.id DESC LIMIT ?", params
+            ).fetchall()
+            if not rows:
+                break
+            for ident, payload, available_ms, label_payload, opportunity, decision_ms in rows:
+                cursor = (decision_ms, ident)
+                if opportunity in seen:
+                    continue
+                seen.add(opportunity)
+                result.append(
+                    {
+                        "id": ident,
+                        **json.loads(payload),
+                        "candidate_identity": opportunity,
+                        "label": json.loads(label_payload),
+                        "label_available_ms": available_ms,
+                    }
+                )
+                if len(result) >= limit:
+                    break
+            if len(rows) < params[-1]:
+                break
+        return list(reversed(result))
 
     def export(self, asof_ms, policy="prints-v1", stage="decision", source=None):
         from . import SCHEMA_VERSION
 
-        rows = self.dataset(asof_ms, policy, stage)
-        rows = [
-            r
-            for r in rows
-            if r["schema_version"] == SCHEMA_VERSION and (source is None or r["source"] == source)
-        ]
+        rows = self.dataset(asof_ms, policy, stage, source=source, schema_version=SCHEMA_VERSION)
         if len({r["source"] for r in rows}) > 1:
             raise ValueError(
                 "Multiple source methodologies: export with --source; never pool venues silently"

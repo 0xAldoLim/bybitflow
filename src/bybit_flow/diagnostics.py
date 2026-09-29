@@ -237,7 +237,7 @@ async def doctor(settings, store, network=True):
     )
     from .ml.registry import Registry
 
-    summary = Registry(store).cached_summary()
+    summary = Registry(store).cached_summary(settings.ml_enabled)
     from .ml.operations import status as ml_status
 
     checks["ml"] = ml_status(store, summary, settings.ml_enabled)

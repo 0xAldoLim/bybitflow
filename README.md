@@ -170,9 +170,12 @@ validation and holdout partitions; incomplete outcomes never count. Readiness is
 every 15 minutes; successful training cycles remain weekly. New models remain research
 candidates until reviewed. There is no automatic promotion to validated probability.
 
-Advisory inference selects the newest compatible, non-degraded challenger when no
-compatible champion is available. `doctor` and `ml status` report the worker heartbeat,
-training mode, complete outcomes, recent predictions and abstention reasons. No model
+`FLOW_ML_ENABLED=false` leaves the trainer idle and disables desk inference; its
+service heartbeat may still be present. Advisory inference selects the newest
+compatible, non-degraded challenger when no compatible champion is available.
+`doctor` and `ml status` report the worker heartbeat,
+training mode, current-schema unique trainable outcomes by venue, sequence readiness,
+last training reason, recent predictions and abstention reasons. No model
 means deterministic confirmed alerts continue, with ML explicitly abstaining.
 
 With `FLOW_ML_FILTER_RESEARCH=false`, an unavailable or untrained model does not
@@ -185,11 +188,12 @@ Market recordings and ML data are stored **locally in Docker's `research-data`
 volume**. `FLOW_MAX_STORAGE_GB=10` sets the application data budget; it does not
 include Docker images or installed training software.
 
-With retention enabled and the ML worker running, cleanup begins at 85% of the
-configured budget and aims back toward 60%. The worker also reclaims eligible old
-recordings in small batches below that threshold after outcomes are recorded. It
-keeps the latest 15 minutes of raw tape; active setups, unresolved ML outcomes and
-replay readers protect their evidence for longer. Saved feature snapshots, labels,
+With retention enabled and the ML worker running, routine cleanup reclaims finalized,
+unprotected raw evidence older than `FLOW_ML_RAW_RETENTION_MINUTES` (default 60)
+in small batches. At 85% budget pressure it may shorten that floor to 15 minutes
+and reclaim safe old recordings toward 60% usage. Manual cleanup keeps its
+conservative six-hour floor. Active setups, unresolved ML outcomes and replay readers
+protect their evidence regardless of the floor. Saved feature snapshots, labels,
 training datasets, models and audit hashes are kept. Decisions older than the retained replay boundary
 are recorded as incomplete, never as wins or losses. Deleted raw history cannot be
 replayed later. If protected data alone fills the budget, recording stops explicitly.

@@ -19,5 +19,6 @@ python-dotenv==1.2.3
 starlette==1.6.0
 typing-inspection==0.4.4
 typing_extensions==4.16.0
+tzdata==2026.4; sys_platform == "win32"
 uvicorn==0.52.4
 websockets==16.1.1

@@ -64,6 +64,7 @@ class Settings(BaseSettings):
     recorder_segment_seconds: int = Field(15, ge=1, le=60)
     recorder_segment_rows: int = Field(10000, ge=100, le=50000)
     raw_retention_days: int = Field(14, ge=1)
+    ml_raw_retention_minutes: int = Field(60, ge=15, le=1440)
     rest_requests_per_second: float = Field(3, gt=0, le=10)
     research_alerts: bool = False
     sss_research: bool = False

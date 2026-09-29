@@ -33,6 +33,9 @@ directly from `src/bybit_flow/static`.
 
 ## Change requirements
 
+Before pushing directly to `main`, run `python scripts/verify.py` in the active
+development environment. It stops on the first failed offline check.
+
 - Preserve source identity, event time, receipt time, and recording integrity.
 - Keep setup quality, research model ranking, and validated probability distinct.
 - Add regression coverage for changes to risk, data continuity, labels, or delivery.

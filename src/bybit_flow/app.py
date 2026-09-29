@@ -125,7 +125,7 @@ def create_app(settings=None):
         from .ml.registry import Registry
 
         return await asyncio.to_thread(
-            read_report, settings.data_dir, lambda store: Registry(store).cached_summary()
+            read_report, settings.data_dir, lambda store: Registry(store).cached_summary(settings.ml_enabled)
         )
 
     @app.get("/api/funnel")

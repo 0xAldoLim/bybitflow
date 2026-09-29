@@ -27,7 +27,7 @@ settings without replacing their credentials.
 | `FLOW_SSS_RESEARCH=true` | Enable SSS-only cards when broader research alerts are disabled |
 | `FLOW_SCAN_ENABLED=true` | Enable public-data collection and scanning |
 | `FLOW_MARKET_SOURCE=auto` | Probe Binance, Bybit, then OKX and retain a working primary |
-| `FLOW_ML_ENABLED=true` | Enable decision-time ML inference when a compatible model exists |
+| `FLOW_ML_ENABLED=true` | Enable trainer labeling/training and advisory inference; false leaves the trainer idle |
 | `FLOW_ML_TWO_STAGE=true` | Collect LSTM sequences and compare the two-stage research models |
 | `FLOW_ML_FILTER_RESEARCH=false` | Keep ML acceptance from filtering research alerts |
 | `FLOW_DEEP_SYMBOLS` | Concurrent deep subscription capacity; default 8, maximum 30 |
@@ -231,9 +231,11 @@ data without a model. See [ML research](ML_RESEARCH.md) for readiness and approv
 `FLOW_RECORDING_RETENTION_ENABLED=true` enables raw-data cleanup in the ML worker
 after outcome processing. Below 85% of `FLOW_MAX_STORAGE_GB`, the worker removes
 eligible old evidence in batches of about 256 MB per monitoring pass. At 85% it
-removes safe old files toward 60% usage to restore headroom. The worker retains
-the latest 15 minutes of raw tape; older active plans, unresolved labels and replay
-leases can extend that protection. Manual cleanup retains six recent hours. The database,
+removes safe old files toward 60% usage to restore headroom. Routine worker cleanup
+retains at least `FLOW_ML_RAW_RETENTION_MINUTES` of raw tape (default 60 minutes).
+At 85% budget pressure, safe cleanup may shorten the floor to 15 minutes. Older active
+plans, unresolved labels and replay leases retain their evidence in either case.
+Manual cleanup retains six recent hours. The database,
 feature snapshots, labels, training datasets, models and segment hashes remain.
 Removed raw history cannot be replayed again; unlabelled decisions before the
 retention boundary receive an incomplete label, never an invented win or loss. The

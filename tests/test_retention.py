@@ -8,7 +8,7 @@ from bybit_flow.ml.labels import close_pre_retention_decisions, label_recordings
 from bybit_flow.ml.recordings import worker_rows
 from bybit_flow.ml.store import FeatureStore
 from bybit_flow.packing import compact
-from bybit_flow.retention import prune_recordings
+from bybit_flow.retention import prune_recordings, storage_status
 from bybit_flow.storage import Recorder, Store
 
 
@@ -235,4 +235,120 @@ def test_labels_restart_observed_coverage_after_pruned_subscription(settings, si
     result = label_recordings(store, rows, settings)
     assert result["complete"] == 1
     assert result["outcomes"][0]["data_gaps"] == []
+    store.close()
+
+
+def test_routine_floor_keeps_recent_raw_but_reclaims_finalized_old_raw(settings):
+    store = Store(settings.data_dir)
+    now = 8 * 3_600_000
+    recorder = Recorder(store, settings)
+    for at in (now - 70 * 60_000, now - 30 * 60_000):
+        recorder.flush(
+            [
+                dict(
+                    source="control/subscribed",
+                    symbol="TESTUSDT",
+                    event_ms=at,
+                    receipt_ms=at,
+                    schema_version=1,
+                    complete=True,
+                    payload='{"symbols":["TESTUSDT"]}',
+                )
+            ]
+        )
+    manifests = sorted(store.rows("segments"), key=lambda row: row["max_receipt_ms"])
+    cfg = settings.model_copy(update={"max_storage_gb": 1, "ml_raw_retention_minutes": 60})
+    assert prune_recordings(store, cfg, now, force=True)["freed_bytes"] > 0
+    assert not Path(manifests[0]["raw"]).exists()
+    assert Path(manifests[1]["raw"]).exists()
+    store.close()
+
+
+def test_pressure_floor_preserves_active_evidence(settings, signal):
+    store = Store(settings.data_dir)
+    now = 8 * 3_600_000
+    signal.created_ms = now - 5 * 60_000
+    signal.expires_ms = now + 3_600_000
+    signal.state = "ALERTED"
+    with store.db:
+        store.db.execute(
+            "INSERT INTO signals VALUES(?,?,?,?,?)",
+            (signal.id, signal.symbol, signal.created_ms, signal.state, signal.model_dump_json()),
+        )
+    for at in (now - 30 * 60_000, signal.created_ms):
+        Recorder(store, settings).flush(
+            [
+                dict(
+                    source="control/subscribed",
+                    symbol=signal.symbol,
+                    event_ms=at,
+                    receipt_ms=at,
+                    schema_version=1,
+                    complete=True,
+                    payload=json.dumps({"symbols": [signal.symbol]}),
+                )
+            ]
+        )
+    manifests = sorted(store.rows("segments"), key=lambda row: row["max_receipt_ms"])
+    cfg = settings.model_copy(update={"max_storage_gb": 0.000001, "ml_raw_retention_minutes": 60})
+    assert prune_recordings(store, cfg, now)["freed_bytes"] > 0
+    assert not Path(manifests[0]["raw"]).exists()
+    assert Path(manifests[1]["raw"]).exists()
+    store.close()
+
+
+def test_replayable_boundary_skips_tombstone_and_accepts_verified_pack(settings):
+    store = Store(settings.data_dir)
+    recorder = Recorder(store, settings)
+    for at in (1000, 2000):
+        recorder.flush(
+            [
+                dict(
+                    source="control/subscribed",
+                    symbol="TESTUSDT",
+                    event_ms=at,
+                    receipt_ms=at,
+                    schema_version=1,
+                    complete=True,
+                    payload='{"symbols":["TESTUSDT"]}',
+                )
+            ]
+        )
+    manifests = sorted(store.rows("segments"), key=lambda row: row["min_event_ms"])
+    assert compact(store, limit=2)["status"] == "packed"
+    store.put("pruned_segment:" + manifests[0]["id"], {"at_ms": 3000})
+    status = storage_status(store, settings)
+    assert status["oldest_replayable_event_ms"] == 2000
+    assert status["newest_replayable_event_ms"] == 2000
+    assert status["raw_retention_floor_minutes"] == 60
+    assert status["pressure_raw_retention_floor_minutes"] == 15
+    store.close()
+
+
+def test_nonprefix_pruning_does_not_advance_logical_boundary_past_unresolved_decision(settings, signal):
+    store = Store(settings.data_dir)
+    now = 8 * 3_600_000
+    FeatureStore(store).capture(signal, 2000, "decision")
+    for at in (1000, now - 70 * 60_000):
+        Recorder(store, settings).flush(
+            [
+                dict(
+                    source="control/subscribed",
+                    symbol=signal.symbol,
+                    event_ms=at,
+                    receipt_ms=at,
+                    schema_version=1,
+                    complete=True,
+                    payload=json.dumps({"symbols": [signal.symbol]}),
+                )
+            ]
+        )
+    manifests = sorted(store.rows("segments"), key=lambda row: row["max_receipt_ms"])
+    cfg = settings.model_copy(update={"max_storage_gb": 1})
+    assert prune_recordings(store, cfg, now, force=True)["freed_bytes"] > 0
+    assert Path(manifests[0]["raw"]).exists()
+    assert not Path(manifests[1]["raw"]).exists()
+    assert store.get("recording_retention", {}).get("through_ms", 0) == 0
+    assert close_pre_retention_decisions(store) == 0
+    assert [r["receipt_ms"] for r in worker_rows(store)] == [1000]
     store.close()

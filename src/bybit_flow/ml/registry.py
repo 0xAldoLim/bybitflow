@@ -169,14 +169,14 @@ class Registry:
         with self.db:
             self.event(ident, "rollback", {"reviewer": reviewer})
 
-    def cached_summary(self):
+    def cached_summary(self, enabled=True):
         """Operator views use the worker's summary, never a full label scan."""
         cached = self.store.get("ml_summary_cache", {})
         from .operations import status
 
         return (
             cached
-            | status(self.store, cached)
+            | status(self.store, cached, enabled)
             | dict(
                 summary_status="CACHED" if cached else "AWAITING_WORKER_SUMMARY",
                 models=cached.get("models", []),
@@ -194,7 +194,7 @@ class Registry:
             )
         )
 
-    def summary(self):
+    def summary(self, enabled=True):
         models = []
         for row in self.db.execute("SELECT id FROM ml_models ORDER BY created_ms DESC LIMIT 10"):
             m = self.get(row[0])
@@ -246,4 +246,4 @@ class Registry:
         )
         from .operations import status
 
-        return result | status(self.store, result)
+        return result | status(self.store, result, enabled)

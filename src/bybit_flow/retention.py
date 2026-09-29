@@ -1,10 +1,98 @@
 """Bound raw recordings while retaining immutable ML and segment audit records."""
 
+import hashlib
 import json
 import zipfile
 from pathlib import Path
 
 from .storage import directory_bytes, now_ms
+
+
+def replayable_boundary(store, oldest=True):
+    """Find a verified retained segment, skipping tombstones and damaged evidence."""
+    from .packing import manifest_for, raw_bytes
+
+    direction = "ASC" if oldest else "DESC"
+    field = "min_event_ms" if oldest else "max_event_ms"
+    cursor = None
+    while True:
+        predicate = (
+            f"AND (json_extract(s.payload,'$.{field}'),s.id){'>' if oldest else '<'}(?,?)" if cursor else ""
+        )
+        rows = store.db.execute(
+            "SELECT s.id,s.payload FROM segments s WHERE NOT EXISTS "
+            "(SELECT 1 FROM kv k WHERE k.key='pruned_segment:'||s.id) "
+            + predicate
+            + f" ORDER BY json_extract(s.payload,'$.{field}') {direction},s.id {direction} LIMIT 100",
+            cursor or (),
+        ).fetchall()
+        if not rows:
+            return None
+        for ident, payload in rows:
+            manifest = json.loads(payload)
+            cursor = (manifest[field], ident)
+            try:
+                raw = raw_bytes(manifest["raw"])
+                if (
+                    hashlib.sha256(raw).hexdigest() == manifest["sha256"]
+                    and manifest_for(manifest["raw"]) == manifest
+                ):
+                    return manifest[field]
+            except (OSError, ValueError, KeyError, zipfile.BadZipFile):
+                continue
+
+
+def byte_attribution_sample(store, now, cutoff, limit=200):
+    """Bounded lower-bound byte estimates; categories can overlap."""
+    ranges = protection_ranges(store, now)
+    totals = dict(
+        protected_active_bytes=0,
+        protected_unresolved_ml_bytes=0,
+        protected_lease_bytes=0,
+        finalized_complete_deletable_bytes=0,
+        finalized_incomplete_deletable_bytes=0,
+    )
+    rows = store.db.execute(
+        "SELECT s.payload,p.archive,p.bytes FROM segments s "
+        "LEFT JOIN segment_packs p ON p.segment_id=s.id WHERE NOT EXISTS "
+        "(SELECT 1 FROM kv k WHERE k.key='pruned_segment:'||s.id) "
+        "ORDER BY json_extract(s.payload,'$.max_receipt_ms') DESC LIMIT ?",
+        (limit,),
+    ).fetchall()
+    for payload, archive, packed_bytes in rows:
+        m = json.loads(payload)
+        raw = Path(m["raw"])
+        paths = (raw, Path(m["parquet"]), raw.with_name(m["id"] + ".manifest.json"))
+        size = sum(path.stat().st_size for path in paths if path.is_file())
+        if not size and archive and Path(archive).is_file():
+            size = packed_bytes  # Original member sizes approximate the packed share.
+        if not size:
+            continue
+        start, end = m["min_receipt_ms"], m["max_receipt_ms"]
+        reasons = {reason for a, b, reason in ranges if a <= end and b >= start}
+        for reason, key in (
+            ("active setup", "protected_active_bytes"),
+            ("unresolved primary outcome", "protected_unresolved_ml_bytes"),
+            ("replay/maintenance lease", "protected_lease_bytes"),
+        ):
+            if reason in reasons:
+                totals[key] += size
+        if reasons or end > cutoff:
+            continue
+        classifications = {
+            r[0]
+            for r in store.db.execute(
+                "SELECT json_extract(l.payload,'$.classification') FROM ml_snapshots s "
+                "JOIN ml_labels l ON l.snapshot_id=s.id AND l.policy='prints-v1' "
+                "WHERE s.stage='decision' AND s.decision_ms BETWEEN ? AND ?",
+                (start, end),
+            )
+        }
+        if "incomplete" in classifications:
+            totals["finalized_incomplete_deletable_bytes"] += size
+        elif classifications:
+            totals["finalized_complete_deletable_bytes"] += size
+    return totals
 
 
 def protection_cutoff(store, now, cutoff):
@@ -41,11 +129,25 @@ def storage_status(store, settings):
         (now - 3_600_000,),
     ).fetchone()
     raw_bytes = sum(directory_bytes(store.root / directory) for directory in ("segments", "packs"))
+    oldest = replayable_boundary(store)
+    newest = replayable_boundary(store, oldest=False)
+    retention = store.get("recording_retention", {})
+    floor = 15 if used / budget >= 0.85 else getattr(settings, "ml_raw_retention_minutes", 60)
+    estimated = byte_attribution_sample(store, now, now - floor * 60_000)
     result = dict(
         at_ms=now,
         retention_enabled=settings.recording_retention_enabled,
         usage_percent=round(100 * used / budget, 2),
-        total_freed_bytes=store.get("recording_retention", {}).get("total_freed_bytes", 0),
+        total_freed_bytes=retention.get("total_freed_bytes", 0),
+        raw_retention_floor_minutes=getattr(settings, "ml_raw_retention_minutes", 60),
+        pressure_raw_retention_floor_minutes=15,
+        oldest_replayable_event_ms=oldest,
+        newest_replayable_event_ms=newest,
+        **estimated,
+        byte_attribution="bounded latest-200-segment sample; packed sizes estimated; categories can overlap",
+        pruned_complete_outcomes=retention.get("pruned_complete_outcomes", 0),
+        pruned_incomplete_outcomes=retention.get("pruned_incomplete_outcomes", 0),
+        skipped_unverifiable_count=retention.get("skipped_unverifiable", 0),
         used_bytes=used,
         budget_bytes=budget,
         usage_fraction=used / budget,
@@ -68,7 +170,7 @@ def storage_status(store, settings):
         segments_last_hour=row[0],
         rows_last_hour=row[1],
         rows_per_segment=row[1] / row[0] if row[0] else None,
-        retention=store.get("recording_retention", {}),
+        retention=retention,
         leases=store.db.execute("SELECT count(*) FROM storage_leases WHERE expires_ms>?", (now,)).fetchone()[
             0
         ],
@@ -93,7 +195,11 @@ def prune_recordings(store, settings, at_ms=None, dry_run=False, force=False, ma
     budget = settings.max_storage_gb * 1e9
     if usage >= budget * 0.85:
         max_reclaim_bytes = None  # Emergency cleanup must recover enough headroom.
-    if not force and usage < budget * 0.85 and store.get("recording_retention", {}).get("status") != "pruning":
+    if (
+        not force
+        and usage < budget * 0.85
+        and store.get("recording_retention", {}).get("status") != "pruning"
+    ):
         return dict(
             status="dry-run" if dry_run else "within budget",
             bytes_before=usage,
@@ -104,9 +210,15 @@ def prune_recordings(store, settings, at_ms=None, dry_run=False, force=False, ma
             reason="No deletion scheduled below the pressure threshold",
         )
     # Eligibility is per evidence interval, never gated by global ML health.
-    # Forced ML cleanup uses a short recorder boundary. Active setups,
+    # Routine ML cleanup retains a configurable recent floor. Active setups,
     # unresolved outcomes and readers still protect their exact ranges below.
-    cutoff = now - (15 * 60_000 if force else 6 * 3_600_000)
+    cutoff = now - (
+        15 * 60_000
+        if usage >= budget * 0.85
+        else getattr(settings, "ml_raw_retention_minutes", 60) * 60_000
+        if force
+        else 6 * 3_600_000
+    )
     ranges = protection_ranges(store, now)
     from bisect import bisect_right
 
@@ -198,6 +310,7 @@ def prune_recordings(store, settings, at_ms=None, dry_run=False, force=False, ma
     store.put("recording_retention", state)
     freed = 0
     skipped = []
+    newly_pruned = {}
 
     def verify(m):
         if hashlib.sha256(raw_bytes(m["raw"])).hexdigest() != m["sha256"] or manifest_for(m["raw"]) != m:
@@ -218,6 +331,8 @@ def prune_recordings(store, settings, at_ms=None, dry_run=False, force=False, ma
                     verify(m)
                 lease.heartbeat(force=True)
                 for m in members:
+                    if not store.get("pruned_segment:" + m["id"]):
+                        newly_pruned[m["id"]] = m
                     store.put(
                         "pruned_segment:" + m["id"],
                         dict(at_ms=now, sha256=m["sha256"], reason="durable outcomes; no unresolved range"),
@@ -243,6 +358,7 @@ def prune_recordings(store, settings, at_ms=None, dry_run=False, force=False, ma
                 # A published tombstone makes crash recovery and non-prefix pruning explicit.
                 if not store.get("pruned_segment:" + m["id"]):
                     verify(m)
+                    newly_pruned[m["id"]] = m
                     store.put(
                         "pruned_segment:" + m["id"],
                         dict(at_ms=now, sha256=m["sha256"], reason="durable outcomes; no unresolved range"),
@@ -256,6 +372,16 @@ def prune_recordings(store, settings, at_ms=None, dry_run=False, force=False, ma
             continue
         except (zipfile.BadZipFile, KeyError, FileNotFoundError, ValueError) as exc:
             skipped.append(dict(path=str(paths[0]), error_type=type(exc).__name__))
+    outcomes = {}
+    for m in newly_pruned.values():
+        for snapshot_id, classification, complete in store.db.execute(
+            "SELECT s.id,json_extract(l.payload,'$.classification'),"
+            "json_extract(l.payload,'$.complete') FROM ml_snapshots s "
+            "JOIN ml_labels l ON l.snapshot_id=s.id AND l.policy='prints-v1' "
+            "WHERE s.stage='decision' AND s.decision_ms BETWEEN ? AND ?",
+            (m["min_receipt_ms"], m["max_receipt_ms"]),
+        ):
+            outcomes[snapshot_id] = (classification, complete)
     state.update(
         status="pruned",
         bytes_after=usage - freed,
@@ -263,6 +389,11 @@ def prune_recordings(store, settings, at_ms=None, dry_run=False, force=False, ma
         total_freed_bytes=state.get("total_freed_bytes", 0) + freed,
         preserved="database, feature snapshots, outcome labels, datasets, models and segment hashes",
         skipped_unverifiable=len(skipped),
+        pruned_complete_outcomes=state.get("pruned_complete_outcomes", 0)
+        + sum(bool(complete) for _, complete in outcomes.values()),
+        pruned_incomplete_outcomes=state.get("pruned_incomplete_outcomes", 0)
+        + sum(kind == "incomplete" for kind, _ in outcomes.values()),
+        pruned_outcome_count_note="decision-range estimate since counters were introduced",
     )
     store.put("recording_retention", state)
     if skipped:
