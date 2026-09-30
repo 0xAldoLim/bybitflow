@@ -92,6 +92,9 @@ def refresh(store, asof_ms, max_rows=3000):
     summaries = {key: _summary(group) for key, group in groups.items() if len(group) >= 15}
     cache = dict(
         policy=POLICY,
+        status="AVAILABLE"
+        if any(row["samples"] >= MINIMUM[0] for row in summaries.values())
+        else "INSUFFICIENT",
         built_ms=asof_ms,
         available_ms=asof_ms,
         max_label_available_ms=max((row["label_available_ms"] for row in rows), default=0),

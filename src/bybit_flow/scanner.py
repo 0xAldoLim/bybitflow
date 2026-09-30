@@ -907,9 +907,11 @@ class Scanner:
                 dict(
                     at_ms=now_ms(),
                     candle_cache_hit_rate=self.feature_cache_hits / candle_total if candle_total else None,
+                    candle_feature_cache_entries=len(self.feature_cache),
                     derivative_cache_hit_rate=self.derivative_cache_hits / derivative_total
                     if derivative_total
                     else None,
+                    derivative_cache_entries=len(self.derivative_cache),
                     rest_concurrency=self.settings.rest_concurrency,
                     rest_effective_concurrency=1
                     if now_ms() < self.rest_reduced_until

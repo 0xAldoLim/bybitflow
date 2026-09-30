@@ -129,14 +129,15 @@ async def refresh(scanner):
     await asyncio.gather(*(one(symbol) for symbol in symbols))
     ready = list(scanner.v8_cache.values())
     breadth = scanner.store.get("v8_breadth", {})
+    context_cache = scanner.store.get("v8_context_ev", {})
     scanner.store.put(
         "v8_research",
         dict(
             at_ms=now_ms(),
             source=source,
-            context_ev_status=scanner.store.get("v8_context_ev", {}).get("primary_outcomes", 0),
-            context_ev_cache_age_ms=now_ms()
-            - scanner.store.get("v8_context_ev", {}).get("built_ms", now_ms()),
+            context_ev_status=context_cache.get("status", "INSUFFICIENT"),
+            context_ev_samples=context_cache.get("primary_outcomes", 0),
+            context_ev_cache_age_ms=now_ms() - context_cache.get("built_ms", now_ms()),
             liquidation_symbols=len(symbols),
             liquidation_available=sum(
                 row.get("liquidation", {}).get("state") != "UNAVAILABLE" for row in ready
