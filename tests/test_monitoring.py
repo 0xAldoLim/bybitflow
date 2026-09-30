@@ -88,6 +88,30 @@ async def test_paused_tracking_ends_at_holding_deadline(settings, signal):
     assert embed(signal, "http://localhost")["embeds"][0]["title"].startswith("TRACKING ENDED")
 
 
+def test_setup_lifecycle_colors_differ_from_monitoring(settings, signal):
+    signal.state = "ALERTED"
+    signal.coverage["monitoring_event"] = "paused"
+    paused = embed(signal, "http://localhost")["embeds"][0]
+    signal.coverage["monitoring_event"] = "resumed"
+    resumed = embed(signal, "http://localhost")["embeds"][0]
+    assert paused["color"] == resumed["color"] == 0x8B949E
+
+    signal.coverage["monitoring_event"] = "paused"
+    signal.state = "EXPIRED"
+    expired = embed(signal, "http://localhost")["embeds"][0]
+    assert expired["title"].startswith("ENTRY EXPIRED")
+    assert expired["color"] == 0xE6A23C
+
+    signal.state = "INVALIDATED"
+    withdrawn = embed(signal, "http://localhost")["embeds"][0]
+    assert withdrawn["title"].startswith("SETUP WITHDRAWN")
+    assert withdrawn["color"] == 0xD9534F
+
+    signal.state = "RESOLVED"
+    resolved = embed(signal, "http://localhost")["embeds"][0]
+    assert resolved["color"] == 0x4CC9A4
+
+
 def test_published_monitoring_cannot_be_displaced_by_newer_candidates(settings, signal):
     from bybit_flow.storage import Store
 

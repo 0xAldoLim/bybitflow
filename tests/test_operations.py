@@ -170,7 +170,9 @@ def test_dashboard_local_auth_secrets_and_persistence(settings):
         assert client.get("/healthz").json()["alerts_only"]
         assert client.get("/api/overview").json()["watchlist"] == []
         cfg = client.get("/api/settings").json()
-        assert not any(k in cfg for k in ("discord_webhook", "research_webhook", "admin_token"))
+        assert not any(
+            k in cfg for k in ("discord_webhook", "research_webhook", "monitoring_webhook", "admin_token")
+        )
         assert client.post("/api/journal", json={"note": "Manual paper observation"}).status_code == 200
         assert (
             client.post("/api/portfolio", json={"positions": [], "daily_loss_fraction": 0.01}).status_code

@@ -16,11 +16,11 @@ def embed(signal, dashboard_url):
 
     s = signal
 
-    monitoring_event = s.coverage.get("monitoring_event")
-
-    monitoring_update = monitoring_event in {"paused", "resumed", "ended"}
-
     terminal = s.state in {"INVALIDATED", "EXPIRED", "RESOLVED"}
+    monitoring_event = s.coverage.get("monitoring_event")
+    if terminal and monitoring_event in {"paused", "resumed"}:
+        monitoring_event = None
+    monitoring_update = monitoring_event in {"paused", "resumed", "ended"}
 
     status = {
         "CONFIRMED": "NEW SETUP",
@@ -173,6 +173,17 @@ def embed(signal, dashboard_url):
                 else "Collecting model validation evidence",
             )
 
+    if monitoring_event in {"paused", "resumed"}:
+        color = 0x8B949E
+    elif s.state == "INVALIDATED":
+        color = 0xD9534F
+    elif s.state == "EXPIRED" or monitoring_event == "ended":
+        color = 0xE6A23C
+    elif s.state == "RESOLVED":
+        color = 0x4CC9A4
+    else:
+        color = 0x4CC9A4 if s.direction == "LONG" else 0xEF7F86
+
     return {
         "allowed_mentions": {"parse": []},
         "embeds": [
@@ -186,9 +197,7 @@ def embed(signal, dashboard_url):
                 + f"\n{s.raw_tier} · {s.quality:.1f}/100 quality · {s.source.capitalize()}"
                 + ("\nUpdate only · no new entry" if terminal or monitoring_update else ""),
                 "url": f"{dashboard_url.rstrip('/')}/#signal/{s.id}",
-                "color": 0x8B949E
-                if terminal or monitoring_update
-                else (0x4CC9A4 if s.direction == "LONG" else 0xEF7F86),
+                "color": color,
                 "timestamp": iso(now_ms() if terminal or monitoring_update else s.created_ms),
                 "fields": fields,
                 "footer": {"text": f"{s.id}"},
@@ -301,7 +310,16 @@ class Notifier:
         ):
             return "disabled"
 
-        secret = self.settings.research_webhook.get_secret_value()
+        monitoring_event = (
+            signal.coverage.get("monitoring_event")
+            if update and signal.state not in {"INVALIDATED", "EXPIRED", "RESOLVED"}
+            else None
+        )
+        secret = (
+            self.settings.monitoring_webhook
+            if monitoring_event in {"paused", "resumed"}
+            else self.settings.research_webhook
+        ).get_secret_value()
 
         if not secret:
             return "dry-run"
@@ -356,31 +374,52 @@ class Notifier:
                 continue
             if not self.was_initially_delivered(ident, initial[0].split(":", 1)[0]):
                 continue
-            secret = (
-                self.settings.research_webhook
-                if initial[0].startswith("research:")
-                else self.settings.discord_webhook
-            ).get_secret_value()
+            secret = self.settings.research_webhook.get_secret_value()
             u = urlparse(secret)
             if u.scheme != "https" or u.hostname != "discord.com" or not u.path.startswith("/api/webhooks/"):
                 continue
             signal = Signal.model_validate_json(raw)
             status = "pending"
             delay = min(300, 2 ** min(attempts + 1, 8))
-            try:
-                async with httpx.AsyncClient(timeout=15, transport=self.transport) as client:
-                    response = await client.patch(
-                        secret.split("?")[0].rstrip("/") + "/messages/" + initial[1],
-                        json=embed(signal, self.settings.dashboard_url),
-                    )
-                    if response.is_success:
-                        status = "sent"
-                    elif response.status_code == 429:
-                        delay = max(delay, min(3600, float(response.json().get("retry_after", delay))))
-                    elif response.status_code < 500:
-                        status = "failed"
-            except httpx.TransportError:
-                pass  # Editing the same known message is idempotent, including ambiguous timeouts.
+            current_webhook_id = u.path.split("/")[3]
+            if self.store.get(f"discord_initial_webhook_id:{ident}") == current_webhook_id:
+                try:
+                    async with httpx.AsyncClient(timeout=15, transport=self.transport) as client:
+                        response = await client.patch(
+                            secret.split("?")[0].rstrip("/") + "/messages/" + initial[1],
+                            json=embed(signal, self.settings.dashboard_url),
+                        )
+                        if response.is_success:
+                            status = "sent"
+                        elif response.status_code == 429:
+                            delay = max(delay, min(3600, float(response.json().get("retry_after", delay))))
+                        elif response.status_code < 500:
+                            status = "failed"
+                except httpx.TransportError:
+                    pass  # Editing the same known message is idempotent, including ambiguous timeouts.
+            else:
+                # Old initial cards belong to the retired webhook. Publish one
+                # guarded update in the new signals channel instead of PATCHing
+                # a message that the new webhook cannot edit.
+                channel = initial[0].split(":", 1)[0]
+                key = f"{channel}:{ident}:terminal-signals-v1"
+                outcome = await self.deliver(key, ident, embed(signal, self.settings.dashboard_url), secret)
+                if outcome == "already-attempted":
+                    previous = self.store.db.execute(
+                        "SELECT status FROM outbox WHERE key=?", (key,)
+                    ).fetchone()
+                    outcome = previous[0] if previous else "uncertain"
+                if outcome == "sent":
+                    status = "sent"
+                elif outcome == "rate-limited":
+                    # Discord explicitly rejected the POST; no card was created.
+                    with self.store.db:
+                        self.store.db.execute(
+                            "DELETE FROM outbox WHERE key=? AND status='rate-limited'", (key,)
+                        )
+                else:
+                    # A POST timeout may have delivered. Never retry ambiguously.
+                    status = "failed"
             with self.store.db:
                 self.store.db.execute(
                     "UPDATE terminal_events SET notification_status=?,attempts=attempts+1,next_ms=? WHERE signal_id=?",
@@ -430,6 +469,7 @@ class Notifier:
         status = await self.deliver(key, signal.id, payload, secret)
         self.was_initially_delivered(signal.id, key.split(":", 1)[0])
         if status == "sent":
+            self.store.put(f"discord_initial_webhook_id:{signal.id}", urlparse(secret).path.split("/")[3])
             with self.store.db:
                 self.store.db.execute(
                     "UPDATE terminal_events SET notification_status='pending' WHERE signal_id=? AND notification_status='unseen'",
@@ -573,12 +613,20 @@ class Notifier:
 
         from .ml.inference import delivery_eligible
 
+        monitoring_event = (
+            signal.coverage.get("monitoring_event")
+            if update and signal.state not in {"INVALIDATED", "EXPIRED", "RESOLVED"}
+            else None
+        )
         if update:
             sent = self.store.db.execute(
                 "SELECT 1 FROM outbox WHERE key=? AND status='sent'", (f"validated:{signal.id}:initial",)
             ).fetchone()
 
-            if not sent or signal.state not in {"EXPIRED", "INVALIDATED", "RESOLVED"}:
+            if not sent or (
+                signal.state not in {"EXPIRED", "INVALIDATED", "RESOLVED"}
+                and monitoring_event not in {"paused", "resumed", "ended"}
+            ):
                 return "blocked: no prior validated delivery or terminal update"
 
         elif not delivery_eligible(signal, self.settings, self.store):
@@ -594,12 +642,19 @@ class Notifier:
             if recent:
                 return "cooldown"
 
-        secret = self.settings.discord_webhook.get_secret_value()
+        secret = (
+            self.settings.monitoring_webhook
+            if monitoring_event in {"paused", "resumed"}
+            else self.settings.research_webhook
+        ).get_secret_value()
 
         if not secret:
             return "dry-run"
 
         key = f"validated:{signal.id}:{signal.state if update else 'initial'}"
+
+        if monitoring_event:
+            key = f"validated:{signal.id}:monitoring:{monitoring_event}:{signal.coverage.get('pause_since_ms', 0)}"
 
         payload = embed(signal, self.settings.dashboard_url)
 

@@ -6,7 +6,7 @@ This guide covers configuration and recovery in more detail.
 ## Requirements
 
 - Docker Desktop on Windows, or Docker Engine with Compose on Linux.
-- A Discord webhook for the research channel.
+- Separate Discord webhooks for signals and monitoring pause/resume notices.
 - Network access to the selected exchange's public REST and WebSocket endpoints.
 - Persistent storage and an awake host during collection.
 
@@ -22,7 +22,8 @@ settings without replacing their credentials.
 | Setting | Purpose |
 |---|---|
 | `FLOW_ADMIN_TOKEN` | Required dashboard password; username is `research` |
-| `FLOW_RESEARCH_WEBHOOK` | Discord research-channel webhook |
+| `FLOW_RESEARCH_WEBHOOK` | Discord signals-channel webhook for setups and setup lifecycle updates |
+| `FLOW_MONITORING_WEBHOOK` | Discord channel for monitoring pause/resume notices only |
 | `FLOW_RESEARCH_ALERTS=true` | Enable confirmed SSS–F research cards; mandatory rejection still blocks delivery |
 | `FLOW_SSS_RESEARCH=true` | Enable SSS-only cards when broader research alerts are disabled |
 | `FLOW_SCAN_ENABLED=true` | Enable public-data collection and scanning |

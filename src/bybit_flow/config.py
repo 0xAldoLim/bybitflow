@@ -69,6 +69,7 @@ class Settings(BaseSettings):
     research_alerts: bool = False
     sss_research: bool = False
     research_webhook: SecretStr = SecretStr("")
+    monitoring_webhook: SecretStr = SecretStr("")
     discord_webhook: SecretStr = SecretStr("")
     admin_token: SecretStr = SecretStr("")
     dashboard_url: str = "http://127.0.0.1:8000"
@@ -94,5 +95,11 @@ class Settings(BaseSettings):
     def public(self):
         return self.model_dump(
             mode="json",
-            exclude={"research_webhook", "discord_webhook", "admin_token", "ops_webhook"},
+            exclude={
+                "research_webhook",
+                "monitoring_webhook",
+                "discord_webhook",
+                "admin_token",
+                "ops_webhook",
+            },
         )

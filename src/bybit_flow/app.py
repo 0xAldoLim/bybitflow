@@ -295,8 +295,9 @@ def create_app(settings=None):
     @app.get("/api/settings")
     async def config():
         return settings.public() | {
-            "discord_configured": bool(settings.discord_webhook.get_secret_value()),
+            "discord_configured": bool(settings.research_webhook.get_secret_value()),
             "research_discord_configured": bool(settings.research_webhook.get_secret_value()),
+            "monitoring_discord_configured": bool(settings.monitoring_webhook.get_secret_value()),
             "editing": "Change environment configuration and restart; secrets never returned",
         }
 

@@ -59,8 +59,8 @@ down when possible. Do not delete Docker's data volume to restart the program.
 
 ## First-time setup
 
-Requirements: Docker Desktop, access to public exchange endpoints, and a Discord
-channel webhook. No exchange trading keys or paid chart subscription are required.
+Requirements: Docker Desktop, access to public exchange endpoints, and two Discord
+channel webhooks. No exchange trading keys or paid chart subscription are required.
 
 From the project folder in CMD:
 
@@ -69,8 +69,10 @@ if not exist .env copy .env.example .env
 notepad .env
 ```
 
-Set a long private dashboard password in `FLOW_ADMIN_TOKEN` and the Discord webhook
-URL in `FLOW_RESEARCH_WEBHOOK`. Never commit `.env` or share its contents.
+Set a long private dashboard password in `FLOW_ADMIN_TOKEN`. Put the signals-channel
+webhook in `FLOW_RESEARCH_WEBHOOK` and the monitoring-channel webhook in
+`FLOW_MONITORING_WEBHOOK`. Never commit `.env` or share its contents. The older
+`FLOW_DISCORD_WEBHOOK` setting is no longer used for setup delivery.
 
 For confirmed alerts, minute-by-minute order flow, two-stage ML research and bounded
 recording storage, use these settings in `.env`:
@@ -105,8 +107,11 @@ To send an explicitly labelled Discord connection test:
 docker compose exec desk bybit-flow test-discord
 ```
 
-A connection test confirms webhook access; it is not a trade signal. Settings are
-read at startup. Apply `.env` changes with `docker compose --profile ml up -d`.
+A connection test confirms signals-webhook access; it is not a trade signal.
+Monitoring pause/resume cards use the separate monitoring webhook and are sent only
+for setups whose initial card was delivered. Entry expiry, withdrawal, outcome and
+other setup updates use the signals webhook. Settings are read at startup. Apply
+`.env` changes with `docker compose --profile ml up -d`.
 
 ## What to expect from alerts
 

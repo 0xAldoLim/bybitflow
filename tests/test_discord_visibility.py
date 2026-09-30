@@ -11,10 +11,11 @@ async def test_invisible_setup_has_no_pause_and_visible_outage_has_one(settings,
     store = Store(settings.data_dir)
     settings.research_alerts = True
     settings.research_webhook = SecretStr("https://discord.com/api/webhooks/123/test")
+    settings.monitoring_webhook = SecretStr("https://discord.com/api/webhooks/456/monitor")
     calls = []
 
     def transport(request):
-        calls.append(json.loads(request.content))
+        calls.append((request.url.path, json.loads(request.content)))
         return httpx.Response(200, json={"id": "pause-card"})
 
     notifier = Notifier(settings, store, httpx.MockTransport(transport))
@@ -34,7 +35,8 @@ async def test_invisible_setup_has_no_pause_and_visible_outage_has_one(settings,
         store.db.execute("UPDATE outbox SET status=?,message_id=?", ("sent", "initial-card"))
     for _ in range(3):
         await notifier.send_research(signal, update=True)
-    assert len(calls) == 1 and calls[0]["embeds"][0]["title"].startswith("MONITORING PAUSED")
+    assert len(calls) == 1 and calls[0][0].startswith("/api/webhooks/456/")
+    assert calls[0][1]["embeds"][0]["title"].startswith("MONITORING PAUSED")
     assert not notifier.was_initially_delivered(signal.id, "validated")
     visible = store.get("discord_visibility:research:" + signal.id)
     assert visible["user_visible_initial"] and visible["initial_message_id"] == "initial-card"
@@ -44,5 +46,29 @@ async def test_invisible_setup_has_no_pause_and_visible_outage_has_one(settings,
     signal.coverage["monitoring_event"] = "resumed"
     for _ in range(2):
         await notifier.send_research(signal, update=True)
-    assert len(calls) == 2
+    assert len(calls) == 2 and all(path.startswith("/api/webhooks/456/") for path, _ in calls)
+    store.close()
+
+
+async def test_validated_monitoring_uses_monitoring_webhook(settings, signal):
+    store = Store(settings.data_dir)
+    settings.research_webhook = SecretStr("https://discord.com/api/webhooks/123/signals")
+    settings.monitoring_webhook = SecretStr("https://discord.com/api/webhooks/456/monitor")
+    with store.db:
+        store.db.execute(
+            "INSERT INTO outbox VALUES(?,?,?,?,?,?)",
+            (f"validated:{signal.id}:initial", signal.id, "sent", "{}", "original", 1),
+        )
+    paths = []
+
+    def transport(request):
+        paths.append(request.url.path)
+        return httpx.Response(200, json={"id": "monitor-card"})
+
+    signal.coverage.update(monitoring_event="paused", pause_since_ms=1000)
+    notifier = Notifier(settings, store, httpx.MockTransport(transport))
+    assert await notifier.send_public(signal, update=True) == "sent"
+    signal.state = "EXPIRED"
+    assert await notifier.send_public(signal, update=True) == "sent"
+    assert paths == ["/api/webhooks/456/monitor", "/api/webhooks/123/signals"]
     store.close()

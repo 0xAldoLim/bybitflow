@@ -43,6 +43,7 @@ async def test_transient_stop_wick_and_durable_terminal(settings, signal):
     store.signal(stale)
     assert not store.active_signals()
     settings.research_webhook = SecretStr("https://discord.com/api/webhooks/123/test")
+    store.put(f"discord_initial_webhook_id:{signal.id}", "123")
     attempts = []
 
     def transport(request):
@@ -66,6 +67,35 @@ async def test_transient_stop_wick_and_durable_terminal(settings, signal):
         signal.quality,
         signal.version,
     )
+    store.close()
+
+
+async def test_retired_webhook_terminal_posts_once_to_signals(settings, signal):
+    store = Store(settings.data_dir)
+    signal.state = "ALERTED"
+    store.signal(signal)
+    with store.db:
+        store.db.execute(
+            "INSERT INTO outbox VALUES(?,?,?,?,?,?)",
+            (f"research:{signal.id}:initial", signal.id, "sent", "{}", "old-message", 1),
+        )
+    signal.state = "INVALIDATED"
+    store.signal(signal)
+    settings.research_webhook = SecretStr("https://discord.com/api/webhooks/456/new-signals")
+    attempts = []
+
+    def transport(request):
+        attempts.append(request)
+        return httpx.Response(200, json={"id": "new-terminal"})
+
+    notifier = Notifier(settings, store, transport=httpx.MockTransport(transport))
+    await notifier.retry_terminals()
+    await notifier.retry_terminals()
+    assert len(attempts) == 1
+    assert attempts[0].method == "POST"
+    assert attempts[0].url.path == "/api/webhooks/456/new-signals"
+    assert json.loads(attempts[0].content)["embeds"][0]["title"].startswith("SETUP WITHDRAWN")
+    assert store.db.execute("SELECT notification_status FROM terminal_events").fetchone()[0] == "sent"
     store.close()
 
 
