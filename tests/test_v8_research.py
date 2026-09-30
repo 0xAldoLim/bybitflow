@@ -1,7 +1,7 @@
 """Focused V8 causality, corroboration and bounded-computation checks."""
 
 import asyncio
-from collections import OrderedDict
+from collections import OrderedDict, deque
 from dataclasses import replace
 from types import SimpleNamespace
 
@@ -47,7 +47,7 @@ def test_liquidation_amount_needs_independent_corroboration():
             notional="10000",
         )
     ]
-    baseline = [100] * 25
+    baseline = deque([100] * 25, maxlen=120)
     common = dict(
         price=98,
         baseline=baseline,

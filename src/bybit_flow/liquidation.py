@@ -49,7 +49,7 @@ def assess(events, asof_ms, source, *, price=None, flow=None, derivatives=None, 
     total_1m = sum(amount(row) for row in recent)
     total_5m = totals["LONG", 5] + totals["SHORT", 5]
     prior_1m = sum(amount(row) for row in rows if asof_ms - 120_000 <= row["event_ms"] < asof_ms - 60_000)
-    historical = [float(value) for value in (baseline or [])[-120:] if value is not None and value >= 0]
+    historical = [float(value) for value in list(baseline or ())[-120:] if value is not None and value >= 0]
     percentile = (
         sum(value <= total_1m for value in historical) / len(historical) if len(historical) >= 20 else None
     )
