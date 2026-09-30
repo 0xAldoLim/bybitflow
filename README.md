@@ -322,10 +322,17 @@ complete executable-return samples. The original live stop remains unchanged.
 Confirmation and stop challengers use separate chronological partitions, purging
 and an embargo. Descriptive results do not automatically promote a policy.
 
-Current feature schema `candidate-v8` includes participation, flow-quality and
-market-alignment features. Earlier snapshots,
+Current feature schema `candidate-v9` adds descriptive context expectancy, liquidation,
+breadth, OFI, anchored VWAP, spot/perpetual, and volatility observations. These are
+research-only; they do not change confirmation gates, setup scores, stops, or targets.
+The V8 worker samples at most ten spot symbols and the scanner uses a configurable
+`FLOW_REST_CONCURRENCY` (default 3), derivative TTLs, and a shared closed-bar feature
+cache. `doctor` reports V8 readiness and scanner timings. Earlier snapshots,
 labels and model files remain intact. Old decisions are not recaptured under the
 new schema. New training cohorts must satisfy the existing validation requirements.
+For an offline ablation readiness report, run
+`docker compose exec trainer python -m bybit_flow.ml.ablation --source binance`
+(replace the source with the active venue). It leaves the holdout untouched by default.
 
 An offline recorder smoke test runs in CI. For a longer test, use a separate empty
 data directory, never the production directory:

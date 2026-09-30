@@ -264,6 +264,29 @@ def create_app(settings=None):
             qualification="Research alerts; model qualification evaluated per signal",
             horizons=store.get("horizon_counts", {}),
             storage=store.get("storage_status", {}),
+            market_insights=dict(
+                breadth=store.get("v8_breadth", {}),
+                volatility={
+                    symbol: row.get("volatility", {}).get("state", "INSUFFICIENT")
+                    for symbol, row in scanner.v8_cache.items()
+                },
+                liquidation={
+                    symbol: row.get("liquidation", {}).get("state", "UNAVAILABLE")
+                    for symbol, row in scanner.v8_cache.items()
+                },
+                spot_perp={
+                    symbol: row.get("spot_perp", {}).get("state", "UNAVAILABLE")
+                    for symbol, row in scanner.v8_cache.items()
+                },
+                context_ev={
+                    key: value for key, value in store.get("v8_context_ev", {}).items() if key != "groups"
+                },
+                opportunity_priority={
+                    row["id"]: row.get("evidence", {}).get("opportunity_priority", {})
+                    for row in store.active_signals()[:30]
+                },
+            ),
+            scanner_performance=store.get("scanner_performance", {}),
             at_ms=now_ms(),
         )
 

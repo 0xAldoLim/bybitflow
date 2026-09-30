@@ -236,6 +236,76 @@ for _category in (
         "Frozen earned category points",
     )
 
+# V8 observations are descriptive and remain missing until causally observed.
+for _group, _fields in {
+    "context_ev": {
+        "context_ev_samples": "samples",
+        "context_ev_shrunk_expectancy_r": "shrunk_expectancy_r",
+        "context_ev_lower_bound_r": "lower_confidence_bound_r",
+    },
+    "liquidation": {
+        key: key
+        for key in (
+            "liquidation_imbalance",
+            "liquidation_intensity_percentile",
+            "liquidation_acceleration",
+            "liquidation_price_response_bps",
+            "oi_change_during_liquidation",
+        )
+    },
+    "breadth": {
+        "breadth_pct_up_1h": "pct_trending_up_1h",
+        "breadth_pct_up_4h": "pct_trending_up_4h",
+        "breadth_positive_residual_fraction": "positive_btc_residual_fraction",
+        "breadth_cross_sectional_dispersion": "cross_sectional_return_dispersion",
+        "breadth_impulse_15m": "breadth_impulse_15m",
+    },
+    "ofi": {
+        key: key
+        for key in (
+            "ofi_normalized_l1",
+            "ofi_normalized_5bps",
+            "ofi_normalized_10bps",
+            "ofi_persistence",
+            "ofi_acceleration",
+            "price_change_per_ofi",
+        )
+    },
+    "anchored": {
+        key: key
+        for key in (
+            "distance_setup_avwap_atr",
+            "setup_avwap_slope",
+            "setup_avwap_acceptance_ratio",
+            "time_above_value_ratio",
+            "time_below_value_ratio",
+        )
+    },
+    "spot_perp": {
+        key: key
+        for key in (
+            "spot_perp_return_spread",
+            "spot_perp_basis_bps",
+            "basis_change_bps",
+            "spot_perp_delta_agreement",
+            "spot_perp_price_agreement",
+            "spot_lead_lag_ms",
+        )
+    },
+    "volatility": {
+        key: key
+        for key in (
+            "rv_ratio",
+            "vol_of_vol",
+            "parkinson_volatility",
+            "jump_ratio",
+            "range_expansion_percentile",
+        )
+    },
+}.items():
+    for _name, _field in _fields.items():
+        CATALOG[_name] = (_group, f"evidence.{_group}.{_field}", f"Causal V8 research observation: {_field}")
+
 
 def lookup(value, path):
     for part in path.split("."):
@@ -272,7 +342,10 @@ def snapshot(signal, decision_ms, stage, membership=None):
         prefix = actual_path.split(".")[1] if actual_path.startswith("evidence.") else "risk"
         section = signal.evidence.get(prefix, {})
         section = section if isinstance(section, dict) else {}
-        source_ms = section.get("asof", section.get("event_ms", decision_ms))
+        if prefix == "context_ev" and section.get("status") != "AVAILABLE":
+            value = None
+        source = section.get("source", source)
+        source_ms = section.get("source_ms", section.get("asof", section.get("event_ms", decision_ms)))
         available_ms = section.get(
             "available_ms", section.get("receipt_ms", section.get("collected_ms", decision_ms))
         )

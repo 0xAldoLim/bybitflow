@@ -2,7 +2,11 @@ import asyncio
 import contextlib
 import json
 import logging
+from collections import OrderedDict
+from copy import deepcopy
 from statistics import median
+
+import httpx
 
 from .exchanges import VenueAPI, market_probe
 from .features import candle_features, validate_bars
@@ -39,6 +43,16 @@ class Scanner:
         self.context = {}
         self.reconcile_pending = {s["id"] for s in store.active_signals() if s["source"] != "tradingview"}
         self.candle_cache = {}
+        self.feature_cache = OrderedDict()
+        self.feature_cache_hits = self.feature_cache_misses = 0
+        self.derivative_cache = {}
+        self.derivative_cache_hits = self.derivative_cache_misses = 0
+        self.rest_semaphore = asyncio.Semaphore(settings.rest_concurrency)
+        self.rest_reduced_semaphore = asyncio.Semaphore(1)
+        self.rest_reduced_until = 0
+        self.rest_inflight = self.rest_queue_depth = 0
+        self.v8_cache = {}
+        self.liquidation_baseline = {}
         self.tasks = []
         self.scan_lock = asyncio.Lock()
         self.lifecycle_bootstrapped = asyncio.Event()
@@ -100,6 +114,11 @@ class Scanner:
                 job.cancel()
             self.context.clear()
             self.candle_cache.clear()
+            self.feature_cache.clear()
+            self.derivative_cache.clear()
+            self.v8_cache.clear()
+            self.liquidation_baseline.clear()
+            self.instrument_cache = None
             self.source_ready = True
             change = dict(
                 previous=previous,
@@ -118,10 +137,66 @@ class Scanner:
         cached = self.candle_cache.get(key)
         if cached and cached[0] == boundary and len(cached[1]) >= limit:
             return cached[1]
-        bars = await self.api.candles(symbol, interval, asof, limit=limit)
+        bars = await self.bounded_rest(self.api.candles(symbol, interval, asof, limit=limit))
         validate_bars(bars, asof)
         self.candle_cache[key] = (boundary, bars)
         return bars
+
+    async def bounded_rest(self, awaitable):
+        self.rest_queue_depth += 1
+        waiting = True
+        try:
+            async with self.rest_semaphore:
+                self.rest_queue_depth -= 1
+                waiting = False
+                self.rest_inflight += 1
+                try:
+                    if now_ms() < self.rest_reduced_until:
+                        async with self.rest_reduced_semaphore:
+                            return await awaitable
+                    return await awaitable
+                except (PermissionError, httpx.HTTPError, TimeoutError) as exc:
+                    if isinstance(exc, (PermissionError, httpx.TimeoutException)) or (
+                        isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code >= 500
+                    ):
+                        self.rest_reduced_until = now_ms() + 60_000
+                    raise
+                finally:
+                    self.rest_inflight -= 1
+        except BaseException:
+            if waiting:
+                self.rest_queue_depth -= 1
+            raise
+
+    def cached_features(self, symbol, timeframe, bars, asof):
+        if not bars or not hasattr(self, "feature_cache"):
+            return candle_features(bars, asof)
+        closed_end = max((bar.end for bar in bars if bar.end <= asof), default=0)
+        key = (self.exchange, symbol, timeframe, closed_end, "candle-features-v1")
+        if key in self.feature_cache:
+            self.feature_cache_hits += 1
+            self.feature_cache.move_to_end(key)
+            return deepcopy(self.feature_cache[key])
+        self.feature_cache_misses += 1
+        result = candle_features(bars, asof)
+        self.feature_cache[key] = deepcopy(result)
+        if len(self.feature_cache) > 512:
+            self.feature_cache.popitem(last=False)
+        return result
+
+    async def cached_derivative_history(self, endpoint, symbol, start, end, ttl_ms):
+        key = (self.exchange, symbol, endpoint)
+        cached = self.derivative_cache.get(key)
+        if cached and 0 <= end - cached[0] < ttl_ms:
+            self.derivative_cache_hits += 1
+            return deepcopy(cached[1]), cached[0]
+        self.derivative_cache_misses += 1
+        rows = await self.bounded_rest(self.api.history(endpoint, symbol, start, end))
+        observed_ms = now_ms()
+        self.derivative_cache[key] = (observed_ms, deepcopy(rows))
+        if len(self.derivative_cache) > 300:
+            self.derivative_cache.pop(next(iter(self.derivative_cache)))
+        return rows, observed_ms
 
     def pending_symbols(self):
         return list(
@@ -192,7 +267,7 @@ class Scanner:
                     book_features = (
                         book.features(now) if book and book.fresh(now, self.settings.book_stale_ms) else {}
                     )
-                    atr = candle_features(context["h1"], now)["atr"]
+                    atr = self.cached_features(symbol, "60", context["h1"], now)["atr"]
                     result = await asyncio.to_thread(
                         build,
                         snapshot,
@@ -208,7 +283,7 @@ class Scanner:
                     )
                     result["available_ms"] = now_ms()
                     self.volume_profiles[symbol] = result
-                    swing_atr = candle_features(context["h4"], now)["atr"]
+                    swing_atr = self.cached_features(symbol, "240", context["h4"], now)["atr"]
                     swing = await asyncio.to_thread(
                         build,
                         snapshot,
@@ -487,8 +562,14 @@ class Scanner:
 
     async def depth_context(self, inst, ticker, ticker_time, evaluated):
         t = ticker
-        oi = await self.api.history("open-interest", inst.symbol, evaluated - 4 * 3_600_000, evaluated)
-        funding = await self.api.history("funding/history", inst.symbol, evaluated - 2 * DAY, evaluated)
+        (oi, oi_observed), (funding, funding_observed) = await asyncio.gather(
+            self.cached_derivative_history(
+                "open-interest", inst.symbol, evaluated - 4 * 3_600_000, evaluated, 180_000
+            ),
+            self.cached_derivative_history(
+                "funding/history", inst.symbol, evaluated - 2 * DAY, evaluated, 900_000
+            ),
+        )
         if self.exchange == "okx":
             current_funding = await self.api.funding_now(inst.symbol)
             t = t | {
@@ -506,6 +587,8 @@ class Scanner:
             "funding_interval_minutes": inst.funding_interval_minutes,
             "funding_history": f,
             "oi_history": oi,
+            "oi_observed_ms": oi_observed,
+            "funding_history_observed_ms": funding_observed,
             "oi_change_pct": (float(oi[-1]["openInterest"]) / float(oi[0]["openInterest"]) - 1) * 100
             if len(oi) >= 2 and float(oi[0]["openInterest"])
             else None,
@@ -525,13 +608,19 @@ class Scanner:
 
         async with self.scan_lock:
             await self.select_source()
-            self.status.update(state="scanning", started_ms=now_ms())
+            scan_started = now_ms()
+            self.status.update(state="scanning", started_ms=scan_started)
             self.store.put("scanner", self.status)
             body = await self.api.get("time")
             asof = int(body["time"])
             if abs(asof - now_ms()) > 2000:
                 raise ValueError("Local/exchange clock skew exceeds two seconds")
-            rows = await self.api.instruments()
+            metadata_cache = getattr(self, "instrument_cache", None)
+            if metadata_cache and 0 <= asof - metadata_cache[0] < 1_800_000:
+                rows = deepcopy(metadata_cache[1])
+            else:
+                rows = await self.bounded_rest(self.api.instruments())
+                self.instrument_cache = (asof, deepcopy(rows))
             pinned = self.pending_symbols()
             priority = list(dict.fromkeys(pinned + self.settings.core_watchlist))
             rows.sort(
@@ -547,14 +636,16 @@ class Scanner:
             verified = []
             requests = 0
 
-            async def admit(symbol):
+            async def admit(symbol, *, select_stream=True):
                 nonlocal requests, errors
                 if symbol in verified:
                     return
                 try:
                     inst, context_bars, setup_bars, execution_bars = broad[symbol]
                     requests += 1
-                    data = await self.api.get("orderbook", category="linear", symbol=symbol, limit=50)
+                    data = await self.bounded_rest(
+                        self.api.get("orderbook", category="linear", symbol=symbol, limit=50)
+                    )
                     book = Book()
                     book.apply(
                         dict(
@@ -598,15 +689,15 @@ class Scanner:
                             exchange=self.exchange,
                             instrument=inst.model_dump(mode="json"),
                             candles=candle_records(setup_bars),
-                            h4=candle_features(context_bars, evaluated),
-                            h1=candle_features(setup_bars, evaluated),
+                            h4=self.cached_features(symbol, "240", context_bars, evaluated),
+                            h1=self.cached_features(symbol, "60", setup_bars, evaluated),
                             derivatives=derivatives,
                             normal_spread=normal,
                             asof=evaluated,
                         ),
                     )
                     verified.append(symbol)
-                    if symbol in priority:
+                    if select_stream and symbol in priority:
                         await self.streams.select(list(dict.fromkeys(list(self.streams.selected) + [symbol])))
                 except PermissionError:
                     raise
@@ -629,28 +720,32 @@ class Scanner:
                     if inst is None:
                         continue
                     now = now_ms()
-                    bars = [
-                        await self.cached_candles(inst.symbol, tf, now, count)
-                        for tf, count in (("240", 160), ("60", 200), ("15", 120))
-                    ]
+                    bars = await asyncio.gather(
+                        *(
+                            self.cached_candles(inst.symbol, tf, now, count)
+                            for tf, count in (("240", 160), ("60", 200), ("15", 120))
+                        )
+                    )
                     broad[inst.symbol] = (inst, *bars)
                     await admit(inst.symbol)
                 except Exception:
                     errors += 1
-            for raw in rows:
+
+            async def broad_scan(raw):
+                nonlocal errors
                 inst = (
                     self.api.parse(raw, asof)
                     if isinstance(self.api, VenueAPI)
                     else parse_eligible_metadata(raw, self.settings, asof)
                 )
                 if not inst:
-                    continue
+                    return
                 try:
                     t = tickers.get(inst.symbol, {})
                     bid, ask = float(t.get("bid1Price") or 0), float(t.get("ask1Price") or 0)
                     spread = (ask - bid) / ((ask + bid) / 2) * 10000 if ask > bid > 0 else float("inf")
                     if spread > self.settings.max_spread_bps:
-                        continue
+                        return
                     now = now_ms()
                     daily = await self.cached_candles(inst.symbol, "D", now, 120)
                     if (
@@ -658,15 +753,17 @@ class Scanner:
                         or now - daily[-1].end >= DAY
                         or any(c.volume <= 0 for c in daily[-30:])
                     ):
-                        continue
+                        return
                     turnover = median(c.turnover for c in daily[-7:])
                     if turnover < self.settings.min_daily_turnover:
-                        continue
-                    context_bars = await self.cached_candles(inst.symbol, "240", now, 160)
-                    setup_bars = await self.cached_candles(inst.symbol, "60", now, 200)
-                    execution_bars = await self.cached_candles(inst.symbol, "15", now, 120)
+                        return
+                    context_bars, setup_bars, execution_bars = await asyncio.gather(
+                        self.cached_candles(inst.symbol, "240", now, 160),
+                        self.cached_candles(inst.symbol, "60", now, 200),
+                        self.cached_candles(inst.symbol, "15", now, 120),
+                    )
                     if now - execution_bars[-1].end > 960_000 or now - setup_bars[-1].end > 3_660_000:
-                        continue
+                        return
                     pre = horizon_pre_ranks(
                         daily,
                         context_bars,
@@ -693,14 +790,18 @@ class Scanner:
                         )
                     )
                     broad[inst.symbol] = (inst, context_bars, setup_bars, execution_bars)
-                    if inst.symbol in priority:
-                        await admit(inst.symbol)
                 except PermissionError:
                     raise
                 except Exception as exc:
                     if not self.recorder.healthy:
                         raise RuntimeError("Recording unavailable; broad scan aborted") from exc
                     errors += 1
+
+            # Small batches keep admission and stream work ahead of optional discovery.
+            for offset in range(0, len(rows), self.settings.rest_concurrency):
+                await asyncio.gather(
+                    *(broad_scan(raw) for raw in rows[offset : offset + self.settings.rest_concurrency])
+                )
             ranked.sort(key=lambda r: r["best_pre_rank"], reverse=True)
             available = {r["symbol"] for r in ranked}
             core = [x for x in self.settings.core_watchlist if x in available]
@@ -719,10 +820,16 @@ class Scanner:
                 now_ms() // 900_000,
                 self.settings.exploration_fraction,
             )
-            for symbol in shortlist:
-                if len(verified) >= max(capacity, len([x for x in priority if x in available])):
+            admit_started = now_ms()
+            admission_limit = max(capacity, len([x for x in priority if x in available]))
+            for offset in range(0, len(shortlist), self.settings.rest_concurrency):
+                if len(verified) >= admission_limit:
                     break
-                await admit(symbol)
+                batch = shortlist[
+                    offset : offset + min(self.settings.rest_concurrency, admission_limit - len(verified))
+                ]
+                await asyncio.gather(*(admit(symbol, select_stream=False) for symbol in batch))
+            deep_admit_duration_ms = now_ms() - admit_started
             retained = [x for x in pinned if x in self.streams.selected]
             selected = list(dict.fromkeys(retained + [x for x in shortlist if x in verified]))[
                 : max(capacity, len(retained))
@@ -743,6 +850,30 @@ class Scanner:
             selection = {k: v for k, v in selection.items() if k in selected}
             self.store.put("deep_selection", selection)
             self.store.put("watchlist", ranked)
+            try:
+                from .breadth import assess as assess_breadth
+
+                breadth_rows = [
+                    dict(
+                        symbol=symbol,
+                        source=self.exchange,
+                        eligible=True,
+                        h4=bars[1],
+                        h1=bars[2],
+                        m15=bars[3],
+                    )
+                    for symbol, bars in broad.items()
+                    if symbol in available
+                ]
+                previous_breadth = self.store.get("v8_breadth", {})
+                self.store.put(
+                    "v8_breadth", assess_breadth(breadth_rows, now_ms(), self.exchange, previous_breadth)
+                )
+            except Exception as exc:
+                self.store.put(
+                    "v8_breadth",
+                    dict(state="INSUFFICIENT", error_type=type(exc).__name__, available_ms=now_ms()),
+                )
             await self.streams.select(selected)
             distribution = {
                 h: sum(r["best_pre_rank_horizon"] == h for r in ranked)
@@ -769,6 +900,25 @@ class Scanner:
                 },
             )
             self.store.put("scanner", self.status)
+            candle_total = self.feature_cache_hits + self.feature_cache_misses
+            derivative_total = self.derivative_cache_hits + self.derivative_cache_misses
+            self.store.put(
+                "scanner_performance",
+                dict(
+                    at_ms=now_ms(),
+                    candle_cache_hit_rate=self.feature_cache_hits / candle_total if candle_total else None,
+                    derivative_cache_hit_rate=self.derivative_cache_hits / derivative_total
+                    if derivative_total
+                    else None,
+                    rest_concurrency=self.settings.rest_concurrency,
+                    rest_effective_concurrency=1
+                    if now_ms() < self.rest_reduced_until
+                    else self.settings.rest_concurrency,
+                    rest_queue_depth=self.rest_queue_depth,
+                    scan_duration_ms=now_ms() - scan_started,
+                    deep_admit_duration_ms=deep_admit_duration_ms,
+                ),
+            )
             from .funnel import emit
 
             for field, metric in [
@@ -833,7 +983,13 @@ class Scanner:
             from .thesis_health import evaluate as health_evaluate
 
             setup = candles(s.setup_timeframe)
-            feature = candle_features(setup, now) if len(setup) >= 60 else {}
+            feature = (
+                self.cached_features(s.symbol, s.setup_timeframe, setup, now)
+                if same_source and len(setup) >= 60
+                else candle_features(setup, now)
+                if len(setup) >= 60
+                else {}
+            )
             health_window = 60_000 if s.horizon_profile == "SHORT_INTRADAY" else 900_000
             recent = tape.window(now - health_window, now)
             observed = await asyncio.to_thread(
@@ -924,7 +1080,11 @@ class Scanner:
             elif (
                 len(factor_bars) >= 60 and now - factor_bars[-1].end <= DURATIONS[s.context_timeframe] + 60000
             ):
-                factor = candle_features(factor_bars, now)
+                factor = (
+                    self.cached_features("BTCUSDT", s.context_timeframe, factor_bars, now)
+                    if same_source
+                    else candle_features(factor_bars, now)
+                )
                 observation["factor_health"] = (
                     "DEGRADED"
                     if factor.get("regime") == ("trending down" if sign > 0 else "trending up")
@@ -1174,7 +1334,7 @@ class Scanner:
                     current_flow = footprint(
                         tape.window(start, end),
                         c["instrument"].tick,
-                        candle_features(execution_bars, now)["atr"],
+                        self.cached_features(s.symbol, s.execution_timeframe, execution_bars, now)["atr"],
                     )
                     resumed_flow_ok = confirm(s, current_flow, execution_bars)
                     if production_v2:
@@ -1254,7 +1414,7 @@ class Scanner:
                 continue
             emit(self.store, "confirmation_attempts", now, signal=s, key=f"confirmation:{s.id}:{end}")
             trades = [t for t in tape.window(start, end) if t.receipt_ms <= now]
-            execution_features = candle_features(execution_bars, now)
+            execution_features = self.cached_features(s.symbol, s.execution_timeframe, execution_bars, now)
             s.evidence["m15" if s.horizon_profile == "LEGACY" else "execution_features"] = execution_features
             # Generation already fixed these deadlines. Confirmation must not
             # extend or replace an existing setup's original lifecycle.
@@ -1450,7 +1610,9 @@ class Scanner:
                             closed = [
                                 b for b in self.candle_cache.get((symbol, tf), (None, []))[1] if b.end <= now
                             ]
-                            regimes[label] = candle_features(closed, now) if len(closed) >= 60 else {}
+                            regimes[label] = (
+                                self.cached_features(symbol, tf, closed, now) if len(closed) >= 60 else {}
+                            )
                         s.evidence["factor_regimes"][tf] = regimes
                     regimes = s.evidence["factor_regimes"].get(s.setup_timeframe, {})
                     alignment = market_alignment(
@@ -1501,10 +1663,10 @@ class Scanner:
 
                     alignment = market_gate(
                         s,
-                        candle_features(factor_bars("BTCUSDT"), now)
+                        self.cached_features("BTCUSDT", s.setup_timeframe, factor_bars("BTCUSDT"), now)
                         if len(factor_bars("BTCUSDT")) >= 60
                         else {},
-                        candle_features(factor_bars("ETHUSDT"), now)
+                        self.cached_features("ETHUSDT", s.setup_timeframe, factor_bars("ETHUSDT"), now)
                         if len(factor_bars("ETHUSDT")) >= 60
                         else {},
                     )
@@ -1530,6 +1692,12 @@ class Scanner:
                 self.store.signal(s, "Awaiting valid evidence within the original entry window")
                 continue
             score(s, flow_ok, rate is not None, preserve_original=":hardening-v1" not in s.version)
+            try:
+                from .v8_runtime import decorate_signal
+
+                decorate_signal(self, s, c, now)
+            except Exception as exc:
+                s.evidence["v8_research_error"] = type(exc).__name__
             if self.settings.sss_research and s.quality >= 95 and not s.gates and s.risk.get("accepted"):
                 s.final_tier = "SSS RESEARCH · UNCALIBRATED"
             from .ml.inference import apply as apply_ml
@@ -1700,6 +1868,36 @@ class Scanner:
                 self.store.put("observation_health", dict(at_ms=now_ms(), error_type=type(exc).__name__))
             await asyncio.sleep(60)
 
+    async def v8_loop(self):
+        from .v8_runtime import refresh
+
+        await self.lifecycle_bootstrapped.wait()
+        while True:
+            try:
+                if self.source_ready and self.recorder.healthy:
+                    await refresh(self)
+            except Exception as exc:
+                self.store.put("v8_research", dict(at_ms=now_ms(), error_type=type(exc).__name__))
+            await asyncio.sleep(60)
+
+    async def context_ev_loop(self):
+        from .context_ev import refresh
+        from .storage import Store
+
+        def build():
+            store = Store(self.settings.data_dir)
+            try:
+                return refresh(store, now_ms())
+            finally:
+                store.close()
+
+        while True:
+            try:
+                await asyncio.to_thread(build)
+            except Exception as exc:
+                self.store.put("v8_context_ev_health", dict(at_ms=now_ms(), error_type=type(exc).__name__))
+            await asyncio.sleep(900)
+
     async def storage_loop(self):
         from .retention import maintain as storage_maintain
         from .retention import storage_status
@@ -1748,6 +1946,8 @@ class Scanner:
         start_task("thesis_health", self.health_loop)
         start_task("terminal_delivery", self.notifier.terminal_loop)
         start_task("post_terminal", self.research_loop)
+        start_task("v8_context_ev", self.context_ev_loop)
+        start_task("v8_research", self.v8_loop)
         start_task("storage", self.storage_loop)
         if self.settings.scan_enabled:
             if self.settings.macro_news_enabled:

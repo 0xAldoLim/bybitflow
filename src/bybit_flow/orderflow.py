@@ -6,6 +6,7 @@ from decimal import ROUND_FLOOR, Decimal
 from statistics import median
 
 from .models import Trade
+from .ofi import l1_event
 
 D = Decimal
 
@@ -24,6 +25,7 @@ class Book:
         self.update = self.seq = self.event_ms = self.receipt_ms = 0
         self.changes = deque(maxlen=5000)
         self.pressure_samples = deque(maxlen=120)
+        self.ofi_events = deque(maxlen=1200)
 
     def apply(self, message, receipt_ms):
         d = message["data"]
@@ -35,6 +37,8 @@ class Book:
         elif int(d["u"]) <= self.update or int(d["seq"]) < self.seq:
             self.valid = False
             raise BookGap("Non-monotonic book update; resubscribe")
+        before_bid = (max(self.bids), self.bids[max(self.bids)]) if self.valid else None
+        before_ask = (min(self.asks), self.asks[min(self.asks)]) if self.valid else None
         # u/seq are NOT documented as consecutive; a jump alone cannot prove loss.
         for side, levels in (("bid", d["b"]), ("ask", d["a"])):
             book = self.bids if side == "bid" else self.asks
@@ -55,6 +59,28 @@ class Book:
         self.valid = bool(self.bids and self.asks) and max(self.bids) < min(self.asks)
         if not self.valid:
             raise BookGap("Empty or crossed book")
+        if not snapshot and before_bid and before_ask:
+            bid, ask = max(self.bids), min(self.asks)
+            after_bid, after_ask = (bid, self.bids[bid]), (ask, self.asks[ask])
+            old_mid = float((before_bid[0] + before_ask[0]) / 2)
+            new_mid = float((bid + ask) / 2)
+            old_micro = float(
+                (before_ask[0] * before_bid[1] + before_bid[0] * before_ask[1])
+                / (before_bid[1] + before_ask[1])
+            )
+            new_micro = float(
+                (ask * self.bids[bid] + bid * self.asks[ask]) / (self.bids[bid] + self.asks[ask])
+            )
+            self.ofi_events.append(
+                (
+                    receipt_ms,
+                    l1_event(before_bid, before_ask, after_bid, after_ask),
+                    old_mid,
+                    new_mid,
+                    old_micro,
+                    new_micro,
+                )
+            )
         if not self.pressure_samples or receipt_ms - self.pressure_samples[-1][0] >= 1000:
             bid, ask = max(self.bids), min(self.asks)
             pressure = float((self.bids[bid] - self.asks[ask]) / (self.bids[bid] + self.asks[ask]))

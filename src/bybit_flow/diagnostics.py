@@ -143,6 +143,8 @@ async def doctor(settings, store, network=True):
         for name in names:
             checks[name] = store.get("probe:" + name, {"status": "NOT_TESTED"})
     checks["scanner"] = store.get("scanner", {"state": "NOT_OBSERVED"})
+    checks["v8_research"] = store.get("v8_research", {"status": "NOT_OBSERVED"})
+    checks["scanner_performance"] = store.get("scanner_performance", {"status": "NOT_OBSERVED"})
     from .horizons import session_context
 
     active = store.active_signals()

@@ -172,6 +172,30 @@ def embed(signal, dashboard_url):
                 if validated
                 else "Collecting model validation evidence",
             )
+            insights = []
+            breadth = s.evidence.get("breadth", {})
+            if breadth.get("state") not in {None, "INSUFFICIENT"}:
+                insights.append("Breadth: " + breadth["state"].replace("_", " "))
+            spot_perp = s.evidence.get("spot_perp", {})
+            if spot_perp.get("state") not in {None, "UNAVAILABLE"}:
+                insights.append("Spot/perp: " + spot_perp["state"].replace("_", " "))
+            liquidations = s.evidence.get("liquidation", {})
+            if liquidations.get("state") not in {None, "UNAVAILABLE"}:
+                insights.append("Liquidations: " + liquidations["state"].replace("_", " "))
+            context_ev = s.evidence.get("context_ev", {})
+            expectation = context_ev.get("shrunk_expectancy_r")
+            if expectation is not None:
+                insights.append(
+                    f"Comparable historical outcomes: {expectation:+.2f}R shrunk · {context_ev.get('samples', 0)} samples"
+                )
+            if insights:
+                field("Market insights · research only", "\n".join(insights[:4]))
+            priority = s.evidence.get("opportunity_priority", {})
+            if priority.get("rank_of", 0) > 1:
+                field(
+                    "Opportunity · informational",
+                    f"#{priority['rank']} of {priority['rank_of']} · {priority['cluster_id'].replace('_', ' ')}",
+                )
 
     if monitoring_event in {"paused", "resumed"}:
         color = 0x8B949E

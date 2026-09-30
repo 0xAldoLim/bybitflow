@@ -2,7 +2,7 @@
 
 ## Collection and labels
 
-Current feature schema `candidate-v8` stores immutable generation snapshots and the first
+Current feature schema `candidate-v9` stores immutable generation snapshots and the first
 scored decision for each setup. Source identity, strategy version, event time,
 availability time, missingness, and point-in-time membership accompany the features.
 Exports are source- and schema-specific. Lifecycle states, predictions, and outcomes
@@ -110,12 +110,16 @@ research storage, outside Git. See [operations](OPERATIONS.md) for backup and re
 When two-stage mode is enabled but fewer than 500 compatible complete sequences are
 available, the worker attempts the Logistic Regression/LightGBM tabular baseline.
 Chronological partitions and class requirements remain unchanged. Feature schema
-`candidate-v8` includes causal flow-quality and market-alignment fields; historical snapshots
+`candidate-v9` includes causal flow-quality, market-alignment and V8 research fields; historical snapshots
 remain immutable and incompatible schemas are not silently pooled for training.
 Advisory inference skips incompatible or degraded artifacts. Models are never
 automatically promoted, and deterministic setup scores are not replaced by ML scores.
-The V7.1 flow confirmation mode is retained as signal provenance without changing
-the `candidate-v8` model input schema or forcing retraining.
+The V7.1 flow confirmation mode remains signal provenance. V8 bumps the schema once;
+training needs enough newly completed, source-specific `candidate-v9` outcomes and
+never backfills historical decisions. `python -m bybit_flow.ml.ablation --source binance`
+reports insufficient evidence until at least 500 compatible outcomes exist. Holdout
+consumption requires an explicit offline `--consume-holdout` run and is irreversible
+for that period. The ablation report never promotes features or models automatically.
 
 Set `FLOW_ML_ENABLED=true` and `FLOW_ML_TWO_STAGE=true` to collect causal sequences
 and run the two-stage research pipeline. Stage one uses LightGBM, Random Forest
