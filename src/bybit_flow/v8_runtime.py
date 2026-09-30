@@ -66,6 +66,7 @@ async def refresh(scanner):
         dict.fromkeys(scanner.pending_symbols() + list(scanner.streams.selected)[:4] + ["BTCUSDT", "ETHUSDT"])
     )[:10]
     errors = {}
+    refreshed = {}
 
     async def one(symbol):
         try:
@@ -122,12 +123,14 @@ async def refresh(scanner):
             row["spot_perp"] = spot_perp.compare(spot, perp, now_ms(), prior.get("spot_perp"))
             row["available_ms"] = now_ms()
             scanner.v8_cache[symbol] = row
+            refreshed[symbol] = row
         except Exception as exc:
             errors[symbol] = type(exc).__name__
 
     # Only a small selected set, with the same semaphore as scanner REST work.
     await asyncio.gather(*(one(symbol) for symbol in symbols))
-    ready = list(scanner.v8_cache.values())
+    scanner.v8_cache = {symbol: scanner.v8_cache[symbol] for symbol in symbols if symbol in scanner.v8_cache}
+    ready = list(refreshed.values())
     breadth = scanner.store.get("v8_breadth", {})
     context_cache = scanner.store.get("v8_context_ev", {})
     scanner.store.put(

@@ -283,7 +283,7 @@ async def test_optional_v8_worker_failure_is_isolated(monkeypatch):
         streams=SimpleNamespace(selected=["BTCUSDT"], books={}, tapes={}, liquidations={}),
         context={},
         candle_cache={},
-        v8_cache={},
+        v8_cache={"OLDUSDT": {"liquidation": {"state": "NORMAL"}, "ofi": {"ofi_available": True}}},
         liquidation_baseline={},
         store=MemoryStore(),
         settings=SimpleNamespace(book_stale_ms=5000),
@@ -292,3 +292,6 @@ async def test_optional_v8_worker_failure_is_isolated(monkeypatch):
     monkeypatch.setattr(v8_runtime.volatility, "assess", lambda *_: (_ for _ in ()).throw(ValueError()))
     await v8_runtime.refresh(scanner)
     assert scanner.store.get("v8_research")["errors"] == {"BTCUSDT": "ValueError", "ETHUSDT": "ValueError"}
+    assert scanner.store.get("v8_research")["liquidation_available"] == 0
+    assert scanner.store.get("v8_research")["ofi_symbols_ready"] == 0
+    assert scanner.v8_cache == {}
