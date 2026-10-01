@@ -21,7 +21,7 @@ def _perp_observation(scanner, symbol, asof):
         return float(rows[-1].price) if rows and boundary - rows[-1].event_ms <= 5000 else None
 
     last, one, five = (close_at(t) for t in (end, end - 60_000, end - 300_000))
-    oi = liquidation.oi_changes(scanner.oi_series.get((scanner.exchange, symbol), ()), asof)
+    oi = liquidation.oi_changes(scanner.current_oi_collector.series(scanner.exchange, symbol), asof)
     minute = [t for t in recent if end - 60_000 < t.event_ms <= end]
     return dict(
         source=scanner.exchange,
@@ -39,6 +39,7 @@ def _perp_observation(scanner, symbol, asof):
 
 
 async def refresh(scanner):
+    await scanner.current_oi_collector.refresh()
     asof = now_ms()
     source = scanner.exchange
     symbols = list(
@@ -123,7 +124,7 @@ async def refresh(scanner):
                 derivatives=context.get("derivatives"),
                 book=b,
                 baseline=baseline,
-                oi_series=scanner.oi_series.get((source, symbol), ()),
+                oi_series=scanner.current_oi_collector.series(source, symbol),
             )
             if events is not None:
                 baseline.append(
@@ -144,7 +145,7 @@ async def refresh(scanner):
     scanner.v8_cache = {symbol: scanner.v8_cache[symbol] for symbol in symbols if symbol in scanner.v8_cache}
     ready = list(refreshed.values())
     breadth = scanner.store.get("v8_breadth", {})
-    context_cache = scanner.store.get("v8_context_ev:" + source, {})
+    context_cache = scanner.store.get("v8_context_ev_production:" + source, {})
     lookup = scanner.store.get("v8_context_ev_lookup:" + source, {})
     scanner.store.put(
         "v8_research",
@@ -220,6 +221,10 @@ async def refresh(scanner):
             ),
             context_ev=dict(
                 source=source,
+                population=context_cache.get("population"),
+                schema_version=context_cache.get("schema_version"),
+                confirmation_policy=context_cache.get("confirmation_policy"),
+                primary_outcomes=context_cache.get("primary_outcomes", 0),
                 status=context_cache.get("status", "INSUFFICIENT"),
                 confidence=lookup.get("confidence", "INSUFFICIENT"),
                 effective_samples=lookup.get("effective_samples", 0),
@@ -271,7 +276,7 @@ def decorate_signal(scanner, signal, context, decision_ms):
         profile_ms=decision_ms if flow.get("available") else None,
     )
     signal.evidence["context_ev"] = context_ev.assess(
-        scanner.store.get("v8_context_ev:" + source, {}), signal, decision_ms
+        scanner.store.get("v8_context_ev_production:" + source, {}), signal, decision_ms, production=True
     )
     scanner.store.put(
         "v8_context_ev_lookup:" + source,

@@ -55,6 +55,9 @@ class Scanner:
         self.v8_cache = {}
         self.v8_disabled = {}
         self.oi_series = {}
+        from .current_oi import Collector as OICollector
+
+        self.current_oi_collector = OICollector(self)
         from .spot_perp import Collector
 
         self.spot_collector = Collector(self.optional_rest)
@@ -1965,7 +1968,10 @@ class Scanner:
             store = Store(self.settings.data_dir)
             try:
                 at = now_ms()
-                result = {source: refresh(store, at, source=source) for source in ("binance", "bybit", "okx")}
+                result = {}
+                for source in ("binance", "bybit", "okx"):
+                    result[source] = refresh(store, at, source=source)
+                    refresh(store, at, source=source, production=True)
                 from .v8_gating import effectiveness
 
                 store.put("v8_gate_effectiveness", effectiveness(store, at))

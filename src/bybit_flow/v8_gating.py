@@ -285,8 +285,14 @@ def evaluate(signal, asof_ms, settings, *, disabled=None, active=(), portfolio=N
                 set_state(name, "SUPPORT", "POST_SHOCK_NORMALIZATION", True)
 
         elif name == "context_ev":
+            from .ml import SCHEMA_VERSION
+
             if (
                 value.get("status") != "AVAILABLE"
+                or not value.get("production_compatible")
+                or value.get("schema_version") != SCHEMA_VERSION
+                or value.get("confirmation_policy") != POLICY
+                or evidence.get("confirmation_policy") != POLICY
                 or value.get("confidence") != "MATURE"
                 or value.get("effective_samples", 0) < 200
                 or not value.get("source_specific")

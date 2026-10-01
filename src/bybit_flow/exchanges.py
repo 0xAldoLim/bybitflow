@@ -8,6 +8,7 @@ All quantities handed to strategy/risk/Book are base units, including OKX contra
 
 import asyncio
 import json
+import math
 import re
 from decimal import Decimal as D
 from typing import Protocol
@@ -35,6 +36,7 @@ PATHS = {
         "/fapi/v1/klines",
         "/fapi/v1/depth",
         "/fapi/v1/fundingRate",
+        "/fapi/v1/openInterest",
         "/futures/data/openInterestHist",
     },
     "okx": {
@@ -422,6 +424,54 @@ class VenueAPI:
         return (await self.request("/api/v5/public/funding-rate", instId=symbol_id(symbol, self.name)))[
             "data"
         ][0]
+
+    async def current_oi(self, symbol):
+        """Current base-unit OI; separate from multi-hour historical context."""
+        wire_symbol = symbol_id(symbol, self.name)
+        if self.name == "binance":
+            row = await self.request("/fapi/v1/openInterest", symbol=wire_symbol)
+            if row["symbol"] != wire_symbol:
+                raise ValueError("Current OI symbol mismatch")
+            value, notional, source_ms = row["openInterest"], None, int(row["time"])
+        elif self.name == "bybit":
+            body = await self.bybit.get("tickers", category="linear", symbol=wire_symbol)
+            row = body["result"]["list"][0]
+            if row["symbol"] != wire_symbol:
+                raise ValueError("Current OI symbol mismatch")
+            value, notional, source_ms = row["openInterest"], row.get("openInterestValue"), int(body["time"])
+        else:
+            row = (await self.request("/api/v5/public/open-interest", instType="SWAP", instId=wire_symbol))[
+                "data"
+            ][0]
+            if row["instId"] != wire_symbol:
+                raise ValueError("Current OI symbol mismatch")
+            value, notional, source_ms = row["oiCcy"], row.get("oiUsd"), int(row["ts"])
+        value = float(value)
+        notional = float(notional) if notional not in {None, ""} else None
+        if (
+            not math.isfinite(value)
+            or value <= 0
+            or (notional is not None and (not math.isfinite(notional) or notional <= 0))
+        ):
+            raise ValueError("Invalid current OI")
+        available_ms = now_ms()
+        # Preserve exchange timestamps. Wait out tolerated skew rather than
+        # relabel a future exchange event as an already causal observation.
+        if source_ms > available_ms:
+            if source_ms - available_ms > 2000:
+                raise ValueError("Current OI clock skew exceeds two seconds")
+            await asyncio.sleep((source_ms - available_ms) / 1000)
+            available_ms = now_ms()
+        if not 0 <= available_ms - source_ms <= 90_000 or source_ms <= 0:
+            raise ValueError("Current OI is stale or future dated")
+        return dict(
+            source=self.name,
+            symbol=symbol,
+            open_interest=value,
+            open_interest_notional=notional,
+            source_ms=source_ms,
+            available_ms=available_ms,
+        )
 
     async def close(self):
         await self.client.aclose()

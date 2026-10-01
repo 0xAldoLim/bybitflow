@@ -283,6 +283,11 @@ def create_app(settings=None):
                     for key, value in store.get("v8_context_ev:" + scanner.exchange, {}).items()
                     if key != "groups"
                 },
+                context_ev_production={
+                    key: value
+                    for key, value in store.get("v8_context_ev_production:" + scanner.exchange, {}).items()
+                    if key != "groups"
+                },
                 opportunity_priority={
                     row["id"]: row.get("evidence", {}).get("opportunity_priority", {})
                     for row in store.active_signals()[:30]

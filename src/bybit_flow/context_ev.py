@@ -5,7 +5,9 @@ import math
 from collections import defaultdict
 from statistics import mean, median, pstdev
 
+from .ml import SCHEMA_VERSION
 from .ml.store import FeatureStore
+from .v8_gating import POLICY as CONFIRMATION_POLICY
 
 POLICY = "context-ev-v2"
 SHRINKAGE = 50
@@ -82,9 +84,17 @@ def _summary(rows):
     )
 
 
-def refresh(store, asof_ms, max_rows=3000, *, source=None):
+def refresh(store, asof_ms, max_rows=3000, *, source=None, production=False):
     """Run outside event callbacks; only labels available strictly before asof enter."""
-    rows = FeatureStore(store).dataset(asof_ms - 1, limit=max_rows, source=source)
+    if production and source not in {"binance", "bybit", "okx"}:
+        raise ValueError("Production context EV requires an explicit venue")
+    rows = FeatureStore(store).dataset(
+        asof_ms - 1,
+        limit=max_rows,
+        source=source,
+        schema_version=SCHEMA_VERSION if production else None,
+        confirmation_policy=CONFIRMATION_POLICY if production else None,
+    )
     groups = defaultdict(list)
     for row in rows:
         for key in _keys(row["signal"]):
@@ -93,6 +103,9 @@ def refresh(store, asof_ms, max_rows=3000, *, source=None):
     cache = dict(
         policy=POLICY,
         source=source,
+        population="current-policy" if production else "historical-research",
+        schema_version=SCHEMA_VERSION if production else None,
+        confirmation_policy=CONFIRMATION_POLICY if production else None,
         status="AVAILABLE"
         if any(row["samples"] >= MINIMUM[0] for row in summaries.values())
         else "INSUFFICIENT",
@@ -103,11 +116,26 @@ def refresh(store, asof_ms, max_rows=3000, *, source=None):
         groups=summaries,
         source_methodology="recorded-public-prints only; late OHLC excluded",
     )
-    store.put("v8_context_ev:" + source if source else "v8_context_ev", cache)
+    key = (
+        "v8_context_ev_production:" + source
+        if production
+        else "v8_context_ev:" + source
+        if source
+        else "v8_context_ev"
+    )
+    store.put(key, cache)
     return cache
 
 
-def assess(cache, signal, asof_ms):
+def assess(cache, signal, asof_ms, *, production=False):
+    compatible = bool(
+        production
+        and cache.get("population") == "current-policy"
+        and cache.get("schema_version") == SCHEMA_VERSION
+        and cache.get("confirmation_policy") == CONFIRMATION_POLICY
+        and _value(signal, "evidence", {}).get("confirmation_policy") == CONFIRMATION_POLICY
+        and cache.get("source") == _value(signal, "source")
+    )
     base = dict(
         policy=POLICY,
         status="INSUFFICIENT",
@@ -130,6 +158,10 @@ def assess(cache, signal, asof_ms):
         source_ms=cache.get("max_label_available_ms") if cache else None,
         available_ms=cache.get("available_ms") if cache else None,
         production_gate=False,
+        production_compatible=compatible,
+        population=cache.get("population"),
+        schema_version=cache.get("schema_version"),
+        confirmation_policy=cache.get("confirmation_policy"),
         source_specific=bool(cache and cache.get("source") == _value(signal, "source")),
         cache_age_ms=asof_ms - cache.get("available_ms", asof_ms) if cache else None,
         max_label_available_ms=cache.get("max_label_available_ms") if cache else None,
@@ -137,6 +169,7 @@ def assess(cache, signal, asof_ms):
     )
     if (
         not cache
+        or (production and not compatible)
         or cache.get("policy") != POLICY
         or cache.get("max_label_available_ms", 0) >= asof_ms
         or not 0 <= asof_ms - cache.get("available_ms", asof_ms + 1) <= 1_800_000

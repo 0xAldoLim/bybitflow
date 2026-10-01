@@ -149,6 +149,7 @@ async def doctor(settings, store, network=True):
         degraded=store.get("v8_feature_readiness", {}).get("degraded", {})
     )
     checks["v8_feature_readiness"] = store.get("v8_feature_readiness", {})
+    checks["v8_current_oi"] = store.get("v8_current_oi", {})
     checks["v8_gate_effectiveness"] = store.get("v8_gate_effectiveness", {"status": "INSUFFICIENT_EVIDENCE"})
     checks["v8_research"] = store.get("v8_research", {"status": "NOT_OBSERVED"})
     checks["scanner_performance"] = store.get("scanner_performance", {"status": "NOT_OBSERVED"})

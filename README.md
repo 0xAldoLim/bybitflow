@@ -343,14 +343,22 @@ uses actual candle regimes separately from latest-bar returns; production requir
 event-window OI and independent trusted flow. Venues without current minute OI
 remain unavailable for that gate; multi-hour OI is not a substitute.
 
+Current OI uses public venue endpoints, including Binance `/fapi/v1/openInterest`.
+The collector samples at most ten core, active, pending or selected symbols about
+once per minute, caches attempts for 55 seconds and retains at most 30 observations
+per symbol. Endpoint outages leave minute OI unavailable rather than inserting zeros.
+
 `FLOW_V8_PRODUCTION_GATING=true` is the default. Set it to `false` to continue
 recording shadow decisions without blocking live confirmations. Individual switches
 `FLOW_V8_GATE_SPOT_PERP`, `FLOW_V8_GATE_OFI`, `FLOW_V8_GATE_BREADTH`,
 `FLOW_V8_GATE_ANCHORED`, `FLOW_V8_GATE_LIQUIDATION`, `FLOW_V8_GATE_VOLATILITY`
 and `FLOW_V8_GATE_CONTEXT_EV` also default to `true`. Malformed feature evidence
 disables only that gate for the current process and appears as degraded in `doctor`.
-Context EV uses source-specific caches and stays inactive until it has at least
-200 effective samples, mature confidence and a fresh causal lower confidence bound.
+Historical Context EV is descriptive research. The separate production cache uses
+only same-source `candidate-v10`, `v8-production-gating-v1` decisions with complete
+causal `prints-v1` outcomes. It stays inactive until at least 200 effective samples
+support mature confidence; blocking still requires a fresh lower confidence bound
+at or below -0.10R. Older strategies cannot establish production expectancy.
 
 `doctor` reports feature readiness, hourly gate counters and scanner timings.
 Run `docker compose exec desk bybit-flow v8-effectiveness` for research-only blocked

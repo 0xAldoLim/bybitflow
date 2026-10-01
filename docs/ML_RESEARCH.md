@@ -158,6 +158,11 @@ training evidence. Opportunity priority is excluded from model inputs.
 
 Context EV remains descriptive until 200 effective causal observations support
 mature confidence. Its source-specific cache must be at most 30 minutes old.
+Production context is isolated to `candidate-v10` decisions with confirmation
+policy `v8-production-gating-v1`, the same venue and primary `prints-v1` outcomes
+available strictly before the current decision. Historical research uses a separate
+cache and cannot trigger a production veto. The effective-sample heuristic and
+-0.10R lower-confidence-bound threshold are unchanged.
 The V8 effectiveness report describes avoided stops, missed targets and matched
 passed outcomes. These comparisons do not establish improved live returns or
 automatically change thresholds.

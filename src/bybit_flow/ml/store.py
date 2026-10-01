@@ -142,7 +142,14 @@ class FeatureStore:
             )
 
     def dataset(
-        self, asof_ms, policy="prints-v1", stage="decision", limit=10_000, source=None, schema_version=None
+        self,
+        asof_ms,
+        policy="prints-v1",
+        stage="decision",
+        limit=10_000,
+        source=None,
+        schema_version=None,
+        confirmation_policy=None,
     ):
         """Return at most `limit` causally available, unique completed outcomes.
 
@@ -167,6 +174,9 @@ class FeatureStore:
         if schema_version is not None:
             where.append("s.schema_version=?")
             filters.append(schema_version)
+        if confirmation_policy is not None:
+            where.append("json_extract(s.payload,'$.signal.evidence.confirmation_policy')=?")
+            filters.append(confirmation_policy)
         query = (
             "SELECT s.id,s.payload,l.available_ms,l.payload,"
             "coalesce(c.candidate_identity,s.signal_id),s.decision_ms "

@@ -4,6 +4,7 @@ import asyncio
 from collections import OrderedDict, deque
 from dataclasses import replace
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 from conftest import synthetic_bars
@@ -297,6 +298,7 @@ async def test_optional_v8_worker_failure_is_isolated(monkeypatch):
         store=MemoryStore(),
         settings=SimpleNamespace(book_stale_ms=5000),
         pending_symbols=lambda: [],
+        current_oi_collector=SimpleNamespace(refresh=AsyncMock()),
     )
     monkeypatch.setattr(v8_runtime.volatility, "assess", lambda *_: (_ for _ in ()).throw(ValueError()))
     await v8_runtime.refresh(scanner)
