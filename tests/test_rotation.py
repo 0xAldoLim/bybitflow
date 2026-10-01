@@ -48,3 +48,30 @@ async def test_closed_candle_cache_keyed_by_boundary(settings, bars):
     assert len(calls) == 2
     await scanner.api.close()
     store.close()
+
+
+async def test_short_fresh_history_reused_but_larger_requests_and_stale_history_retry(settings, bars):
+    store = Store(settings.data_dir)
+    scanner = Scanner(settings, store, Recorder(store, settings))
+    calls = []
+    short = bars[-30:]
+
+    async def candles(symbol, interval, asof, limit):
+        calls.append(limit)
+        return short
+
+    scanner.api.candles = candles
+    at = bars[-1].end + 1000
+    assert await scanner.cached_candles("NEWUSDT", "60", at, 200) == short
+    assert await scanner.cached_candles("NEWUSDT", "60", at + 1000, 200) == short
+    assert calls == [200]
+    await scanner.cached_candles("NEWUSDT", "60", at, 300)
+    await scanner.cached_candles("NEWUSDT", "60", at + 1000, 200)
+    assert calls == [200, 300]
+    # A new boundary refreshes; stale partial responses remain retryable.
+    await scanner.cached_candles("NEWUSDT", "60", at + 3_600_000, 200)
+    await scanner.cached_candles("NEWUSDT", "60", at + 3_601_000, 200)
+    assert calls == [200, 300, 200, 200]
+    await scanner.api.close()
+    await scanner.spot_collector.close()
+    store.close()

@@ -43,6 +43,7 @@ class Scanner:
         self.context = {}
         self.reconcile_pending = {s["id"] for s in store.active_signals() if s["source"] != "tradingview"}
         self.candle_cache = {}
+        self.candle_cache_limits = {}
         self.feature_cache = OrderedDict()
         self.feature_cache_hits = self.feature_cache_misses = 0
         self.derivative_cache = {}
@@ -119,6 +120,7 @@ class Scanner:
                 job.cancel()
             self.context.clear()
             self.candle_cache.clear()
+            self.candle_cache_limits.clear()
             self.feature_cache.clear()
             self.derivative_cache.clear()
             self.v8_cache.clear()
@@ -140,11 +142,22 @@ class Scanner:
         duration = DURATIONS[interval]
         key, boundary = (symbol, interval), asof // duration
         cached = self.candle_cache.get(key)
-        if cached and cached[0] == boundary and len(cached[1]) >= limit:
+        fetched_boundary, fetched_limit = self.candle_cache_limits.get(key, (None, 0))
+        if (
+            cached
+            and cached[0] == boundary
+            and (len(cached[1]) >= limit or (fetched_boundary == boundary and fetched_limit >= limit))
+        ):
             return cached[1]
         bars = await self.bounded_rest(self.api.candles(symbol, interval, asof, limit=limit))
         validate_bars(bars, asof)
         self.candle_cache[key] = (boundary, bars)
+        # A fresh short history cannot gain closed bars before the next boundary.
+        # Keep the requested limit so new listings do not trigger duplicate REST work.
+        if bars and bars[-1].end == boundary * duration:
+            self.candle_cache_limits[key] = (boundary, limit)
+        else:
+            self.candle_cache_limits.pop(key, None)
         return bars
 
     async def bounded_rest(self, awaitable):
