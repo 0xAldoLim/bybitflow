@@ -37,6 +37,7 @@ def update_bucket(book, receipt, l1, old_mid, mid, old_micro, micro, changes):
         book.ofi_buckets.append(
             dict(
                 second_ms=second,
+                source_ms=book.event_ms,
                 epoch=book.ofi_epoch,
                 ofi_l1_sum=0.0,
                 ofi_5bps_notional_sum=0.0,
@@ -52,6 +53,7 @@ def update_bucket(book, receipt, l1, old_mid, mid, old_micro, micro, changes):
             )
         )
     row = book.ofi_buckets[-1]
+    row["source_ms"] = max(row.get("source_ms", 0), book.event_ms)
     row["ofi_l1_sum"] += l1
     row["event_count"] += 1
     row["mid_close"], row["microprice_close"] = mid, micro
@@ -80,7 +82,11 @@ def assess(book, asof_ms, source, *, baseline=None, min_events=5):
     )
     if book is None or not book.fresh(asof_ms):
         return base
-    rows = [r for r in book.ofi_buckets if asof_ms - 60_000 < r["second_ms"] <= asof_ms]
+    rows = [
+        r
+        for r in book.ofi_buckets
+        if asof_ms - 60_000 < r["second_ms"] <= asof_ms and r.get("source_ms", asof_ms + 1) <= asof_ms
+    ]
     base["ofi_coverage_seconds"] = len(rows)
     base["ofi_event_count"] = sum(r["event_count"] for r in rows)
     if not rows:
@@ -98,6 +104,7 @@ def assess(book, asof_ms, source, *, baseline=None, min_events=5):
         ofi_available=ready,
         production_coverage_ready=ready,
         reason="observed second buckets" if ready else base["reason"],
+        source_ms=rows[-1]["source_ms"],
         ofi_l1_60s=l1,
         ofi_normalized_l1=norm,
     )

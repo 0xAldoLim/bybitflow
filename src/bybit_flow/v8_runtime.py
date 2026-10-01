@@ -70,7 +70,7 @@ async def refresh(scanner):
             row["volatility"] = volatility.assess(h1, asof, source)
             b = book.features(asof) if book and book.fresh(asof) else {}
             price = b.get("mid")
-            minute = tape.window(asof - 60_000, asof + 1) if tape else []
+            minute = [t for t in tape.window(asof - 60_000, asof + 1) if t.receipt_ms <= asof] if tape else []
             first = [t for t in minute if t.event_ms < asof - 30_000]
             second = [t for t in minute if t.event_ms >= asof - 30_000]
 
@@ -86,8 +86,8 @@ async def refresh(scanner):
                 and minute
                 and (
                     tape.coverage_start <= asof - 60_000
-                    and 0 <= asof - tape.last_event <= 15_000
-                    and 0 <= asof - tape.last_receipt <= 15_000
+                    and 0 <= asof - minute[-1].event_ms <= 15_000
+                    and 0 <= asof - minute[-1].receipt_ms <= 15_000
                 )
             )
             if inst and complete:

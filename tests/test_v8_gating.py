@@ -568,3 +568,25 @@ def test_feature_health_degrades_only_corrupt_family(signal, settings, bad, reas
     assert disabled == {"volatility": reason}
     signal.evidence["volatility"] = observed(state="JUMP_SHOCK")
     assert not gate(signal, settings, disabled=disabled)["blocked"]
+
+
+def test_ofi_uses_latest_causal_bucket_when_exchange_clock_is_ahead(signal, settings):
+    book = book_seconds(50)
+    # The latest received delta is within normal clock tolerance but not yet causal.
+    book.apply(
+        dict(type="delta", ts=AT + 700, data=dict(u=100, seq=100, b=[["100", "74"]], a=[["100.02", "126"]])),
+        AT,
+    )
+    value = ofi.assess(
+        book,
+        AT,
+        "bybit",
+        baseline=[dict(ofi_normalized_l1=-0.001, ofi_normalized_5bps=-0.001, ofi_persistence=1)] * 20,
+    )
+    assert value["production_coverage_ready"]
+    assert value["ofi_coverage_seconds"] == 49
+    assert value["source_ms"] <= AT
+    signal.evidence["ofi"] = value
+    disabled = {}
+    assert gate(signal, settings, disabled=disabled)["blocked"]
+    assert not disabled
