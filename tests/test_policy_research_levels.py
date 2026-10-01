@@ -58,6 +58,7 @@ def test_horizon_snapshot_lookup_uses_signal_scoped_index(settings):
     plan = " ".join(
         str(tuple(row)) for row in store.db.execute("EXPLAIN QUERY PLAN " + query, ("candidate", 1000))
     )
-    assert "ml_snapshot_signal_time" in plan
+    assert any(name in plan for name in ("ml_snapshot_signal_time", "ml_snapshot_original_lookup"))
+    assert "signal_id=? AND stage=?" in plan
     assert "TEMP B-TREE" not in plan
     store.close()
