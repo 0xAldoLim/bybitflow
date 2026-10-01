@@ -146,7 +146,7 @@ async def doctor(settings, store, network=True):
     from .v8_gating import status as v8_status
 
     checks["v8_production_gate"] = v8_status(store, now_ms()) | dict(
-        degraded=store.get("v8_production_gate", {}).get("degraded", {})
+        degraded=store.get("v8_feature_readiness", {}).get("degraded", {})
     )
     checks["v8_feature_readiness"] = store.get("v8_feature_readiness", {})
     checks["v8_gate_effectiveness"] = store.get("v8_gate_effectiveness", {"status": "INSUFFICIENT_EVIDENCE"})

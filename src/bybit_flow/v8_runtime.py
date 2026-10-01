@@ -186,6 +186,7 @@ async def refresh(scanner):
         dict(
             at_ms=now_ms(),
             source=source,
+            degraded=dict(getattr(scanner, "v8_disabled", {})),
             spot_perp=dict(
                 symbols=len(symbols),
                 price_ready=sum(bool(r.get("spot_perp", {}).get("price_coverage_complete")) for r in ready),
