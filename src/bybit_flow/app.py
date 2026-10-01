@@ -279,7 +279,9 @@ def create_app(settings=None):
                     for symbol, row in scanner.v8_cache.items()
                 },
                 context_ev={
-                    key: value for key, value in store.get("v8_context_ev", {}).items() if key != "groups"
+                    key: value
+                    for key, value in store.get("v8_context_ev:" + scanner.exchange, {}).items()
+                    if key != "groups"
                 },
                 opportunity_priority={
                     row["id"]: row.get("evidence", {}).get("opportunity_priority", {})
