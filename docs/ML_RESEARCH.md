@@ -2,7 +2,7 @@
 
 ## Collection and labels
 
-Current feature schema `candidate-v9` stores immutable generation snapshots and the first
+Current feature schema `candidate-v10` stores immutable generation snapshots and the first
 scored decision for each setup. Source identity, strategy version, event time,
 availability time, missingness, and point-in-time membership accompany the features.
 Exports are source- and schema-specific. Lifecycle states, predictions, and outcomes
@@ -110,12 +110,12 @@ research storage, outside Git. See [operations](OPERATIONS.md) for backup and re
 When two-stage mode is enabled but fewer than 500 compatible complete sequences are
 available, the worker attempts the Logistic Regression/LightGBM tabular baseline.
 Chronological partitions and class requirements remain unchanged. Feature schema
-`candidate-v9` includes causal flow-quality, market-alignment and V8 research fields; historical snapshots
+`candidate-v10` includes causal flow-quality, market-alignment and V8 research fields; historical snapshots
 remain immutable and incompatible schemas are not silently pooled for training.
 Advisory inference skips incompatible or degraded artifacts. Models are never
 automatically promoted, and deterministic setup scores are not replaced by ML scores.
-The V7.1 flow confirmation mode remains signal provenance. V8 bumps the schema once;
-training needs enough newly completed, source-specific `candidate-v9` outcomes and
+The V7.1 flow confirmation mode remains signal provenance. V8.1 bumps the schema once from v9 to v10; historical v9 remains unchanged;
+training needs enough newly completed, source-specific `candidate-v10` outcomes and
 never backfills historical decisions. `python -m bybit_flow.ml.ablation --source binance`
 reports insufficient evidence until at least 500 compatible outcomes exist. Holdout
 consumption requires an explicit offline `--consume-holdout` run and is irreversible
@@ -147,3 +147,17 @@ remain independent of model choice.
 Implementation references: [PyTorch LSTM](https://docs.pytorch.org/docs/2.14/generated/torch.nn.LSTM.html),
 [scikit-learn SVC](https://scikit-learn.org/stable/modules/generated/sklearn.svm.SVC.html),
 and [Random Forest probabilities](https://scikit-learn.org/stable/modules/generated/sklearn.ensemble.RandomForestClassifier.html).
+
+V8.1 gate snapshots include readiness separately from the unchanged quality score.
+Corrected OFI, return versus regime breadth, VAH/VAL acceptance and minute OI
+semantics belong to v10. Sequence history never mixes schemas. Source-specific
+ablation uses v10 outcomes with chronological purging, embargoes and untouched
+holdouts. Frozen V8-blocked V7-valid plans enter the existing primary-print labeling
+path, with complete outcomes only; an incomplete or hypothetical path is not
+training evidence. Opportunity priority is excluded from model inputs.
+
+Context EV remains descriptive until 200 effective causal observations support
+mature confidence. Its source-specific cache must be at most 30 minutes old.
+The V8 effectiveness report describes avoided stops, missed targets and matched
+passed outcomes. These comparisons do not establish improved live returns or
+automatically change thresholds.

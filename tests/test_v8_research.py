@@ -98,7 +98,15 @@ def test_breadth_broad_risk_on_vs_btc_led(monkeypatch):
     ]
     at = bars[-1].end
     rows = [
-        dict(symbol=symbol, source="binance", eligible=True, h1=bars, h4=bars)
+        dict(
+            symbol=symbol,
+            source="binance",
+            eligible=True,
+            h1=bars,
+            h4=bars,
+            h1_features={"regime": "trending up"},
+            h4_features={"regime": "trending up"},
+        )
         for symbol in ("BTCUSDT", "ETHUSDT", "AUSDT", "BUSDT", "CUSDT", "DUSDT", "EUSDT", "FUSDT")
     ]
     assert breadth.assess(rows, at, "binance")["state"] == "BROAD_RISK_ON"
@@ -126,7 +134,8 @@ def test_ofi_book_reset_and_trade_delta_independence():
             at,
         )
     result = ofi.assess(book, 7000, "bybit")
-    assert result["ofi_available"] and result["ofi_l1"] > 0
+    assert not result["ofi_available"] and result["ofi_l1_60s"] > 0
+    assert result["ofi_coverage_seconds"] == 6
     assert "delta_pct" not in result
     book.apply(
         dict(type="snapshot", ts=8000, data={"u": 8, "seq": 8, "b": [["100", "2"]], "a": [["101", "2"]]}),
@@ -175,7 +184,7 @@ def test_spot_perp_comparison_is_missing_aware_and_source_preserving():
     assert spot_perp.compare(spot | {"available_ms": at - 91_000}, perp, at)["state"] == "UNAVAILABLE"
     leveraged = spot_perp.compare(
         spot | {"return_1m": 0.0001},
-        perp | {"return_1m": 0.005, "price": 101, "oi_change_pct": 2},
+        perp | {"return_1m": 0.005, "price": 101, "oi_change_1m_pct": 2},
         at,
         previous={"spot_perp_basis_bps": 0, "available_ms": at - 1000},
     )
@@ -245,7 +254,7 @@ async def test_derivative_ttl_feature_cache_and_rest_bound(bars):
 def test_v8_snapshot_future_observation_is_missing(signal):
     signal.evidence["volatility"] = dict(source="bybit", source_ms=1500, available_ms=2500, rv_ratio=2)
     frozen = snapshot(signal, 2000, "decision")
-    assert frozen["schema_version"] == "candidate-v9"
+    assert frozen["schema_version"] == "candidate-v10"
     assert frozen["values"]["rv_ratio"] is None
     assert frozen["feature_metadata"]["rv_ratio"]["missing"]
 

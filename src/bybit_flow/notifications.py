@@ -173,23 +173,23 @@ def embed(signal, dashboard_url):
                 else "Collecting model validation evidence",
             )
             insights = []
-            breadth = s.evidence.get("breadth", {})
-            if breadth.get("state") not in {None, "INSUFFICIENT"}:
-                insights.append("Breadth: " + breadth["state"].replace("_", " "))
-            spot_perp = s.evidence.get("spot_perp", {})
-            if spot_perp.get("state") not in {None, "UNAVAILABLE"}:
-                insights.append("Spot/perp: " + spot_perp["state"].replace("_", " "))
-            liquidations = s.evidence.get("liquidation", {})
-            if liquidations.get("state") not in {None, "UNAVAILABLE"}:
-                insights.append("Liquidations: " + liquidations["state"].replace("_", " "))
-            context_ev = s.evidence.get("context_ev", {})
-            expectation = context_ev.get("shrunk_expectancy_r")
-            if expectation is not None:
-                insights.append(
-                    f"Comparable historical outcomes: {expectation:+.2f}R shrunk · {context_ev.get('samples', 0)} samples"
-                )
+            feature_states = s.evidence.get("v8_gate", {}).get("feature_states", {})
+            for name, label in (
+                ("spot_perp", "Spot/perp"),
+                ("ofi", "OFI"),
+                ("breadth", "Breadth"),
+                ("anchored", "AVWAP"),
+            ):
+                row = feature_states.get(name, {})
+                if row.get("gate_ready") and row.get("state") == "SUPPORT":
+                    insights.append(label + ": " + row["reason"].replace("_", " ").lower())
             if insights:
-                field("Market insights · research only", "\n".join(insights[:4]))
+                title = (
+                    "V8 CONTEXT"
+                    if alignment.get("alignment") == "IDIOSYNCRATIC_DIVERGENCE"
+                    else "V8 CONFIRMATION"
+                )
+                field(title, "\n".join(insights[:4]))
             priority = s.evidence.get("opportunity_priority", {})
             if priority.get("rank_of", 0) > 1:
                 field(
@@ -311,6 +311,8 @@ class Notifier:
             if signal.validation_status == "validated" and not self.settings.research_alerts
             else "research"
         )
+        if not update and signal.evidence.get("delivery_policy") == "REDUNDANT_OPPORTUNITY":
+            return "blocked:REDUNDANT_OPPORTUNITY"
         if update and not self.was_initially_delivered(signal.id, channel):
             return "blocked:no-visible-initial"
 
@@ -631,6 +633,8 @@ class Notifier:
         return status
 
     async def send_public(self, signal, update=False):
+        if not update and signal.evidence.get("delivery_policy") == "REDUNDANT_OPPORTUNITY":
+            return "blocked:REDUNDANT_OPPORTUNITY"
 
         if update and not self.was_initially_delivered(signal.id, "validated"):
             return "blocked:no-visible-initial"

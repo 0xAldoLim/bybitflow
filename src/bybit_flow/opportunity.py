@@ -1,4 +1,4 @@
-"""Human prioritization of simultaneously valid setups; never a delivery gate."""
+"""Informational priority; explicit correlated-risk policy owns delivery suppression."""
 
 from math import sqrt
 
@@ -51,7 +51,11 @@ def rank(signals, asof_ms, bars_by_symbol=None, maximum=30):
         group = cluster(signal)
         related = []
         for other in candidates:
-            if _value(other, "id") == ident or _value(other, "direction") != direction:
+            if (
+                _value(other, "id") == ident
+                or _value(other, "direction") != direction
+                or _value(other, "source") != _value(signal, "source")
+            ):
                 continue
             if cluster(other) != group or group == "LOW_BETA_IDIOSYNCRATIC":
                 continue
@@ -63,8 +67,11 @@ def rank(signals, asof_ms, bars_by_symbol=None, maximum=30):
         context = evidence.get("context_ev", {})
         quality = float(_value(signal, "quality", 0))
         net_rr = (_value(signal, "risk", {}) or {}).get("net_rr")
-        liquidity = evidence.get("normal_spread", {})
-        spread = liquidity.get("median_bps", liquidity.get("spread_bps"))
+        spread = evidence.get("execution", {}).get("spread_cost_bps")
+        if spread is None:
+            spread = evidence.get("book", {}).get("spread_bps")
+        if spread is None:
+            spread = evidence.get("session_metrics", {}).get("spread_relative")
         liquidity_score = max(0, 100 - 10 * spread) if isinstance(spread, (float, int)) else None
         entry_state = "READY" if _value(signal, "state") in {"CONFIRMED", "ALERTED"} else "NEAR_CONFIRMED"
         components = [
@@ -92,6 +99,7 @@ def rank(signals, asof_ms, bars_by_symbol=None, maximum=30):
             cluster_id=group,
             cluster_size=len(related) + 1,
             redundancy_penalty=penalty,
+            related_ids=[_value(row, "id") for row in related],
             liquidity_quality=liquidity_score,
             quality_score=quality,
             net_rr=net_rr,

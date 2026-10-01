@@ -14,6 +14,14 @@ class Settings(BaseSettings):
     score_profile_auto_promote: bool = False
     ml_enabled: bool = False
     ml_filter_research: bool = False
+    v8_production_gating: bool = True
+    v8_gate_spot_perp: bool = True
+    v8_gate_ofi: bool = True
+    v8_gate_breadth: bool = True
+    v8_gate_anchored: bool = True
+    v8_gate_liquidation: bool = True
+    v8_gate_volatility: bool = True
+    v8_gate_context_ev: bool = True
     validated_alert_tiers: list[Literal["SSS", "SS", "S"]] = Field(default_factory=lambda: ["SSS"])
     ops_webhook: SecretStr = SecretStr("")
     model_config = SettingsConfigDict(env_prefix="FLOW_", env_file=".env", extra="ignore")

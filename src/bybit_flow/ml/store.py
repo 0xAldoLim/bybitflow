@@ -82,7 +82,7 @@ class FeatureStore:
 
             history = self.db.execute(
                 "SELECT payload FROM ml_snapshots WHERE stage='decision' AND decision_ms<? "
-                "AND decision_ms>=? AND json_extract(payload,'$.source')=? "
+                "AND decision_ms>=? AND schema_version=? AND json_extract(payload,'$.source')=? "
                 "AND json_extract(payload,'$.signal.symbol')=? "
                 "AND json_extract(payload,'$.signal.family')=? "
                 "AND json_extract(payload,'$.signal.direction')=? "
@@ -91,6 +91,7 @@ class FeatureStore:
                 (
                     at_ms,
                     at_ms - 7_200_000,
+                    SCHEMA_VERSION,
                     signal.source,
                     signal.symbol,
                     signal.family,

@@ -250,13 +250,28 @@ for _group, _fields in {
             "liquidation_intensity_percentile",
             "liquidation_acceleration",
             "liquidation_price_response_bps",
-            "oi_change_during_liquidation",
+            "oi_change_1m_pct",
+            "oi_change_5m_pct",
+            "oi_change_since_first_liquidation_pct",
         )
     },
     "breadth": {
-        "breadth_pct_up_1h": "pct_trending_up_1h",
-        "breadth_pct_up_4h": "pct_trending_up_4h",
-        "breadth_positive_residual_fraction": "positive_btc_residual_fraction",
+        **{
+            "breadth_" + key: key
+            for key in (
+                "pct_positive_return_1h",
+                "pct_negative_return_1h",
+                "pct_positive_return_4h",
+                "pct_negative_return_4h",
+                "pct_uptrend_1h",
+                "pct_downtrend_1h",
+                "pct_uptrend_4h",
+                "pct_downtrend_4h",
+                "positive_btc_residual_fraction",
+                "negative_btc_residual_fraction",
+            )
+        },
+        "breadth_change_1h": "breadth_change_1h",
         "breadth_cross_sectional_dispersion": "cross_sectional_return_dispersion",
         "breadth_impulse_15m": "breadth_impulse_15m",
     },
@@ -268,7 +283,13 @@ for _group, _fields in {
             "ofi_normalized_10bps",
             "ofi_persistence",
             "ofi_acceleration",
-            "price_change_per_ofi",
+            "ofi_l1_60s",
+            "ofi_5bps_60s",
+            "ofi_10bps_60s",
+            "ofi_strength_percentile",
+            "ofi_coverage_seconds",
+            "mid_response_bps",
+            "microprice_response_bps",
         )
     },
     "anchored": {
@@ -277,13 +298,22 @@ for _group, _fields in {
             "distance_setup_avwap_atr",
             "setup_avwap_slope",
             "setup_avwap_acceptance_ratio",
-            "time_above_value_ratio",
-            "time_below_value_ratio",
+            "time_above_vah_ratio",
+            "time_below_val_ratio",
+            "time_inside_value_ratio",
+            "time_above_poc_ratio",
+            "time_below_poc_ratio",
         )
     },
     "spot_perp": {
         key: key
         for key in (
+            "spot_return_1m",
+            "spot_return_5m",
+            "perp_return_1m",
+            "perp_return_5m",
+            "spot_trade_window_complete",
+            "price_coverage_complete",
             "spot_perp_return_spread",
             "spot_perp_basis_bps",
             "basis_change_bps",
@@ -304,7 +334,26 @@ for _group, _fields in {
     },
 }.items():
     for _name, _field in _fields.items():
+        if _name == "basis_change_bps":
+            _name = "spot_perp_basis_change_bps"
         CATALOG[_name] = (_group, f"evidence.{_group}.{_field}", f"Causal V8 research observation: {_field}")
+
+CATALOG["v8_gate_ready"] = (
+    "v8_gate",
+    "evidence.v8_gate.gate_ready",
+    "Explicit readiness of frozen V8 production policy",
+)
+CATALOG["v8_gate_adverse"] = (
+    "v8_gate",
+    "evidence.v8_gate.hard_adverse",
+    "Ready adverse V8 evidence; independent of global live switch",
+)
+for _family in ("spot_perp", "ofi", "breadth", "anchored", "liquidation", "volatility", "context_ev"):
+    CATALOG["v8_" + _family + "_ready"] = (
+        "v8_gate",
+        f"evidence.v8_gate.feature_states.{_family}.gate_ready",
+        "Causal feature-specific production readiness",
+    )
 
 
 def lookup(value, path):

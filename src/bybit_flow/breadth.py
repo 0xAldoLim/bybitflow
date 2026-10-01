@@ -2,7 +2,7 @@
 
 from statistics import median, pstdev
 
-POLICY = "crypto-breadth-v1"
+POLICY = "crypto-breadth-v2"
 
 
 def _return(bars, asof_ms, max_age_ms):
@@ -26,7 +26,24 @@ def _beta(bars, reference):
 
 def assess(rows, asof_ms, source, previous=None, minimum=8):
     """Rows contain only already-admitted symbols and their cached closed candles."""
-    prior = previous or {}
+    history = previous if isinstance(previous, list) else [previous or {}]
+    prior = next(
+        (
+            row
+            for row in reversed(history)
+            if row.get("source") == source
+            and asof_ms - 7_200_000 <= row.get("available_ms", 0) <= asof_ms - 3_600_000
+        ),
+        {},
+    )
+    from .features import candle_features
+
+    def regime(row, timeframe):
+        features = row.get(timeframe + "_features")
+        if features is None and len(row[timeframe]) >= 60:
+            features = candle_features(row[timeframe], asof_ms)
+        return (features or {}).get("regime")
+
     fresh = {}
     for row in rows[:150]:
         if row.get("source") != source or not row.get("eligible"):
@@ -91,14 +108,21 @@ def assess(rows, asof_ms, source, previous=None, minimum=8):
     impulse = sum(value > 0 for value in m15_returns) / len(m15_returns) if m15_returns else None
     dispersion = pstdev(one) if n > 1 else 0.0
     residual_dispersion = pstdev(btc_residuals) if len(btc_residuals) > 1 else None
+    uptrend1 = sum(regime(r[0], "h1") == "trending up" for r in fresh.values()) / n
+    downtrend1 = sum(regime(r[0], "h1") == "trending down" for r in fresh.values()) / n
+    uptrend4 = sum(regime(r[0], "h4") == "trending up" for r in fresh.values()) / n
+    downtrend4 = sum(regime(r[0], "h4") == "trending down" for r in fresh.values()) / n
+    regime_samples = sum(
+        regime(r[0], "h1") is not None and regime(r[0], "h4") is not None for r in fresh.values()
+    )
     state = "MIXED"
     if btc and btc[1] > 0 and negative_btc is not None and negative_btc > 0.65:
         state = "BTC_LED_RALLY"
     elif btc and btc[1] < 0 and positive_btc is not None and positive_btc > 0.65:
         state = "BTC_LED_SELLOFF"
-    elif up1 >= 0.7 and up4 >= 0.6:
+    elif uptrend1 >= 0.65 and up1 >= 0.7 and uptrend4 >= 0.55:
         state = "BROAD_RISK_ON"
-    elif down1 >= 0.7 and down4 >= 0.6:
+    elif downtrend1 >= 0.65 and down1 >= 0.7 and downtrend4 >= 0.55:
         state = "BROAD_RISK_OFF"
     elif residual_dispersion is not None and residual_dispersion >= 0.025:
         state = "HIGH_DISPERSION"
@@ -108,10 +132,16 @@ def assess(rows, asof_ms, source, previous=None, minimum=8):
         state = "ALT_WEAKNESS"
     return base | dict(
         state=state,
-        pct_trending_up_1h=up1,
-        pct_trending_down_1h=down1,
-        pct_trending_up_4h=up4,
-        pct_trending_down_4h=down4,
+        pct_positive_return_1h=up1,
+        pct_negative_return_1h=down1,
+        pct_positive_return_4h=up4,
+        pct_negative_return_4h=down4,
+        pct_uptrend_1h=uptrend1,
+        pct_downtrend_1h=downtrend1,
+        pct_uptrend_4h=uptrend4,
+        pct_downtrend_4h=downtrend4,
+        production_ready=n >= 20 and regime_samples >= 20,
+        regime_samples=regime_samples,
         pct_above_session_vwap=above / (above + below) if above + below else None,
         pct_below_session_vwap=below / (above + below) if above + below else None,
         positive_btc_residual_fraction=positive_btc,
@@ -123,13 +153,34 @@ def assess(rows, asof_ms, source, previous=None, minimum=8):
         cross_sectional_return_dispersion=dispersion,
         cross_sectional_residual_dispersion=residual_dispersion,
         breadth_impulse_15m=impulse,
-        breadth_change_1h=up1 - prior["pct_trending_up_1h"]
+        breadth_change_1h=uptrend1 - prior["pct_uptrend_1h"]
         if prior.get("source") == source
         and prior.get("available_ms", 0) <= asof_ms - 3_600_000
-        and prior.get("pct_trending_up_1h") is not None
+        and prior.get("pct_uptrend_1h") is not None
         else None,
         residual_samples_btc=len(btc_residuals),
         residual_samples_eth=len(eth_residuals),
         vwap_samples=above + below,
         m15_samples=len(m15_returns),
     )
+
+
+def retain_history(history, current, asof_ms):
+    """Compact quarter-hour history, capped at one day; enough for causal 1h changes."""
+    rows = [r for r in history if asof_ms - 86_400_000 < r.get("available_ms", 0) <= asof_ms]
+    compact = {
+        k: current.get(k)
+        for k in (
+            "source",
+            "available_ms",
+            "state",
+            "denominator",
+            "pct_uptrend_1h",
+            "pct_positive_return_1h",
+        )
+    }
+    if rows and rows[-1]["available_ms"] // 900_000 == asof_ms // 900_000:
+        rows[-1] = compact
+    else:
+        rows.append(compact)
+    return rows[-96:]

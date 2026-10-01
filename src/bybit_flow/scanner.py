@@ -52,6 +52,11 @@ class Scanner:
         self.rest_reduced_until = 0
         self.rest_inflight = self.rest_queue_depth = 0
         self.v8_cache = {}
+        self.v8_disabled = {}
+        self.oi_series = {}
+        from .spot_perp import Collector
+
+        self.spot_collector = Collector(self.optional_rest)
         self.liquidation_baseline = {}
         self.tasks = []
         self.scan_lock = asyncio.Lock()
@@ -167,6 +172,16 @@ class Scanner:
             if waiting:
                 self.rest_queue_depth -= 1
             raise
+
+    async def optional_rest(self, awaitable):
+        """Optional spot work shares the current venue's pacing lock and concurrency."""
+        import time
+
+        owner = self.api.bybit if self.api.bybit else self.api
+        async with owner.lock:
+            await asyncio.sleep(max(0, owner.next_request - time.monotonic()))
+            owner.next_request = time.monotonic() + 1 / self.settings.rest_requests_per_second
+        return await self.bounded_rest(awaitable)
 
     def cached_features(self, symbol, timeframe, bars, asof):
         if not bars or not hasattr(self, "feature_cache"):
@@ -469,6 +484,16 @@ class Scanner:
         )
 
     def record_quotes(self, body, receipt):
+        oi_scope = set(
+            list(
+                dict.fromkeys(["BTCUSDT", "ETHUSDT"] + self.pending_symbols() + list(self.streams.selected))
+            )[:10]
+        )
+        self.oi_series = {
+            key: value
+            for key, value in self.oi_series.items()
+            if key[0] == self.exchange and key[1] in oi_scope
+        }
         updates = []
         for ticker in body["result"]["list"]:
             symbol = ticker["symbol"]
@@ -481,6 +506,23 @@ class Scanner:
                             ticker.get("funding_observed_ms", ticker.get("observed_ms", body["time"]))
                         ),
                     )
+            if symbol in oi_scope:
+                from collections import deque
+
+                from .liquidation import sample_oi
+
+                key = (self.exchange, symbol)
+                series = self.oi_series.setdefault(
+                    key, deque(self.store.get(f"v8_oi:{self.exchange}:{symbol}", []), maxlen=30)
+                )
+                sample_oi(
+                    series,
+                    int(ticker.get("observed_ms", body["time"])),
+                    receipt,
+                    ticker.get("openInterest"),
+                    ticker.get("openInterestValue"),
+                )
+                self.store.put(f"v8_oi:{self.exchange}:{symbol}", list(series))
             history = self.spread_history(symbol)
             history.add(
                 int(ticker.get("observed_ms", body["time"])),
@@ -861,14 +903,20 @@ class Scanner:
                         h4=bars[1],
                         h1=bars[2],
                         m15=bars[3],
+                        h1_features=self.cached_features(symbol, "60", bars[2], now_ms()),
+                        h4_features=self.cached_features(symbol, "240", bars[1], now_ms()),
                     )
                     for symbol, bars in broad.items()
                     if symbol in available
                 ]
-                previous_breadth = self.store.get("v8_breadth", {})
-                self.store.put(
-                    "v8_breadth", assess_breadth(breadth_rows, now_ms(), self.exchange, previous_breadth)
-                )
+                from .breadth import retain_history
+
+                history_key = "v8_breadth_history:" + self.exchange
+                history = self.store.get(history_key, [])
+                assessed_ms = now_ms()
+                current_breadth = assess_breadth(breadth_rows, assessed_ms, self.exchange, history)
+                self.store.put("v8_breadth", current_breadth)
+                self.store.put(history_key, retain_history(history, current_breadth, assessed_ms))
             except Exception as exc:
                 self.store.put(
                     "v8_breadth",
@@ -1697,7 +1745,21 @@ class Scanner:
             try:
                 from .v8_runtime import decorate_signal
 
-                decorate_signal(self, s, c, now)
+                if not s.gates:
+                    decorate_signal(self, s, c, now)
+                    if s.evidence.get("confirmation_policy") == "v8-production-gating-v1":
+                        from .v8_gating import apply_new_candidate
+
+                        s.evidence["flow_confirmed"] = flow_ok
+                        s.evidence["entry_not_chased"] = self.entry_ready(s, book, now)
+                        from .production import structure_response
+
+                        s.evidence["v8_structure_response"] = dict(
+                            supportive=structure_response(s, execution_bars, now),
+                            source_ms=execution_bars[-1].end,
+                            available_ms=now,
+                        )
+                        apply_new_candidate(self, s, now, portfolio=portfolio)
             except Exception as exc:
                 s.evidence["v8_research_error"] = type(exc).__name__
             if self.settings.sss_research and s.quality >= 95 and not s.gates and s.risk.get("accepted"):
@@ -1889,7 +1951,12 @@ class Scanner:
         def build():
             store = Store(self.settings.data_dir)
             try:
-                return refresh(store, now_ms())
+                at = now_ms()
+                result = {source: refresh(store, at, source=source) for source in ("binance", "bybit", "okx")}
+                from .v8_gating import effectiveness
+
+                store.put("v8_gate_effectiveness", effectiveness(store, at))
+                return result
             finally:
                 store.close()
 
@@ -1971,3 +2038,4 @@ class Scanner:
                 await task
         await self.streams.stop()
         await self.api.close()
+        await self.spot_collector.close()

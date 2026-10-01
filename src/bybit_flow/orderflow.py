@@ -6,7 +6,7 @@ from decimal import ROUND_FLOOR, Decimal
 from statistics import median
 
 from .models import Trade
-from .ofi import l1_event
+from .ofi import l1_event, update_bucket
 
 D = Decimal
 
@@ -25,7 +25,9 @@ class Book:
         self.update = self.seq = self.event_ms = self.receipt_ms = 0
         self.changes = deque(maxlen=5000)
         self.pressure_samples = deque(maxlen=120)
-        self.ofi_events = deque(maxlen=1200)
+        self.ofi_events = deque(maxlen=1200)  # legacy diagnostic sample only
+        self.ofi_epoch = getattr(self, "ofi_epoch", 0) + 1
+        self.ofi_buckets = deque(maxlen=120)
 
     def apply(self, message, receipt_ms):
         d = message["data"]
@@ -35,17 +37,18 @@ class Book:
         elif not self.valid:
             raise BookGap("Delta before snapshot")
         elif int(d["u"]) <= self.update or int(d["seq"]) < self.seq:
-            self.valid = False
+            self.reset()
             raise BookGap("Non-monotonic book update; resubscribe")
         before_bid = (max(self.bids), self.bids[max(self.bids)]) if self.valid else None
         before_ask = (min(self.asks), self.asks[min(self.asks)]) if self.valid else None
+        changed = []
         # u/seq are NOT documented as consecutive; a jump alone cannot prove loss.
         for side, levels in (("bid", d["b"]), ("ask", d["a"])):
             book = self.bids if side == "bid" else self.asks
             for p, q in levels:
                 p, q = D(p), D(q)
                 if p <= 0 or q < 0:
-                    self.valid = False
+                    self.reset()
                     raise BookGap("Invalid book price/quantity")
                 old = book.get(p, D(0))
                 if q == 0:
@@ -54,10 +57,12 @@ class Book:
                     book[p] = q
                 if not snapshot:
                     self.changes.append((receipt_ms, side, p, q - old))
+                    changed.append((side, p, q - old))
         self.update, self.seq = int(d["u"]), int(d["seq"])
         self.event_ms, self.receipt_ms = int(message.get("cts", message["ts"])), receipt_ms
         self.valid = bool(self.bids and self.asks) and max(self.bids) < min(self.asks)
         if not self.valid:
+            self.reset()
             raise BookGap("Empty or crossed book")
         if not snapshot and before_bid and before_ask:
             bid, ask = max(self.bids), min(self.asks)
@@ -80,6 +85,16 @@ class Book:
                     old_micro,
                     new_micro,
                 )
+            )
+            update_bucket(
+                self,
+                receipt_ms,
+                l1_event(before_bid, before_ask, after_bid, after_ask),
+                old_mid,
+                new_mid,
+                old_micro,
+                new_micro,
+                changed,
             )
         if not self.pressure_samples or receipt_ms - self.pressure_samples[-1][0] >= 1000:
             bid, ask = max(self.bids), min(self.asks)

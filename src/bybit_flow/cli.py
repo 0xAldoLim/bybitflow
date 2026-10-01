@@ -17,6 +17,9 @@ def main():
     serve.add_argument("--host", default="127.0.0.1")
     serve.add_argument("--port", type=int, default=8000)
     sub.add_parser("scan-once")
+    sub.add_parser(
+        "v8-effectiveness", help="Research-only outcomes of blocked vs comparable passed V8 decisions"
+    )
     signals = sub.add_parser("signals", help="Signal pipeline counters and delivery diagnostics")
     signals.add_argument("operation", choices=["status"])
     doctor = sub.add_parser("doctor", help="Public connectivity and local operational diagnostics")
@@ -64,12 +67,19 @@ def main():
         return
     store = Store(settings.data_dir)
     try:
-        if args.command == "signals":
+        if args.command == "v8-effectiveness":
+            from .v8_gating import effectiveness
+
+            print(json.dumps(effectiveness(store, now_ms()), indent=2))
+        elif args.command == "signals":
             from .funnel import status
+            from .v8_gating import status as v8_status
 
             print(
                 json.dumps(
-                    status(store, configured=bool(settings.research_webhook.get_secret_value())), indent=2
+                    status(store, configured=bool(settings.research_webhook.get_secret_value()))
+                    | {"v8_production_gate": v8_status(store, now_ms())},
+                    indent=2,
                 )
             )
         elif args.command == "test-signal":

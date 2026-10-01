@@ -73,6 +73,8 @@ def assign(signal, name):
     from .ml import SCHEMA_VERSION
 
     signal.feature_schema_version = SCHEMA_VERSION
+    # Only candidates created by this policy receive V8 production confirmation gates.
+    signal.evidence["confirmation_policy"] = "v8-production-gating-v1"
     signal.version += ":horizons-v1:" + name + ":hardening-v1:autonomy-v1:flow-quality-v1"
     signal.id = hashlib.sha256((signal.id + ":" + name).encode()).hexdigest()[:24]
     # Group the actual structural event across horizons; alert comparison also checks prices.

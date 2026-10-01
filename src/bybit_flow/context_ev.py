@@ -7,7 +7,7 @@ from statistics import mean, median, pstdev
 
 from .ml.store import FeatureStore
 
-POLICY = "context-ev-v1"
+POLICY = "context-ev-v2"
 SHRINKAGE = 50
 MINIMUM = (30, 50, 70, 100, 150)
 
@@ -82,9 +82,9 @@ def _summary(rows):
     )
 
 
-def refresh(store, asof_ms, max_rows=3000):
+def refresh(store, asof_ms, max_rows=3000, *, source=None):
     """Run outside event callbacks; only labels available strictly before asof enter."""
-    rows = FeatureStore(store).dataset(asof_ms - 1, limit=max_rows)
+    rows = FeatureStore(store).dataset(asof_ms - 1, limit=max_rows, source=source)
     groups = defaultdict(list)
     for row in rows:
         for key in _keys(row["signal"]):
@@ -92,6 +92,7 @@ def refresh(store, asof_ms, max_rows=3000):
     summaries = {key: _summary(group) for key, group in groups.items() if len(group) >= 15}
     cache = dict(
         policy=POLICY,
+        source=source,
         status="AVAILABLE"
         if any(row["samples"] >= MINIMUM[0] for row in summaries.values())
         else "INSUFFICIENT",
@@ -102,7 +103,7 @@ def refresh(store, asof_ms, max_rows=3000):
         groups=summaries,
         source_methodology="recorded-public-prints only; late OHLC excluded",
     )
-    store.put("v8_context_ev", cache)
+    store.put("v8_context_ev:" + source if source else "v8_context_ev", cache)
     return cache
 
 
@@ -129,13 +130,17 @@ def assess(cache, signal, asof_ms):
         source_ms=cache.get("max_label_available_ms") if cache else None,
         available_ms=cache.get("available_ms") if cache else None,
         production_gate=False,
+        source_specific=bool(cache and cache.get("source") == _value(signal, "source")),
+        cache_age_ms=asof_ms - cache.get("available_ms", asof_ms) if cache else None,
+        max_label_available_ms=cache.get("max_label_available_ms") if cache else None,
         score_effect=0,
     )
     if (
         not cache
         or cache.get("policy") != POLICY
         or cache.get("max_label_available_ms", 0) >= asof_ms
-        or cache.get("available_ms", asof_ms + 1) > asof_ms
+        or not 0 <= asof_ms - cache.get("available_ms", asof_ms + 1) <= 1_800_000
+        or cache.get("source") not in {None, _value(signal, "source")}
     ):
         return base
     keys = list(_keys(signal))

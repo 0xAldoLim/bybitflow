@@ -322,14 +322,44 @@ complete executable-return samples. The original live stop remains unchanged.
 Confirmation and stop challengers use separate chronological partitions, purging
 and an embargo. Descriptive results do not automatically promote a policy.
 
-Current feature schema `candidate-v9` adds descriptive context expectancy, liquidation,
-breadth, OFI, anchored VWAP, spot/perpetual, and volatility observations. These are
-research-only; they do not change confirmation gates, setup scores, stops, or targets.
-The V8 worker samples at most ten spot symbols and the scanner uses a configurable
-`FLOW_REST_CONCURRENCY` (default 3), derivative TTLs, and a shared closed-bar feature
-cache. `doctor` reports V8 readiness and scanner timings. Earlier snapshots,
-labels and model files remain intact. Old decisions are not recaptured under the
-new schema. New training cohorts must satisfy the existing validation requirements.
+Current feature schema `candidate-v10` repairs the V8 price, OFI, breadth, value-area
+and event-window OI definitions. Historical `candidate-v9` snapshots, labels and
+models remain immutable. Old decisions are never recaptured or rescored.
+
+The `v8-production-gating-v1` policy evaluates only new V7-valid confirmations.
+A fresh, ready adverse feature may reject a candidate; supportive evidence cannot
+override structure, flow, risk, entry, macro or BTC-alignment gates. Missing optional
+data falls back to V7. Active and previously pending setups retain their original
+plans and lifecycle monitoring. Rejected V8 candidates keep frozen shadow snapshots
+for complete `prints-v1` outcomes where recorded coverage allows.
+
+Spot returns use closed one-minute candles. Executed delta uses at most three
+aggregate-trade pages and stays missing when coverage is truncated. One pooled
+public spot client shares REST pacing/concurrency and samples at most ten symbols.
+OFI requires at least 45 observed seconds in one continuity epoch and 20 prior
+same-source, symbol and session windows before strong directional gating. Breadth
+uses actual candle regimes separately from latest-bar returns; production requires
+20 fresh symbols. Weekly AVWAP uses H1 history. Liquidation gates require causal
+event-window OI and independent trusted flow. Venues without current minute OI
+remain unavailable for that gate; multi-hour OI is not a substitute.
+
+`FLOW_V8_PRODUCTION_GATING=true` is the default. Set it to `false` to continue
+recording shadow decisions without blocking live confirmations. Individual switches
+`FLOW_V8_GATE_SPOT_PERP`, `FLOW_V8_GATE_OFI`, `FLOW_V8_GATE_BREADTH`,
+`FLOW_V8_GATE_ANCHORED`, `FLOW_V8_GATE_LIQUIDATION`, `FLOW_V8_GATE_VOLATILITY`
+and `FLOW_V8_GATE_CONTEXT_EV` also default to `true`. Malformed feature evidence
+disables only that gate for the current process and appears as degraded in `doctor`.
+Context EV uses source-specific caches and stays inactive until it has at least
+200 effective samples, mature confidence and a fresh causal lower confidence bound.
+
+`doctor` reports feature readiness, hourly gate counters and scanner timings.
+Run `docker compose exec desk bybit-flow v8-effectiveness` for research-only blocked
+versus comparable passed outcomes. The report declares insufficient evidence until
+enough complete outcomes exist; it never tunes thresholds or promotes models.
+Opportunity rank stays separate from quality. Delivery suppression requires verified
+high correlation, a materially stronger active setup and a fresh manual portfolio
+already near the configured correlated-risk limit.
+
 For an offline ablation readiness report, run
 `docker compose exec trainer python -m bybit_flow.ml.ablation --source binance`
 (replace the source with the active venue). It leaves the holdout untouched by default.

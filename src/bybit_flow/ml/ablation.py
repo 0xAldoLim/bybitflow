@@ -10,7 +10,7 @@ from .models import calibrate, fit, predict
 from .store import FeatureStore
 from .validation import accepted, cluster_interval, metrics, next_cycle_partitions, walk_forward
 
-GROUPS = ("context_ev", "liquidation", "breadth", "ofi", "anchored", "spot_perp", "volatility")
+GROUPS = ("context_ev", "liquidation", "breadth", "ofi", "anchored", "spot_perp", "volatility", "v8_gate")
 POLICY = "v8-ablation-v1"
 PARAMETERS = {"min_probability": 0.6, "min_quality": 65}
 

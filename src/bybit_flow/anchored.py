@@ -1,6 +1,6 @@
 """Causal anchored VWAP and closed-bar time-at-location research."""
 
-POLICY = "anchored-acceptance-v1"
+POLICY = "anchored-acceptance-v2"
 
 
 def avwap(bars, anchor_ms, asof_ms, source, *, anchor_price=None, atr=None, known_ms=None):
@@ -12,12 +12,18 @@ def avwap(bars, anchor_ms, asof_ms, source, *, anchor_price=None, atr=None, know
         available_ms=asof_ms,
         anchor_ms=anchor_ms,
         anchor_price=anchor_price,
+        known_ms=known_ms if known_ms is not None else anchor_ms,
         avwap=None,
     )
     if anchor_ms is None or anchor_ms > asof_ms or (known_ms is not None and known_ms > asof_ms):
         return result
     closed = [bar for bar in bars if bar.start >= anchor_ms and bar.end <= asof_ms]
-    if len(closed) < 2 or sum(bar.volume for bar in closed) <= 0:
+    if (
+        len(closed) < 2
+        or sum(bar.volume for bar in closed) <= 0
+        or closed[0].start - anchor_ms >= closed[0].interval
+        or any(b.start != a.end for a, b in zip(closed, closed[1:]))
+    ):
         return result
     cumulative_volume = cumulative_turnover = 0.0
     values = []
@@ -87,7 +93,7 @@ def time_acceptance(bars, level, asof_ms, source, *, band=0.0):
     )
 
 
-def assess(bars, asof_ms, source, *, atr=None, anchors=None, levels=None):
+def assess(bars, asof_ms, source, *, atr=None, anchors=None, levels=None, h1=None, profile_ms=None):
     from .models import DAY
 
     if not bars or bars[-1].end > asof_ms:
@@ -98,7 +104,7 @@ def assess(bars, asof_ms, source, *, atr=None, anchors=None, levels=None):
     known.update(anchors or {})
     anchored = {
         name: avwap(
-            bars,
+            (h1 or []) if name == "weekly_open" else bars,
             value.get("anchor_ms"),
             asof_ms,
             source,
@@ -113,8 +119,15 @@ def assess(bars, asof_ms, source, *, atr=None, anchors=None, levels=None):
         for name, value in (levels or {}).items()
     }
     setup = anchored.get("setup_trigger", {})
+    post_anchor = [
+        bar for bar in bars if bar.start >= (setup.get("anchor_ms") or asof_ms) and bar.end <= asof_ms
+    ]
+    if levels and post_anchor:
+        acceptance.update(
+            {name: time_acceptance(post_anchor, value, asof_ms, source) for name, value in levels.items()}
+        )
     if setup.get("avwap") is not None:
-        acceptance["setup_avwap"] = time_acceptance(bars, setup["avwap"], asof_ms, source)
+        acceptance["setup_avwap"] = time_acceptance(post_anchor, setup["avwap"], asof_ms, source)
     return dict(
         policy=POLICY,
         state="AVAILABLE" if any(row["state"] == "AVAILABLE" for row in anchored.values()) else "UNAVAILABLE",
@@ -126,10 +139,38 @@ def assess(bars, asof_ms, source, *, atr=None, anchors=None, levels=None):
         distance_setup_avwap_atr=setup.get("distance_to_avwap_atr"),
         setup_avwap_slope=setup.get("avwap_slope"),
         setup_avwap_acceptance_ratio=setup.get("acceptance_ratio"),
-        time_above_value_ratio=acceptance.get("poc", {}).get("bars_above", 0) / len(bars[-20:])
-        if "poc" in acceptance
-        else None,
-        time_below_value_ratio=acceptance.get("poc", {}).get("bars_below", 0) / len(bars[-20:])
-        if "poc" in acceptance
-        else None,
+        profile_ms=profile_ms,
+        production_ready=setup.get("bars", 0) >= 5 and setup.get("known_ms", asof_ms + 1) <= asof_ms,
+        vah_acceptance_state=acceptance.get("vah", {}).get("state"),
+        val_acceptance_state=acceptance.get("val", {}).get("state"),
+        **value_ratios(post_anchor[-20:], levels or {}),
     )
+
+
+def value_ratios(bars, levels):
+    result = {
+        key: None
+        for key in (
+            "time_above_vah_ratio",
+            "time_below_val_ratio",
+            "time_inside_value_ratio",
+            "time_above_poc_ratio",
+            "time_below_poc_ratio",
+        )
+    }
+    if not bars:
+        return result
+    n = len(bars)
+    vah, val, poc = (levels.get(k) for k in ("vah", "val", "poc"))
+    if vah is not None and val is not None and val <= vah:
+        result.update(
+            time_above_vah_ratio=sum(b.close > vah for b in bars) / n,
+            time_below_val_ratio=sum(b.close < val for b in bars) / n,
+            time_inside_value_ratio=sum(val <= b.close <= vah for b in bars) / n,
+        )
+    if poc is not None:
+        result.update(
+            time_above_poc_ratio=sum(b.close > poc for b in bars) / n,
+            time_below_poc_ratio=sum(b.close < poc for b in bars) / n,
+        )
+    return result

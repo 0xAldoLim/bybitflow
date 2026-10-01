@@ -1,11 +1,23 @@
 """Corroborated liquidation state from reported public events, never a census."""
 
+import math
 from statistics import median
 
-POLICY = "liquidation-state-v1"
+POLICY = "liquidation-state-v2"
 
 
-def assess(events, asof_ms, source, *, price=None, flow=None, derivatives=None, book=None, baseline=None):
+def assess(
+    events,
+    asof_ms,
+    source,
+    *,
+    price=None,
+    flow=None,
+    derivatives=None,
+    book=None,
+    baseline=None,
+    oi_series=None,
+):
     base = dict(
         policy=POLICY,
         state="UNAVAILABLE",
@@ -63,7 +75,13 @@ def assess(events, asof_ms, source, *, price=None, flow=None, derivatives=None, 
     derivatives = derivatives or {}
     book = book or {}
     delta = flow.get("delta_pct")
-    oi = derivatives.get("oi_change_pct")
+    oi_windows = oi_changes(oi_series or (), asof_ms, first.get("event_ms") if first else None)
+    oi = oi_windows["oi_change_since_first_liquidation_pct"]
+    if oi is None:
+        oi = oi_windows["oi_change_1m_pct"]
+    trusted = (flow.get("flow_trust_score") or 0) >= 0.6
+    # Multi-hour OI can remain descriptive; it never satisfies event-window readiness.
+    research_oi = oi if oi is not None else derivatives.get("oi_change_pct")
     bid_removal = book.get("depletion_60s", {}).get("bid")
     bid_addition = book.get("replenishment_60s", {}).get("bid")
     depth_change = (
@@ -77,7 +95,7 @@ def assess(events, asof_ms, source, *, price=None, flow=None, derivatives=None, 
     )
     long_dominant = totals["LONG", 1] >= 2 * max(1, totals["SHORT", 1])
     short_dominant = totals["SHORT", 1] >= 2 * max(1, totals["LONG", 1])
-    falling_oi = oi is not None and oi <= -1
+    falling_oi = research_oi is not None and research_oi <= -1
     sell_flow = delta is not None and delta <= -15
     buy_flow = delta is not None and delta >= 15
     state = "NORMAL"
@@ -135,10 +153,63 @@ def assess(events, asof_ms, source, *, price=None, flow=None, derivatives=None, 
         liquidation_price_response_bps=response,
         post_liquidation_delta=flow.get("post_liquidation_delta"),
         post_liquidation_cvd_slope=flow.get("cvd_slope"),
-        oi_change_during_liquidation=oi if recent else None,
+        **oi_windows,
+        event_window_oi_ready=oi is not None,
+        trusted_flow=trusted,
+        production_ready=bool(
+            recent
+            and oi is not None
+            and oi <= -1
+            and len(historical) >= 20
+            and trusted
+            and response is not None
+        ),
         depth_change_during_liquidation=depth_change if recent else None,
         observed_events=len(rows),
         baseline_samples=len(historical),
         total_5m=total_5m,
         total_15m=total_15m,
     )
+
+
+def sample_oi(series, event_ms, available_ms, value, notional=None):
+    """Already observed current OI, never a relabelled multi-hour change."""
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return
+    if not math.isfinite(value) or value <= 0 or event_ms > available_ms:
+        return
+    row = dict(event_ms=int(event_ms), available_ms=int(available_ms), oi=float(value), notional=notional)
+    if series and event_ms <= series[-1]["event_ms"]:
+        return
+    if series and event_ms // 60_000 == series[-1]["event_ms"] // 60_000:
+        series[-1] = row
+    else:
+        series.append(row)
+
+
+def oi_changes(series, asof_ms, first_event_ms=None):
+    rows = [
+        r
+        for r in series
+        if r["event_ms"] <= asof_ms and r["available_ms"] <= asof_ms and asof_ms - r["event_ms"] <= 900_000
+    ]
+    result = dict(oi_change_1m_pct=None, oi_change_5m_pct=None, oi_change_since_first_liquidation_pct=None)
+    if not rows or asof_ms - rows[-1]["event_ms"] > 90_000:
+        return result
+    for key, target in (
+        ("oi_change_1m_pct", asof_ms - 60_000),
+        ("oi_change_5m_pct", asof_ms - 300_000),
+        ("oi_change_since_first_liquidation_pct", first_event_ms),
+    ):
+        prior = [
+            r
+            for r in rows
+            if target is not None
+            and target - 90_000 <= r["event_ms"] <= target
+            and r["event_ms"] < rows[-1]["event_ms"]
+        ]
+        if prior:
+            result[key] = (rows[-1]["oi"] / prior[-1]["oi"] - 1) * 100
+    return result
