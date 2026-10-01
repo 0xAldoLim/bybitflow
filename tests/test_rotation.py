@@ -75,3 +75,32 @@ async def test_short_fresh_history_reused_but_larger_requests_and_stale_history_
     await scanner.api.close()
     await scanner.spot_collector.close()
     store.close()
+
+
+def test_runtime_indexes_preserve_all_active_setups_and_original_snapshot(settings, signal):
+    from bybit_flow.ml.store import FeatureStore
+
+    store = Store(settings.data_dir)
+    states = ["ALERTED", "PENDING CONFIRMATION", "CONFIRMED", "RECONCILING", "EXPIRED", "RESOLVED"]
+    with store.db:
+        for number, state in enumerate(states):
+            row = dict(id=str(number), state=state, created_ms=number)
+            store.db.execute(
+                "INSERT INTO signals VALUES(?,?,?,?,?)",
+                (str(number), "TESTUSDT", number, state, json.dumps(row)),
+            )
+        for ident, schema, at in (("original", "candidate-v9", 1), ("later", "candidate-v10", 2)):
+            store.db.execute(
+                "INSERT INTO ml_snapshots VALUES(?,?,?,?,?,?)",
+                (ident, signal.id, "generation", at, schema, '{"immutable":true}'),
+            )
+    assert [row["id"] for row in store.active_signals()] == ["0", "3", "2", "1"]
+    assert FeatureStore(store).capture(signal, 3, "generation") == "original"
+    assert store.db.execute("SELECT count(*) FROM ml_snapshots").fetchone()[0] == 2
+    plan = store.db.execute(
+        "EXPLAIN QUERY PLAN SELECT id FROM ml_snapshots WHERE signal_id=? AND stage=? "
+        "ORDER BY decision_ms,id LIMIT 1",
+        (signal.id, "generation"),
+    ).fetchall()
+    assert any("ml_snapshot_original_lookup" in row[3] for row in plan)
+    store.close()

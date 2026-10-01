@@ -69,6 +69,9 @@ class Store:
             result TEXT);
         CREATE INDEX IF NOT EXISTS tv_pending ON tv_inbox(status,received_ms);
         CREATE INDEX IF NOT EXISTS signals_recent ON signals(created_ms DESC);
+        CREATE INDEX IF NOT EXISTS signals_active_lifecycle
+          ON signals(CASE WHEN state='ALERTED' THEN 0 ELSE 1 END,created_ms DESC)
+          WHERE state NOT IN ('INVALIDATED','EXPIRED','RESOLVED');
         INSERT OR IGNORE INTO schema_version VALUES(2);
         """)
         self.db.commit()
