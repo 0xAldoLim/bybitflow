@@ -292,7 +292,14 @@ class Notifier:
             "SELECT status,message_id FROM outbox WHERE key=? AND signal_id=?",
             (f"{channel}:{signal_id}:initial", signal_id),
         ).fetchone()
-        visible = bool(row and row[0] == "sent" and row[1])
+        delivery = self.store.get(f"discord_initial_delivery:{channel}:{signal_id}", {})
+        webhook_id = delivery.get("webhook_id") or self.store.get(f"discord_initial_webhook_id:{signal_id}")
+        current_path = urlparse(self.settings.research_webhook.get_secret_value()).path.split("/")
+        current_webhook_id = current_path[3] if len(current_path) > 3 else None
+        # A successful initial in a retired destination does not make a setup
+        # visible in the currently configured signals channel.
+        destination_matches = not webhook_id or webhook_id == current_webhook_id
+        visible = bool(row and row[0] == "sent" and row[1] and destination_matches)
         self.store.put(
             f"discord_visibility:{channel}:{signal_id}",
             dict(
@@ -300,6 +307,8 @@ class Notifier:
                 initial_delivery_status=row[0] if row else "never-attempted",
                 initial_message_id=row[1] if row else None,
                 initial_channel=channel,
+                initial_webhook_id=webhook_id,
+                initial_discord_channel_id=delivery.get("channel_id"),
             ),
         )
         return visible
@@ -389,7 +398,7 @@ class Notifier:
         ).fetchall()
         for ident, attempts, raw in rows:
             initial = self.store.db.execute(
-                "SELECT key,message_id FROM outbox WHERE signal_id=? AND key LIKE '%:initial' AND status='sent' ORDER BY updated_ms LIMIT 1",
+                "SELECT key,message_id,updated_ms FROM outbox WHERE signal_id=? AND key LIKE '%:initial' AND status='sent' ORDER BY updated_ms LIMIT 1",
                 (ident,),
             ).fetchone()
             if not initial or not initial[1]:
@@ -399,6 +408,11 @@ class Notifier:
                     )
                 continue
             if not self.was_initially_delivered(ident, initial[0].split(":", 1)[0]):
+                with self.store.db:
+                    self.store.db.execute(
+                        "UPDATE terminal_events SET notification_status='blocked:no-visible-initial' WHERE signal_id=?",
+                        (ident,),
+                    )
                 continue
             secret = self.settings.research_webhook.get_secret_value()
             u = urlparse(secret)
@@ -408,12 +422,24 @@ class Notifier:
             status = "pending"
             delay = min(300, 2 ** min(attempts + 1, 8))
             current_webhook_id = u.path.split("/")[3]
-            if self.store.get(f"discord_initial_webhook_id:{ident}") == current_webhook_id:
+            channel = initial[0].split(":", 1)[0]
+            delivery = self.store.get(f"discord_initial_delivery:{channel}:{ident}", {})
+            initial_webhook_id = delivery.get("webhook_id") or self.store.get(
+                f"discord_initial_webhook_id:{ident}"
+            )
+            if initial_webhook_id == current_webhook_id:
+                payload = embed(signal, self.settings.dashboard_url)
+                card = payload["embeds"][0]
+                # Keep the single-card display, but make its history explicit.
+                # The outbox retains the immutable initial payload and send time.
+                card["description"] += (
+                    f"\n**Updated original card** · First posted <t:{initial[2] // 1000}:f>"
+                )
                 try:
                     async with httpx.AsyncClient(timeout=15, transport=self.transport) as client:
                         response = await client.patch(
                             secret.split("?")[0].rstrip("/") + "/messages/" + initial[1],
-                            json=embed(signal, self.settings.dashboard_url),
+                            json=payload,
                         )
                         if response.is_success:
                             status = "sent"
@@ -424,28 +450,9 @@ class Notifier:
                 except httpx.TransportError:
                     pass  # Editing the same known message is idempotent, including ambiguous timeouts.
             else:
-                # Old initial cards belong to the retired webhook. Publish one
-                # guarded update in the new signals channel instead of PATCHing
-                # a message that the new webhook cannot edit.
-                channel = initial[0].split(":", 1)[0]
-                key = f"{channel}:{ident}:terminal-signals-v1"
-                outcome = await self.deliver(key, ident, embed(signal, self.settings.dashboard_url), secret)
-                if outcome == "already-attempted":
-                    previous = self.store.db.execute(
-                        "SELECT status FROM outbox WHERE key=?", (key,)
-                    ).fetchone()
-                    outcome = previous[0] if previous else "uncertain"
-                if outcome == "sent":
-                    status = "sent"
-                elif outcome == "rate-limited":
-                    # Discord explicitly rejected the POST; no card was created.
-                    with self.store.db:
-                        self.store.db.execute(
-                            "DELETE FROM outbox WHERE key=? AND status='rate-limited'", (key,)
-                        )
-                else:
-                    # A POST timeout may have delivered. Never retry ambiguously.
-                    status = "failed"
+                # Never post a standalone terminal card when the original
+                # destination is unknown or retired. Internal tracking continues.
+                status = "blocked:no-visible-initial"
             with self.store.db:
                 self.store.db.execute(
                     "UPDATE terminal_events SET notification_status=?,attempts=attempts+1,next_ms=? WHERE signal_id=?",
@@ -495,7 +502,6 @@ class Notifier:
         status = await self.deliver(key, signal.id, payload, secret)
         self.was_initially_delivered(signal.id, key.split(":", 1)[0])
         if status == "sent":
-            self.store.put(f"discord_initial_webhook_id:{signal.id}", urlparse(secret).path.split("/")[3])
             with self.store.db:
                 self.store.db.execute(
                     "UPDATE terminal_events SET notification_status='pending' WHERE signal_id=? AND notification_status='unseen'",
@@ -578,7 +584,7 @@ class Notifier:
         if real_initial:
             emit(self.store, "discord_http_attempts", now_ms(), key="http:" + key)
 
-        status, message_id = "uncertain", None
+        status, message_id, discord_channel_id = "uncertain", None, None
 
         transport_detail = dict(at_ms=now_ms(), category="UNKNOWN", http_status=None)
 
@@ -592,7 +598,9 @@ class Notifier:
                     status = "rate-limited"
 
                 elif response.is_success:
-                    status, message_id = "sent", response.json().get("id")
+                    result = response.json()
+                    status, message_id = "sent", result.get("id")
+                    discord_channel_id = result.get("channel_id")
 
                 else:
                     status = "rejected"
@@ -611,6 +619,22 @@ class Notifier:
                 "UPDATE outbox SET status=?,message_id=?,updated_ms=? WHERE key=?",
                 (status, message_id, now_ms(), key),
             )
+            if real_initial and status == "sent" and message_id:
+                # Destination and delivery status commit together, so a restart
+                # after the POST cannot misroute a later lifecycle update.
+                delivery = dict(
+                    webhook_id=u.path.split("/")[3],
+                    channel_id=discord_channel_id,
+                    message_id=message_id,
+                )
+                self.store.db.execute(
+                    "INSERT OR REPLACE INTO kv VALUES(?,?)",
+                    (f"discord_initial_delivery:{channel}:{signal_id}", json.dumps(delivery)),
+                )
+                self.store.db.execute(
+                    "INSERT OR REPLACE INTO kv VALUES(?,?)",
+                    (f"discord_initial_webhook_id:{signal_id}", json.dumps(delivery["webhook_id"])),
+                )
 
         self.store.put("discord_transport", transport_detail | dict(status=status))
 

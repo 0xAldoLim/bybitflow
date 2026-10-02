@@ -72,3 +72,32 @@ async def test_validated_monitoring_uses_monitoring_webhook(settings, signal):
     assert await notifier.send_public(signal, update=True) == "sent"
     assert paths == ["/api/webhooks/456/monitor", "/api/webhooks/123/signals"]
     store.close()
+
+
+async def test_initial_destination_survives_restart_and_blocks_new_channel(settings, signal):
+    settings.research_alerts = True
+    settings.research_webhook = SecretStr("https://discord.com/api/webhooks/123/signals")
+    store = Store(settings.data_dir)
+    store.signal(signal)
+    calls = []
+
+    def transport(request):
+        calls.append(request)
+        return httpx.Response(200, json={"id": "initial-card", "channel_id": "signals-channel"})
+
+    notifier = Notifier(settings, store, httpx.MockTransport(transport))
+    assert await notifier.send_research(signal) == "sent"
+    assert store.get(f"discord_initial_delivery:research:{signal.id}") == {
+        "webhook_id": "123",
+        "channel_id": "signals-channel",
+        "message_id": "initial-card",
+    }
+    store.close()
+    store = Store(settings.data_dir)
+    notifier = Notifier(settings, store, httpx.MockTransport(transport))
+    assert notifier.was_initially_delivered(signal.id, "research")
+    settings.research_webhook = SecretStr("https://discord.com/api/webhooks/789/new-channel")
+    signal.coverage.update(monitoring_event="paused", pause_since_ms=2000)
+    assert await notifier.send_research(signal, update=True) == "blocked:no-visible-initial"
+    assert len(calls) == 1
+    store.close()

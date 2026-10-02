@@ -166,3 +166,10 @@ cache and cannot trigger a production veto. The effective-sample heuristic and
 The V8 effectiveness report describes avoided stops, missed targets and matched
 passed outcomes. These comparisons do not establish improved live returns or
 automatically change thresholds.
+
+Primary paper positions with a recorded coverage gap are finalized immediately
+as **incomplete**, with no return label or training eligibility. Waiting for a
+multi-day horizon cannot repair that missing evidence. Their exclusion and
+frozen snapshots remain; safe cleanup may release the raw data once no active
+setup or replay lease needs it. Clean pending positions remain protected.
+This ML exclusion does not close or modify an operational setup.

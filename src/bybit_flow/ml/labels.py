@@ -156,11 +156,27 @@ def label_recordings(
             input_event_hash=event_hash.hexdigest(),
             outcome_definition="whole position TP1/stop/frozen horizon, 1% trade participation, fee/slip/funding assumptions",
         )
-        # Unresolved outcomes remain reproducible reports, not frozen labels blocking later completion.
-        if position.exit_ms is not None or at_ms > position.signal.created_ms + position.horizon_ms + 60_000:
+        # A coverage gap permanently excludes this primary outcome. Freeze the
+        # exclusion now instead of pinning raw data until a long horizon ends.
+        # Clean pending positions remain protected.
+        irreversible_gap = bool(
+            set(position.data_gaps)
+            & {
+                "entry coverage not continuously observed",
+                "recording continuity lost",
+                "trade-feed stale interval",
+            }
+        )
+        if (
+            irreversible_gap
+            or position.exit_ms is not None
+            or at_ms > position.signal.created_ms + position.horizon_ms + 60_000
+        ):
             if position.exit_ms is None:
                 outcome["data_gaps"].append(
-                    "horizon ended without sufficient observed prints to establish a completed exit"
+                    "Recorded coverage gap prevents a verified primary outcome"
+                    if at_ms <= position.signal.created_ms + position.horizon_ms + 60_000
+                    else "horizon ended without sufficient observed prints to establish a completed exit"
                 )
             # Exchange event time may lead local receipt by an accepted small skew.
             # Label availability must not precede its exit event; future exports still exclude it.

@@ -6,12 +6,19 @@ target touches. Gaps pause monitoring until original-source one-minute candles
 cover the missing interval and the live tape is fresh. Ambiguous candles use the
 existing conservative stop-first rule. Other-source plans remain explicitly
 paused for original-source reconciliation; their price paths are never mixed.
+If recording is unavailable, a separate original-venue public candle client
+continues historical reconciliation and saves the OHLC evidence in metadata.
+Live monitoring still requires fresh recorded coverage before resuming.
 
 Terminal state and a durable terminal event are committed before Discord I/O.
 The delivery worker retries edits to the original message with bounded backoff.
-It does not post duplicate withdrawal cards. Missing original message IDs and
-permanent HTTP failures are reported as failed delivery. Unpublished setups do
-not generate withdrawal messages.
+The card marks the edit as **Updated original card**, shows when the initial
+card was first posted, and retains the original entry, stop and targets. The
+initial title therefore changes to the current status; the durable outbox keeps
+the original payload. It does not post duplicate withdrawal cards. Missing
+original message IDs and permanent HTTP failures are reported as failed delivery.
+Unpublished setups do not generate withdrawal messages. A retired or unknown
+initial webhook cannot generate a standalone terminal card in a new channel.
 
 Every lifecycle notification requires the exact setup's durable initial outbox
 record to be `sent`, with an original message ID in that delivery channel.
@@ -19,6 +26,8 @@ Suppressed, uncertain, rejected and unseen setups remain internally monitored
 but return `blocked:no-visible-initial`. Visibility metadata is stored under
 `discord_visibility:<channel>:<signal_id>` with `user_visible_initial`,
 `initial_delivery_status`, `initial_message_id` and `initial_channel`. Pause and
+resume updates also require a matching destination when recorded. New initial
+delivery destination metadata commits atomically with the outbox result. Pause and
 resume notifications are deduplicated by setup and continuous outage start.
 Reconciliation checks the remaining live path before permitting a resume notice.
 

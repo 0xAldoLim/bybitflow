@@ -110,9 +110,40 @@ async def reconcile(scanner, signal, now):
         return False
     from .exchanges import VenueAPI
 
-    api = original_api or VenueAPI(signal.source, scanner.settings)
+    # The live adapter's recording circuit must not prevent historical catch-up
+    # from releasing completed lifecycle evidence during storage backpressure.
+    recording_blocked = (
+        original_api is not None
+        and getattr(original_api, "recorder", None) is not None
+        and not scanner.recorder.healthy
+    )
+    api = (
+        original_api
+        if original_api is not None and not recording_blocked
+        else VenueAPI(signal.source, scanner.settings)
+    )
     try:
         bars = await api.candles(signal.symbol, "1", now, start=cursor // 60_000 * 60_000, limit=300)
+        if recording_blocked:
+            scanner.store.put(
+                f"reconciliation_ohlc:{signal.id}:{cursor}",
+                dict(
+                    source=signal.source,
+                    observed_ms=now,
+                    cursor_ms=cursor,
+                    candles=[
+                        dict(
+                            start=b.start,
+                            interval=b.interval,
+                            open=b.open,
+                            high=b.high,
+                            low=b.low,
+                            close=b.close,
+                        )
+                        for b in bars
+                    ],
+                ),
+            )
         result = advance(signal, bars, cursor, now, now)
     except Exception as exc:
         result = dict(cursor_ms=cursor, coverage_complete=False, error_type=type(exc).__name__)

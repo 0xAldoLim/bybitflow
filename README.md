@@ -116,6 +116,10 @@ other setup updates use the signals webhook. Settings are read at startup. Apply
 ## What to expect from alerts
 
 A new card shows LONG or SHORT, grade, entry, SL, TP1, TP2 and the entry deadline.
+Terminal updates edit the original Discord setup card in place. **Updated original
+card** and its first-posted time identify the earlier alert; its entry, SL and
+targets remain visible. The title changes to the current status.
+
 Updates identify expired or withdrawn setups and say **no new entry**. A withdrawal
 caused by unavailable data does not establish that the stop loss was hit.
 
