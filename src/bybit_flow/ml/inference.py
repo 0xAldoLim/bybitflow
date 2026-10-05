@@ -46,10 +46,19 @@ def select_compatible(registry, signal, row, now):
     ordered = []
     for ident in dict.fromkeys(ids):
         try:
-            ordered.append((registry.get(ident).get("track") == "bootstrap", ident))
+            track = registry.get(ident).get("track", "primary")
         except ValueError:
-            ordered.append((False, ident))
-    for _, ident in sorted(ordered, key=lambda pair: pair[0]):
+            # Untrusted metadata can classify an advisory failure, never grant
+            # model authority. A corrupt bootstrap must not become a primary gate.
+            try:
+                payload = registry.db.execute(
+                    "SELECT manifest FROM ml_models WHERE id=?", (ident,)
+                ).fetchone()
+                track = json.loads(payload[0]).get("track", "primary") if payload else "unknown"
+            except (ValueError, TypeError):
+                track = "unknown"
+        ordered.append((track == "bootstrap", ident, track))
+    for _, ident, track in sorted(ordered, key=lambda pair: pair[0]):
         model = {}
         try:
             model = registry.get(ident)
@@ -67,7 +76,7 @@ def select_compatible(registry, signal, row, now):
             dict(
                 model_id=ident,
                 reasons=reasons,
-                track=model.get("track", "primary"),
+                track=model.get("track", track),
             )
         )
     return None, False, skipped
@@ -114,7 +123,7 @@ def apply(signal, settings, store, at_ms=None):
             from .operations import abstain
 
             abstain(store, now, signal.qualification["ml_reason"])
-            if any(s.get("track") != "bootstrap" for s in skipped) and settings.ml_filter_research:
+            if any(s.get("track") == "primary" for s in skipped) and settings.ml_filter_research:
                 signal.gates.append("ML abstained: " + signal.qualification["ml_reason"])
                 signal.final_tier = "REJECTED"
             return signal

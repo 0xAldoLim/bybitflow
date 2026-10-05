@@ -41,7 +41,7 @@ class Store:
     def __init__(self, root: Path, migration_backup_dir: Path | None = None):
         self.root = root
         root.mkdir(parents=True, exist_ok=True)
-        self.db = sqlite3.connect(root / "research.sqlite", timeout=15)
+        self.db = sqlite3.connect(root / "research.sqlite", timeout=5)
         self.db.row_factory = sqlite3.Row
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("PRAGMA foreign_keys=ON")

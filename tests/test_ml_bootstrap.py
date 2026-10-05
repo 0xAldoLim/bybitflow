@@ -331,6 +331,20 @@ def test_worker_busy_write_defers_without_exiting(settings):
     assert worker_step(settings, store)["status"] == "DEFERRED_SQLITE_BUSY"
 
 
+def test_corrupt_bootstrap_remains_advisory(settings, signal):
+    store = Store(settings.data_dir)
+    settings.ml_enabled = settings.ml_filter_research = True
+    signal.source = "binance"
+    model = dict(id="b" * 32, created_ms=1000, track="bootstrap", label_policy="ohlc-path-v1", model={})
+    Registry(store).register(model)
+    with store.db:
+        store.db.execute("UPDATE ml_models SET sha256='corrupt'")
+    apply(signal, settings, store, 2000)
+    assert signal.validation_status == "abstained"
+    assert not signal.gates and signal.calibrated_probability is None
+    store.close()
+
+
 @pytest.mark.asyncio
 async def test_storage_pressure_defers_bootstrap(settings, signal):
     store = Store(settings.data_dir)
