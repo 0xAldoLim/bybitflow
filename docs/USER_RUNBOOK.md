@@ -222,10 +222,12 @@ Cards include direction, setup, quality, entry zone, stop, TP1, TP2, and risk
 information. Grades do not override confirmation or freshness checks. A quiet
 channel can indicate warmup, unavailable data, or no qualifying setup.
 
-The model worker monitors labels every 15 minutes. Two-stage mode checks training
-readiness every 15 minutes; the original tabular mode retries daily. Successful
-research-model cycles run weekly. A new installation can collect
-data without a model. See [ML research](ML_RESEARCH.md) for readiness and approval.
+The model worker monitors labels and updates readiness every 15 minutes. Each source
+and training track starts its first fit on the next worker loop once it has at least
+500 usable outcomes and meets the chronological partition requirements. Later fits
+require 50 new outcomes or seven days. Historical candle bootstrap models remain
+advisory and cannot be promoted. A new installation can collect data without a model.
+See [ML research](ML_RESEARCH.md) for readiness, storage limits and approval.
 
 ## Recording retention
 

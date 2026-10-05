@@ -189,9 +189,11 @@ model.** Two-stage training requires at least 500 complete sequence-labelled out
 plus enough data and both outcome classes in each partition. Below that sequence
 threshold, the worker attempts a Logistic Regression/LightGBM baseline using complete
 tabular outcomes. The baseline still requires chronological training, calibration,
-validation and holdout partitions; incomplete outcomes never count. Readiness is checked
-every 15 minutes; successful training cycles remain weekly. New models remain research
-candidates until reviewed. There is no automatic promotion to validated probability.
+validation and holdout partitions; incomplete outcomes never count. Readiness is updated
+every 15 minutes; the first fit starts on the next worker loop once a source and track
+are ready. Later fits require 50 new usable outcomes or seven days. Bootstrap challengers
+remain advisory and cannot be promoted. There is no automatic promotion to validated
+probability.
 
 `FLOW_ML_ENABLED=false` leaves the trainer idle and disables desk inference; its
 service heartbeat may still be present. Advisory inference selects the newest

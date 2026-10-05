@@ -9,6 +9,8 @@
 - Source-attributed asset facts with knowledge, collection, and expiry timestamps.
 - Bounded recording, integrity manifests, source-separated paper labels, and audited clock gaps.
 - Optional ML collection, challenger training, ranking, drift checks, and guarded promotion.
+- Durable primary replay checkpoints and safe release of already-consumed ML evidence.
+- Source-specific historical OHLC bootstrap labels and advisory-only challengers.
 - Authenticated local dashboard, diagnostics, backup, and retention planning.
 - Historical TradingView records remain readable; new chart-event ingestion is retired.
 
@@ -23,7 +25,8 @@ profiles, and full Binance/OKX strategy-regeneration replay are not implemented.
 Frozen-candidate outcome labeling supports each implemented native source.
 
 ML does not automatically change strategy code, score weights, risk limits, or
-model approval. Incremental replay checkpoints and automatic rollback are not implemented.
+model approval. Bootstrap OHLC models cannot filter signals or become champions.
+Automatic model rollback is not implemented.
 
 ## Runtime status
 

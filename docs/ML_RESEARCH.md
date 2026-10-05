@@ -10,8 +10,8 @@ are excluded from the feature allowlist.
 
 The `prints-v1` label policy evaluates frozen candidates, including rejected setups,
 against recorded trades. Paper fills use participation limits, latency, fees,
-slippage, and a funding reserve. Outcomes exit at TP1, stop, or the four-hour
-deadline. TP2 is informational. Missing continuity, late exits, and unresolved
+slippage, and a funding reserve. Outcomes exit at TP1, stop, or the frozen holding
+deadline (four hours for legacy/core intraday). TP2 is informational. Missing continuity, late exits, and unresolved
 positions do not become complete training outcomes.
 
 The worker preflights committed raw hashes, manifests, row counts, bounds, and
@@ -184,8 +184,10 @@ missing required features; degraded models; or stale evidence. Model history and
 deployment records retain the reason and evidence.
 
 Exports are limited to 10,000 rows, 128 MB Parquet files, and 256 MB uncompressed row
-groups. The worker rescans retained segments; incremental checkpoints are not
-implemented. Large histories require capacity planning.
+groups. The primary worker uses durable incremental replay checkpoints. Historical
+bootstrap work uses bounded resumable batches and a compact candle cache. Large
+histories still require capacity planning; protected evidence and permanent records
+are never deleted to force a fit.
 
 Historical `chart-v1` rows remain readable for audit, but TradingView ingestion and
 new chart labels are retired. Manual journal outcomes are not automatically imported
@@ -204,8 +206,9 @@ remain immutable and incompatible schemas are not silently pooled for training.
 Advisory inference skips incompatible or degraded artifacts. Models are never
 automatically promoted, and deterministic setup scores are not replaced by ML scores.
 The V7.1 flow confirmation mode remains signal provenance. V8.1 bumps the schema once from v9 to v10; historical v9 remains unchanged;
-training needs enough newly completed, source-specific `candidate-v10` outcomes and
-never backfills historical decisions. `python -m bybit_flow.ml.ablation --source binance`
+primary training needs enough completed, source-specific `candidate-v10` outcomes and
+never rewrites historical decision features. Historical bootstrap labels use the separate
+`ohlc-path-v1` policy. `python -m bybit_flow.ml.ablation --source binance`
 reports insufficient evidence until at least 500 compatible outcomes exist. Holdout
 consumption requires an explicit offline `--consume-holdout` run and is irreversible
 for that period. The ablation report never promotes features or models automatically.
@@ -225,8 +228,9 @@ training period. Independent calibration, validation and untouched holdout perio
 follow. At least 500 usable sequence outcomes are needed overall, with additional
 partition and class requirements; this is a software minimum, not proof of edge.
 
-The worker checks training readiness every 15 minutes until a challenger exists.
-Successful cycles remain weekly. LSTM training is confined to the CPU worker; live
+The worker updates readiness every 15 minutes and dispatches the first eligible fit
+on its next 30-second loop. Later fits require 50 new usable outcomes or seven days;
+failed attempts retry after 15 minutes or a change in usable count. LSTM training is confined to the CPU worker; live
 inference reads JSON weights using NumPy, without loading PyTorch or pickle files.
 `FLOW_ML_FILTER_RESEARCH=false` keeps incomplete or abstaining models from blocking
 otherwise confirmed research signals. Model rankings are not validated win rates;
