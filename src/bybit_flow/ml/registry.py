@@ -9,6 +9,12 @@ from .store import canonical, digest
 
 
 def promotion_reasons(m):
+    if (
+        m.get("track") == "bootstrap"
+        or m.get("label_fidelity") == "OHLC_PROXY"
+        or m.get("label_policy") == "ohlc-path-v1"
+    ):
+        return ["Bootstrap OHLC-proxy artifacts cannot be promoted or acquire production authority"]
     h, report = m["report"]["holdout"], m["report"]
     reasons = []
     if m.get("policy_version") != POLICY_VERSION or m.get("feature_schema_version") != SCHEMA_VERSION:
@@ -244,6 +250,9 @@ class Registry:
             ).fetchone()[0],
             history=[dict(r) for r in self.db.execute("SELECT * FROM ml_history ORDER BY id DESC LIMIT 100")],
         )
+        from .bootstrap import readiness
         from .operations import status
 
+        result["bootstrap_trainability"] = readiness(self.store)
+        self.store.put("ml_bootstrap_trainability", result["bootstrap_trainability"])
         return result | status(self.store, result, enabled)

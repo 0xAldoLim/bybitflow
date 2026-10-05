@@ -60,7 +60,12 @@ def advance(signal, bars, cursor, until, detected_ms):
         expected = bar.end
     result["coverage_complete"] = result["cursor_ms"] >= min(until, deadline) // 60_000 * 60_000
     if result["coverage_complete"] and until >= deadline:
-        if signal.state == "ALERTED" and entered is not None and last_close_ms is not None and entered < last_close_ms:
+        if (
+            signal.state == "ALERTED"
+            and entered is not None
+            and last_close_ms is not None
+            and entered < last_close_ms
+        ):
             from .lifecycle import expiry_mark
 
             mark = expiry_mark(

@@ -11,7 +11,7 @@ from .registry import Registry
 from .store import FeatureStore
 
 
-def cycle(settings, store):
+def cycle(settings, store, source_override=None):
     from .labels import label_recordings
     from .recordings import worker_rows
     from .training import train
@@ -19,7 +19,7 @@ def cycle(settings, store):
     if not store.db.execute("SELECT 1 FROM segments LIMIT 1").fetchone():
         raise ValueError("No verified real recording segments; weekly training abstains")
     runtime = store.get("runtime_health", {})
-    source = (
+    source = source_override or (
         (runtime.get("source") if 0 <= now_ms() - runtime.get("at_ms", 0) <= 90000 else None)
         or store.get("active_exchange", {}).get("current")
         or store.get("scanner", {}).get("exchange")
@@ -35,7 +35,7 @@ def cycle(settings, store):
 
     readiness = trainability(store)["by_source"]
     ready_sources = [name for name, detail in readiness.items() if detail["baseline_ready"]]
-    if ready_sources and source not in ready_sources:
+    if ready_sources and source not in ready_sources and not source_override:
         source = max(ready_sources, key=lambda name: readiness[name]["baseline_trainable"])
     ready = readiness[source]["sequence_ready_16"] if settings.ml_two_stage else 0
     from .stacking import KINDS
@@ -120,6 +120,22 @@ def monitor(settings, store):
     # Reclaim consumed recordings gradually while under budget. Pressure cleanup
     # remains unbounded so it can restore the recorder before it drops more data.
     result["retention"] = prune_recordings(store, settings, force=True, max_reclaim_bytes=256_000_000)
+    from ..storage import directory_bytes
+
+    if directory_bytes(store.root) >= settings.max_storage_gb * 1e9 * 0.95:
+        result.update(
+            status="STORAGE_BACKPRESSURE",
+            reason="Checkpoint/pruning completed; bootstrap and fitting deferred",
+        )
+        store.put("ml_monitor", result)
+        return result
+    from .bootstrap import backfill, readiness
+
+    result["bootstrap"] = {
+        source: asyncio.run(backfill(store, settings, source, limit=100, resume=True))
+        for source in ("binance", "bybit", "okx")
+    }
+    store.put("ml_bootstrap_trainability", readiness(store))
     from .horizon import fit as fit_horizon
 
     result["horizon_model"] = fit_horizon(store, settings, now_ms())
@@ -133,6 +149,105 @@ def monitor(settings, store):
 
     store.put("ml_summary_cache", Registry(store).summary() | dict(summary_at_ms=now_ms()))
     return result
+
+
+def fit_due(previous, count, now, manual=False):
+    """First ready fit is immediate; later fits need new information or age."""
+    if count < 500:
+        return False
+    if manual:
+        return True
+    if previous.get("status") != "challenger" and not previous.get("model_id"):
+        return count != previous.get("attempted_count") or now - previous.get("at_ms", 0) >= 900_000
+    if (
+        previous.get("status") == "abstained"
+        and count == previous.get("attempted_count")
+        and now - previous.get("at_ms", 0) < 900_000
+    ):
+        return False
+    return (
+        count - previous.get("trained_count", 0) >= 50
+        or now - previous.get("last_success_ms", previous.get("at_ms", 0)) >= 7 * 86_400_000
+    )
+
+
+def train_ready(settings, store, manual=False):
+    from ..storage import directory_bytes
+    from .bootstrap import train as bootstrap_train
+
+    if directory_bytes(store.root) >= settings.max_storage_gb * 1e9 * 0.95:
+        return dict(at_ms=now_ms(), status="STORAGE_BACKPRESSURE")
+    results = {}
+    primary = store.get("ml_trainability_cache", {}).get("by_source", {})
+    bootstrap = store.get("ml_bootstrap_trainability", {})
+    for track, counts in (("primary", primary), ("bootstrap", bootstrap)):
+        for source, detail in counts.items():
+            count = detail.get("baseline_trainable" if track == "primary" else "trainable", 0)
+            from . import SCHEMA_VERSION
+
+            schema, policy = (
+                (SCHEMA_VERSION, "prints-v1") if track == "primary" else ("bootstrap-core-v1", "ohlc-path-v1")
+            )
+            key = f"ml_fit:{track}:{source}:{schema}:{policy}"
+            previous = store.get(key, {})
+            if not fit_due(previous, count, now_ms(), manual):
+                continue
+            result = dict(
+                previous,
+                at_ms=now_ms(),
+                track=track,
+                source=source,
+                schema=schema,
+                policy=policy,
+                attempted_count=count,
+            )
+            try:
+                ident = (
+                    cycle(settings, store, source)
+                    if track == "primary"
+                    else bootstrap_train(store, source)["id"]
+                )
+                result.update(
+                    status="challenger", model_id=ident, trained_count=count, last_success_ms=now_ms()
+                )
+                result.pop("reason", None)
+            except Exception as exc:
+                result.update(status="abstained", reason=str(exc))
+            store.put(key, result)
+            results[track + ":" + source] = result
+    state = (
+        "challenger"
+        if any(r["status"] == "challenger" for r in results.values())
+        else "abstained"
+        if results
+        else "collecting"
+    )
+    return dict(at_ms=now_ms(), status=state, tracks=results)
+
+
+def worker_step(settings, store, first_monitor=False, manual=False):
+    """Writer contention defers a worker iteration without a restart loop."""
+    import sqlite3
+    import sys
+
+    try:
+        store.put("ml_worker_state", dict(at_ms=now_ms(), status="RUNNING"))
+        if first_monitor or now_ms() - store.get("ml_monitor", {}).get("at_ms", 0) >= 900_000:
+            try:
+                monitor(settings, store)
+            except sqlite3.OperationalError:
+                raise
+            except Exception as exc:
+                store.put("ml_monitor", dict(at_ms=now_ms(), status="abstained", reason=str(exc)))
+        result = train_ready(settings, store, manual)
+        if result.get("tracks") or manual or result["status"] == "STORAGE_BACKPRESSURE":
+            store.put("ml_cycle", result)
+        return result
+    except sqlite3.OperationalError as exc:
+        if "locked" not in str(exc).lower() and "busy" not in str(exc).lower():
+            raise
+        print("ML worker deferred: SQLite writer busy; retrying next loop", file=sys.stderr, flush=True)
+        return dict(at_ms=now_ms(), status="DEFERRED_SQLITE_BUSY")
 
 
 def run(arguments, settings, store):
@@ -163,11 +278,29 @@ def run(arguments, settings, store):
     sub.add_parser("status")
     sub.add_parser("cycle")
     sub.add_parser("worker")
+    for name in ("bootstrap-labels", "bootstrap-export", "bootstrap-train"):
+        command = sub.add_parser(name)
+        command.add_argument("--source", choices=("binance", "bybit", "okx"), required=True)
+        if name == "bootstrap-labels":
+            command.add_argument("--limit", type=int, default=100)
+            command.add_argument("--resume", action="store_true")
+            command.add_argument("--dry-run", action="store_true")
     drift = sub.add_parser("drift")
     drift.add_argument("model_id")
     args = parser.parse_args(arguments)
     registry = Registry(store)
-    if args.command == "label":
+    if args.command.startswith("bootstrap-"):
+        from . import bootstrap
+
+        if args.command == "bootstrap-labels":
+            result = asyncio.run(
+                bootstrap.backfill(store, settings, args.source, args.limit, args.resume, args.dry_run)
+            )
+        elif args.command == "bootstrap-export":
+            result = str(bootstrap.export(store, args.source))
+        else:
+            result = {k: v for k, v in bootstrap.train(store, args.source).items() if k != "model"}
+    elif args.command == "label":
         from ..replay import segment_rows
         from .labels import label_recordings
 
@@ -197,7 +330,8 @@ def run(arguments, settings, store):
         from .models import explain, predict
         from .training import read_dataset
 
-        model, rows = registry.get(args.model_id), read_dataset(args.dataset)
+        model = registry.get(args.model_id)
+        rows = read_dataset(args.dataset, track=model.get("track", "primary"))
         result = dict(
             status="OFFLINE RESEARCH, NOT VALIDATED PROBABILITY",
             model_id=model["id"],
@@ -247,31 +381,8 @@ def run(arguments, settings, store):
                         break
                     time.sleep(30)
                     continue
-                store.put("ml_worker_state", dict(at_ms=now_ms(), status="RUNNING"))
-                if first_monitor or now_ms() - store.get("ml_monitor", {}).get("at_ms", 0) >= 900_000:
-                    first_monitor = False
-                    try:
-                        monitor(settings, store)
-                    except Exception as exc:
-                        store.put("ml_monitor", dict(at_ms=now_ms(), status="abstained", reason=str(exc)))
-                previous_cycle = store.get("ml_cycle", {})
-                previous = previous_cycle.get("at_ms", 0)
-                # Recheck data readiness daily; successful fits remain weekly.
-                cadence = (
-                    7 * 86_400_000
-                    if previous_cycle.get("status") == "challenger"
-                    else (900_000 if settings.ml_two_stage else 86_400_000)
-                )
-                if args.command == "cycle" or now_ms() - previous >= cadence:
-                    try:
-                        result = dict(at_ms=now_ms(), status="challenger", model_id=cycle(settings, store))
-                    except Exception as exc:
-                        result = dict(at_ms=now_ms(), status="abstained", reason=str(exc))
-                    store.put("ml_cycle", result)
-                    if settings.ops_webhook.get_secret_value():
-                        from ..notifications import Notifier
-
-                        asyncio.run(Notifier(settings, store).send_operational("weekly-cycle", result))
+                result = worker_step(settings, store, first_monitor, args.command == "cycle")
+                first_monitor = result["status"] == "DEFERRED_SQLITE_BUSY"
                 if args.command == "cycle":
                     break
                 time.sleep(30)

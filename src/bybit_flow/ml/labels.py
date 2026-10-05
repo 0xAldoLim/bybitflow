@@ -50,10 +50,14 @@ def label_recordings(
 
     fs = FeatureStore(store)
     if incremental:
+        from .checkpoint import seal
+
         # Repeated evaluations retain their snapshots but are not independent
         # paper positions. Freeze an explicit exclusion, never copy a winner.
         first = {}
         from ..storage import now_ms
+
+        verified_boundary_ms = now_ms()
 
         for ident, decision, identity, labeled in store.db.execute(
             "SELECT s.id,s.decision_ms,coalesce(c.candidate_identity,s.signal_id),"
@@ -335,15 +339,19 @@ def label_recordings(
         # bounded interval and ignores already-published labels on restoration.
         store.put(
             "primary_materialization",
-            dict(
-                policy="incremental-prints-v1",
-                cursor_ms=observed_cursor,
-                positions=positions,
-                subscribed=sorted(subscribed),
-                last=list(last.items()),
-                seen=list(seen),
-                input_event_hash=event_hash.hexdigest(),
-                pending=len(positions),
+            seal(
+                dict(
+                    policy="incremental-prints-v1",
+                    verified_boundary_ms=verified_boundary_ms,
+                    cursor_ms=observed_cursor,
+                    positions=positions,
+                    subscribed=sorted(subscribed),
+                    last=list(last.items()),
+                    seen=list(seen),
+                    input_event_hash=event_hash.hexdigest(),
+                    pending=len(positions),
+                ),
+                now_ms(),
             ),
         )
     return dict(

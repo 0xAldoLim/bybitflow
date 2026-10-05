@@ -15,7 +15,9 @@ from bybit_flow.storage import Store
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("direction,mark_price", [("LONG", 102), ("SHORT", 98)])
-async def test_entered_setup_expires_with_favorable_cost_adjusted_mark(settings, signal, direction, mark_price):
+async def test_entered_setup_expires_with_favorable_cost_adjusted_mark(
+    settings, signal, direction, mark_price
+):
     deadline = 120_000
     signal.source = "binance"
     signal.state = "ALERTED"
@@ -39,7 +41,10 @@ async def test_entered_setup_expires_with_favorable_cost_adjusted_mark(settings,
     book.asks = {Decimal(mark_price) + Decimal("0.01"): Decimal(10)}
     book.event_ms = book.receipt_ms = deadline
     streams = SimpleNamespace(
-        tapes={signal.symbol: tape}, books={signal.symbol: book}, selected=(signal.symbol,), select=AsyncMock()
+        tapes={signal.symbol: tape},
+        books={signal.symbol: book},
+        selected=(signal.symbol,),
+        select=AsyncMock(),
     )
     scanner = SimpleNamespace(
         store=store,
@@ -139,9 +144,7 @@ def test_entry_window_expiry_remains_unpriced_and_research_retains_partial_resul
     signal.evidence["observed_entry_ms"] = 100_000
     signal.evidence["score_components"] = {"test": 1}
     signal.risk["cost_per_base"] = 0.2
-    signal.evidence["expiry_mark"] = expiry_mark(
-        signal, 102, 119_500, 120_000, 5_000, "LIVE_EXECUTED_TRADE"
-    )
+    signal.evidence["expiry_mark"] = expiry_mark(signal, 102, 119_500, 120_000, 5_000, "LIVE_EXECUTED_TRADE")
     store = Store(settings.data_dir)
     start_observation(store, signal, 120_000, checkpoints=[10])
     row = store.db.execute("SELECT payload FROM observations WHERE signal_id=?", (signal.id,)).fetchone()
@@ -156,6 +159,8 @@ def test_entry_window_expiry_remains_unpriced_and_research_retains_partial_resul
     unverified.evidence.pop("expiry_mark")
     unverified.evidence["latest_observed_price"] = 104
     start_observation(store, unverified, 120_000, checkpoints=[10])
-    raw = store.db.execute("SELECT payload FROM observations WHERE signal_id=?", (unverified.id,)).fetchone()[0]
+    raw = store.db.execute("SELECT payload FROM observations WHERE signal_id=?", (unverified.id,)).fetchone()[
+        0
+    ]
     assert json.loads(raw)["primary_net_r"] is None
     store.close()

@@ -240,11 +240,7 @@ async def tick(scanner, now):
                 )
                 if signal.state not in TERMINAL and now >= deadline:
                     signal.coverage["tracking_end"] = signal.state == "ALERTED"
-                    if (
-                        signal.state == "ALERTED"
-                        and fresh
-                        and not gap
-                    ):
+                    if signal.state == "ALERTED" and fresh and not gap:
                         mark = expiry_mark(
                             signal,
                             signal.evidence.get("latest_observed_price"),

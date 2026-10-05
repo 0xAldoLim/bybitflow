@@ -215,6 +215,12 @@ async function render() {
         "Champion and collection",
         json({
           champion: ml.champion || "None — no validated model",
+          model_status: ml.model_status,
+          primary_model_id: ml.primary_model_id,
+          bootstrap_model_id: ml.bootstrap_model_id,
+          primary_trainability: ml.ml_trainability,
+          bootstrap_trainability: ml.bootstrap_trainability,
+          bootstrap_backfill: ml.bootstrap_backfill,
           snapshots: ml.snapshots,
           decision_snapshots: ml.decision_snapshots,
           labels: ml.labels,

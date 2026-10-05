@@ -18,7 +18,7 @@ def compatibility_reasons(model, signal, row, now, registry):
         reasons.append("model was not available at this decision timestamp")
     if model.get("source") != signal.source or model.get("stage") != "decision":
         reasons.append("model source/stage does not match this candidate")
-    if signal.version not in model.get("strategy_versions", []):
+    if model.get("track") != "bootstrap" and signal.version not in model.get("strategy_versions", []):
         reasons.append("strategy version not covered by this model")
     for key, vocabulary in model.get("contexts", {}).items():
         if row["values"].get(key) not in vocabulary:
@@ -42,15 +42,34 @@ def select_compatible(registry, signal, row, now):
         r[0] for r in registry.db.execute("SELECT id FROM ml_models ORDER BY created_ms DESC")
     ]
     skipped = []
+    # A compatible primary artifact always wins; bootstrap is an advisory fallback.
+    ordered = []
     for ident in dict.fromkeys(ids):
         try:
+            ordered.append((registry.get(ident).get("track") == "bootstrap", ident))
+        except ValueError:
+            ordered.append((False, ident))
+    for _, ident in sorted(ordered, key=lambda pair: pair[0]):
+        model = {}
+        try:
             model = registry.get(ident)
-            reasons = compatibility_reasons(model, signal, row, now, registry)
+            if model.get("track") == "bootstrap":
+                from .bootstrap_features import project
+
+                reasons = compatibility_reasons(model, signal, project(row), now, registry)
+            else:
+                reasons = compatibility_reasons(model, signal, row, now, registry)
         except (ValueError, KeyError, TypeError):
             reasons = ["unreadable or corrupt artifact"]
         if not reasons:
-            return model, ident == champion, skipped
-        skipped.append(dict(model_id=ident, reasons=reasons))
+            return model, ident == champion and model.get("track") != "bootstrap", skipped
+        skipped.append(
+            dict(
+                model_id=ident,
+                reasons=reasons,
+                track=model.get("track", "primary"),
+            )
+        )
     return None, False, skipped
 
 
@@ -72,6 +91,7 @@ def apply(signal, settings, store, at_ms=None):
     # Exactly the frozen feature values that offline training will read.
     row = json.loads(store.db.execute("SELECT payload FROM ml_snapshots WHERE id=?", (ident,)).fetchone()[0])
     signal.data_coverage = row["data_coverage"]
+    bootstrap = False
     try:
         model, champion, skipped = select_compatible(registry, signal, row, now)
         store.put(
@@ -94,12 +114,17 @@ def apply(signal, settings, store, at_ms=None):
             from .operations import abstain
 
             abstain(store, now, signal.qualification["ml_reason"])
-            if skipped and settings.ml_filter_research:
+            if any(s.get("track") != "bootstrap" for s in skipped) and settings.ml_filter_research:
                 signal.gates.append("ML abstained: " + signal.qualification["ml_reason"])
                 signal.final_tier = "REJECTED"
             return signal
         signal.model_version = model["id"]
-        signal.validation_status = "research_challenger"
+        bootstrap = model.get("track") == "bootstrap"
+        if bootstrap:
+            from .bootstrap_features import project
+
+            row = project(row)
+        signal.validation_status = "bootstrap_challenger" if bootstrap else "research_challenger"
         p = float(predict(model["model"], [row])[0])
         qualifies = accepted(row, p, model["model"]["thresholds"])
         signal.evidence["ml"] = dict(
@@ -109,13 +134,21 @@ def apply(signal, settings, store, at_ms=None):
             research_acceptance=qualifies,
             thresholds=model["model"]["thresholds"],
             note="Meta-label ranking, not a quality-score replacement; attribution is not causation",
+            track="bootstrap" if bootstrap else "primary",
+            label_fidelity=model.get("label_fidelity", "RECORDED_PRINTS"),
+            production_authority="none" if bootstrap else "manual approval required",
         )
+        if bootstrap:
+            signal.evidence["ml"].update(
+                score_label="Bootstrap score / 100",
+                note="OHLC-proxy historical challenger; production authority: none",
+            )
         with store.db:
             store.db.execute(
                 "INSERT OR IGNORE INTO ml_predictions VALUES(?,?,?,?,?)",
                 (ident, model["id"], now, p, int(qualifies)),
             )
-        if not qualifies and settings.ml_filter_research:
+        if not bootstrap and not qualifies and settings.ml_filter_research:
             signal.gates.append("research meta-label acceptance threshold not met")
             signal.final_tier = "REJECTED"
         if champion and qualifies and not signal.gates:
@@ -150,7 +183,7 @@ def apply(signal, settings, store, at_ms=None):
         from .operations import abstain
 
         abstain(store, now, signal.qualification["ml_reason"])
-        if settings.ml_filter_research:
+        if not bootstrap and settings.ml_filter_research:
             signal.gates.append("ML inference unavailable")
             signal.final_tier = "REJECTED"
     return signal

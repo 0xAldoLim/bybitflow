@@ -17,6 +17,13 @@ never changes an expired trade into a historical win. See the
 [horizon and expiry guide](docs/USER_RUNBOOK.md#multi-horizon-research) and
 [research references](docs/RESEARCH_REFERENCES.md).
 
+ML has two separate source-specific research tracks: verified recorded-print
+outcomes and a historical one-minute candle bootstrap. Both require at least 500
+complete unique outcomes before fitting; millions of market events alone do not
+meet that requirement. The bootstrap model is advisory, cannot filter alerts or
+become a production champion, and is clearly labeled as an OHLC proxy. See the
+[ML collection, training and retention guide](docs/ML_RESEARCH.md).
+
 ## Start and stop on Windows
 
 Open **Docker Desktop** and wait for its engine to be ready. Then open **Command

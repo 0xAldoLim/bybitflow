@@ -47,7 +47,9 @@ def report(store, source, asof_ms, *, consume_holdout=False):
     )
     if len(rows) < 500:
         return base
-    previous_end = store.db.execute("SELECT MAX(end_ms) FROM ml_holdouts").fetchone()[0]
+    previous_end = store.db.execute(
+        "SELECT MAX(end_ms) FROM ml_holdouts WHERE scope NOT LIKE 'bootstrap|%'"
+    ).fetchone()[0]
     try:
         training, calibration, validation, holdout = next_cycle_partitions(rows, previous_end)
     except ValueError:
@@ -117,10 +119,13 @@ def report(store, source, asof_ms, *, consume_holdout=False):
     with store.db:
         store.db.execute("BEGIN IMMEDIATE")
         if store.db.execute(
-            "SELECT 1 FROM ml_holdouts WHERE start_ms<=? AND end_ms>=?", (end, start)
+            "SELECT 1 FROM ml_holdouts WHERE scope NOT LIKE 'bootstrap|%' AND start_ms<=? AND end_ms>=?",
+            (end, start),
         ).fetchone():
             raise ValueError("A prior experiment consumed this holdout period")
-        store.db.execute("INSERT INTO ml_holdouts VALUES(?,?,?)", (start, end, reservation))
+        store.db.execute(
+            "INSERT INTO ml_holdouts(start_ms,end_ms,experiment_id) VALUES(?,?,?)", (start, end, reservation)
+        )
     held_probabilities = {name: predict(model, holdout) for name, model in models.items()}
     held = {name: _evaluation(holdout, probabilities) for name, probabilities in held_probabilities.items()}
     held_base = held["baseline"]["cost_adjusted_net_r_per_opportunity"]

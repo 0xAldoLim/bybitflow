@@ -179,6 +179,14 @@ def storage_status(store, settings):
             0
         ],
         policy="Preserve primary evidence, active plans, unresolved labels, replay leases and compact afterlife records",
+        protected_intervals=[
+            dict(start_ms=a, end_ms=b, reason=reason) for a, b, reason in sorted(ranges)[:20]
+        ],
+        protected_interval_count=len(ranges),
+        primary_checkpoint={
+            key: store.get("primary_materialization", {}).get(key)
+            for key in ("checkpoint_version", "saved_ms", "cursor_ms", "pending", "verified_boundary_ms")
+        },
     )
     deletable = prune_recordings(store, settings, dry_run=True).get("bytes_freed", 0)
     result.update(
@@ -424,12 +432,27 @@ def protection_ranges(store, now):
             )
         )
     for row in store.db.execute(
-        "SELECT s.decision_ms,s.payload FROM ml_snapshots s WHERE s.stage='decision' AND NOT EXISTS "
+        "SELECT s.decision_ms,s.payload,s.id FROM ml_snapshots s WHERE s.stage='decision' AND NOT EXISTS "
         "(SELECT 1 FROM ml_labels l WHERE l.snapshot_id=s.id AND l.policy='prints-v1')"
     ):
         snapshot = json.loads(row[1])
         horizon = snapshot.get("signal", {}).get("expected_hold_max", 240) * 60_000
-        ranges.append((row[0] - 900_000, row[0] + horizon + 60_000, "unresolved primary outcome"))
+        from .ml.checkpoint import consumed_cursor
+
+        cursor = consumed_cursor(store, row[2], snapshot, now)
+        start = max(row[0] - 900_000, cursor - 900_000) if cursor is not None else row[0] - 900_000
+        ranges.append((start, max(start, row[0] + horizon + 60_000), "unresolved primary outcome"))
+        if cursor is not None:
+            # A recorder can publish an older receipt after replay's frozen view.
+            # Such bytes have not necessarily been consumed by this checkpoint.
+            boundary = store.get("primary_materialization")["verified_boundary_ms"]
+            for a, b in store.db.execute(
+                "SELECT json_extract(payload,'$.min_receipt_ms'),json_extract(payload,'$.max_receipt_ms') "
+                "FROM segments WHERE at_ms>? AND json_extract(payload,'$.min_receipt_ms')<=? "
+                "AND json_extract(payload,'$.max_receipt_ms')>=?",
+                (boundary, cursor, row[0] - 900_000),
+            ).fetchall():
+                ranges.append((a, b, "unresolved primary outcome"))
     ranges.extend(
         (r[0], r[1], "replay/maintenance lease")
         for r in store.db.execute("SELECT start_ms,end_ms FROM storage_leases WHERE expires_ms>?", (now,))

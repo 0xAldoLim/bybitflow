@@ -119,6 +119,12 @@ def embed(signal, dashboard_url):
             summary += f"\nNet reward:risk {s.risk['net_rr']:.2f}R to TP1"
 
         field("Setup", summary)
+        ml = s.evidence.get("ml", {})
+        if ml.get("track") == "bootstrap":
+            field(
+                "ML Research",
+                f"Bootstrap score {ml['research_score']:g}/100\nOHLC-proxy historical challenger\nProduction authority: none",
+            )
 
         alignment = s.evidence.get("market_alignment", {})
         if alignment.get("alignment") == "IDIOSYNCRATIC_DIVERGENCE":

@@ -24,7 +24,7 @@ from .validation import (
 )
 
 
-def read_dataset(path, max_rows=10_000):
+def read_dataset(path, max_rows=10_000, track="primary"):
     file = pq.ParquetFile(path)
     if (
         file.metadata.num_rows > max_rows
@@ -41,14 +41,27 @@ def read_dataset(path, max_rows=10_000):
     if len({r["source"] for r in rows}) != 1 or len({r["stage"] for r in rows}) != 1:
         raise ValueError("Train source/stage-specific models; no silent TradingView/native pooling")
     for row in rows:
+        from .bootstrap_features import SCHEMA as BOOTSTRAP_SCHEMA
+
         label = row["label"]
         if (
-            row["schema_version"] != SCHEMA_VERSION
+            row["schema_version"] != (BOOTSTRAP_SCHEMA if track == "bootstrap" else SCHEMA_VERSION)
             or not label["complete"]
             or not np.isfinite(label["net_r"])
             or not row["decision_ms"] < label["exit_ms"] <= row["label_available_ms"] <= now_ms()
         ):
             raise ValueError("Unresolved, future, nonfinite or incompatible training label")
+        policy = "ohlc-path-v1" if track == "bootstrap" else "prints-v1"
+        if label.get("policy", "prints-v1") != policy:
+            raise ValueError("Mixed or incompatible label policies")
+        if track == "bootstrap" and (
+            label.get("execution_fidelity") != "proxy"
+            or label.get("data_kind") != "original-venue-public-1m-OHLC"
+            or label.get("event_available_ms") != row["label_available_ms"]
+            or label.get("source") != row["source"]
+            or label.get("costs_verified") is not False
+        ):
+            raise ValueError("Invalid bootstrap provenance/availability")
         if any(
             not meta["missing"] and max(meta["available_ms"], meta["source_ms"]) > row["decision_ms"]
             for meta in row["feature_metadata"].values()
@@ -57,8 +70,27 @@ def read_dataset(path, max_rows=10_000):
     return sorted(rows, key=lambda r: r["decision_ms"])
 
 
-def train(store, path, kinds=("logistic", "lightgbm"), calibration="sigmoid"):
-    rows = read_dataset(path)
+def train(store, path, kinds=("logistic", "lightgbm"), calibration="sigmoid", track="primary"):
+    from .locking import exclusive
+
+    with exclusive(store.root / "ml-fit.lock"):
+        return _train(store, path, kinds, calibration, track)
+
+
+def _train(store, path, kinds, calibration, track):
+    if track not in {"primary", "bootstrap"}:
+        raise ValueError("Unknown model track")
+    rows = read_dataset(path, track=track)
+    if len({r.get("candidate_identity", r["id"]) for r in rows}) != len(rows):
+        raise ValueError("Duplicate candidate identities in training data")
+    if len(rows) < 500:
+        raise ValueError("Need >=500 complete unique outcomes")
+    if track == "bootstrap" and any(k.startswith("two_stage_") for k in kinds):
+        raise ValueError("Bootstrap uses tabular baselines; sequence threshold is not relaxed")
+    schema = rows[0]["schema_version"]
+    label_policy = "ohlc-path-v1" if track == "bootstrap" else "prints-v1"
+    scope = "|".join((track, rows[0]["source"], schema, label_policy))
+    scopes = (scope, "legacy-primary") if track == "primary" else (scope, scope)
     sequence_excluded = 0
     if all(k.startswith("two_stage_") for k in kinds):
         eligible = [r for r in rows if len(r.get("sequence", [])) == 16]
@@ -68,14 +100,18 @@ def train(store, path, kinds=("logistic", "lightgbm"), calibration="sigmoid"):
             raise ValueError(
                 f"Two-stage models need >=500 complete outcomes with 16-observation sequences; available {len(rows)}"
             )
-    previous_end = store.db.execute("SELECT MAX(end_ms) FROM ml_holdouts").fetchone()[0]
+    previous_end = store.db.execute(
+        "SELECT MAX(end_ms) FROM ml_holdouts WHERE scope IN (?,?)", scopes
+    ).fetchone()[0]
     train_rows, cal_rows, validation, holdout = next_cycle_partitions(rows, previous_end)
     if len(train_rows) < 200 or len(cal_rows) < 100 or len(validation) < 100 or len(holdout) < 100:
         raise ValueError("Need >=200 train, 100 independent calibration, 100 validation, 100 holdout labels")
     ident = uuid.uuid4().hex
     start, end = holdout[0]["decision_ms"], max(r["label_available_ms"] for r in holdout)
     # Never reuse a prior holdout even if the dataset filename/hash changes.
-    if store.db.execute("SELECT 1 FROM ml_holdouts WHERE start_ms<=? AND end_ms>=?", (end, start)).fetchone():
+    if store.db.execute(
+        "SELECT 1 FROM ml_holdouts WHERE scope IN (?,?) AND start_ms<=? AND end_ms>=?", (*scopes, end, start)
+    ).fetchone():
         raise ValueError("Holdout overlaps a consumed period; collect new unseen outcomes")
     base_rate = np.mean([r["label"]["net_r"] > 0 for r in train_rows])
     reports, candidates = [], []
@@ -109,10 +145,14 @@ def train(store, path, kinds=("logistic", "lightgbm"), calibration="sigmoid"):
     with store.db:
         store.db.execute("BEGIN IMMEDIATE")
         if store.db.execute(
-            "SELECT 1 FROM ml_holdouts WHERE start_ms<=? AND end_ms>=?", (end, start)
+            "SELECT 1 FROM ml_holdouts WHERE scope IN (?,?) AND start_ms<=? AND end_ms>=?",
+            (*scopes, end, start),
         ).fetchone():
             raise ValueError("Holdout concurrently consumed by another experiment")
-        store.db.execute("INSERT INTO ml_holdouts VALUES(?,?,?)", (start, end, ident))
+        store.db.execute(
+            "INSERT INTO ml_holdouts(start_ms,end_ms,experiment_id,scope) VALUES(?,?,?,?)",
+            (start, end, ident, scope),
+        )
     p = predict(winner, holdout)
     selected = [r for r, value in zip(holdout, p, strict=True) if accepted(r, value, parameters)]
     selected_p = [value for r, value in zip(holdout, p, strict=True) if accepted(r, value, parameters)]
@@ -184,7 +224,12 @@ def train(store, path, kinds=("logistic", "lightgbm"), calibration="sigmoid"):
     from .registry import Registry
 
     champion = Registry(store).champion()
-    if champion and start > champion["periods"]["holdout"]["end"]:
+    if (
+        champion
+        and track == "primary"
+        and champion.get("source") == rows[0]["source"]
+        and start > champion["periods"]["holdout"]["end"]
+    ):
         cp = predict(champion["model"], holdout)
         delta = [
             r["label"]["net_r"]
@@ -203,7 +248,13 @@ def train(store, path, kinds=("logistic", "lightgbm"), calibration="sigmoid"):
         id=ident,
         created_ms=now_ms(),
         policy_version=POLICY_VERSION,
-        feature_schema_version=SCHEMA_VERSION,
+        feature_schema_version=schema,
+        track=track,
+        label_policy=label_policy,
+        holdout_scope=scope,
+        label_fidelity="OHLC_PROXY" if track == "bootstrap" else "RECORDED_PRINTS",
+        promotion_eligible=False if track == "bootstrap" else None,
+        production_filter_eligible=False if track == "bootstrap" else None,
         strategy_versions=sorted({r["signal"]["version"] for r in rows}),
         source=rows[0]["source"],
         stage=rows[0]["stage"],
@@ -241,8 +292,20 @@ def train(store, path, kinds=("logistic", "lightgbm"), calibration="sigmoid"):
             )
         },
         contexts={
-            key: sorted({r["values"].get(key, "unknown") for r in train_rows})
-            for key in ("family", "direction", "regime", "score_profile")
+            key: sorted({r["values"].get(key, "unknown") for r in train_rows}, key=str)
+            for key in (
+                (
+                    "family",
+                    "direction",
+                    "regime",
+                    "horizon_profile",
+                    "h4_timeframe",
+                    "h1_timeframe",
+                    "m15_timeframe",
+                )
+                if track == "bootstrap"
+                else ("family", "direction", "regime", "score_profile")
+            )
         },
         minimum_coverage=min(r["data_coverage"] for r in train_rows),
         required_features=[

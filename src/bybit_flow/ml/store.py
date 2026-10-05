@@ -54,6 +54,9 @@ def migrate(db):
     ) WHERE stage='decision';
     """)
     db.commit()
+    if "scope" not in {r[1] for r in db.execute("PRAGMA table_info(ml_holdouts)")}:
+        db.execute("ALTER TABLE ml_holdouts ADD COLUMN scope TEXT NOT NULL DEFAULT 'legacy-primary'")
+        db.commit()
 
 
 class FeatureStore:
@@ -222,6 +225,10 @@ class FeatureStore:
             )
         if not rows:
             raise ValueError("No complete resolved candidate labels; nothing fabricated")
+        return self.write_dataset(rows)
+
+    def write_dataset(self, rows):
+        """Atomic immutable export shared by explicitly separated research tracks."""
         ident = digest(rows)
         directory = self.store.root / "ml" / "datasets"
         directory.mkdir(parents=True, exist_ok=True)

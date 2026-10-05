@@ -24,10 +24,11 @@ def test_disabled_worker_is_idle_and_desk_inference_abstains(settings, signal, m
 
 def test_enabled_worker_runs_monitor_and_training_cycle(settings, monkeypatch):
     store = Store(settings.data_dir)
+    store.put("ml_trainability_cache", {"by_source": {"binance": {"baseline_trainable": 500}}})
     calls = []
     monkeypatch.setattr(cli, "monitor", lambda *_: calls.append("monitor"))
     monkeypatch.setattr(cli, "cycle", lambda *_: calls.append("cycle") or "fixture-model")
     cli.run(["cycle"], settings.model_copy(update={"ml_enabled": True}), store)
     assert calls == ["monitor", "cycle"]
-    assert store.get("ml_cycle")["model_id"] == "fixture-model"
+    assert store.get("ml_cycle")["tracks"]["primary:binance"]["model_id"] == "fixture-model"
     store.close()

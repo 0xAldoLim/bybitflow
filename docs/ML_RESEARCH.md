@@ -34,9 +34,98 @@ docker compose --profile ml up -d
 docker compose exec trainer bybit-flow ml status
 ```
 
-The worker monitors outcomes every 15 minutes, retries unsuccessful training daily,
-and schedules successful challenger cycles weekly. Insufficient data produces an
-abstention with a reason.
+The worker monitors outcomes every 15 minutes. Each source and training track
+starts its first fit on the next loop after reaching 500 usable outcomes. Failed
+fits retry after 15 minutes or a change in the usable count. After a successful
+fit, another cycle needs 50 new outcomes or seven days. A manual cycle can also
+request a fit. Chronological partitions can still leave too few samples; the
+worker reports that reason instead of weakening the checks.
+
+## Historical bootstrap track
+
+`ohlc-path-v1` evaluates the original venue's public, fully closed one-minute
+candles against the frozen entry zone, stop, TP1, entry deadline and holding
+horizon. TARGET, STOP and TIME_EXIT can become complete outcomes with finite net
+R after the frozen cost reserve. NO_ENTRY, AMBIGUOUS and INCOMPLETE never become
+training losses. A candle that cannot establish the order of entry, stop and
+target is excluded. Partial decision and deadline candles do not supply invented
+intrabar ordering. Event availability is the relevant candle close, separate
+from the time a historical label was materialized.
+
+These labels are **OHLC proxies**, with assumed costs and no verified execution.
+They coexist with immutable `prints-v1` labels and never repair or replace them.
+Rejected frozen decisions are included; Discord delivery is not a sampling rule.
+Canonical economic identities prevent technical duplicate evaluations from
+becoming independent outcomes.
+
+The `bootstrap-core-v1` projection explicitly supports native candidate schemas
+v4–v10. The catalog and implementation history preserve the selected closed-bar
+ATR, volatility, efficiency, slope, volume expansion, quoted spread, microprice,
+funding and frozen plan cost/reward definitions. Horizon roles changed in v5;
+their actual timeframes are explicit contexts. Definition and receipt-time checks
+reject incompatible or future observations. Original snapshots remain intact.
+Flow semantics, quality scoring and alignment changed across these versions, so
+they are excluded, as are OFI, breadth, AVWAP, spot/perpetual comparisons,
+event-window OI, context EV, liquidation and V8 gate features.
+
+Source-specific logistic and LightGBM baselines require at least 500 complete
+unique outcomes and the same chronological partition minimums as primary models.
+Bootstrap and primary reserve separate holdouts keyed by track, source, feature
+schema and label policy. LSTM/two-stage training still requires 500 complete
+16-observation sequences. Venues are never pooled.
+
+A bootstrap challenger may provide an advisory score and explanations. Discord
+shows “Bootstrap score / 100”, “OHLC-proxy historical challenger” and
+“Production authority: none”. It cannot change the deterministic grade, entry,
+stop or targets, filter delivery, display a validated probability or become a
+champion—even with a named reviewer. A compatible primary model takes priority.
+
+From CMD in the repository directory, inspect or run bounded resumable work:
+
+```bat
+docker compose exec trainer bybit-flow ml bootstrap-labels --source binance --limit 500 --resume --dry-run
+docker compose exec trainer bybit-flow ml bootstrap-labels --source binance --limit 500 --resume
+docker compose exec trainer bybit-flow ml bootstrap-export --source binance
+docker compose exec trainer bybit-flow ml bootstrap-train --source binance
+docker compose exec trainer bybit-flow ml status
+```
+
+Use `bybit` or `okx` only for candidates frozen on that venue. The worker already
+runs bounded backfill automatically. Overlapping symbol ranges are merged, REST
+requests use an independent one-request-per-second limiter and bounded retries,
+and progress survives restarts. A small Zstandard Parquet candle cache can be
+reclaimed after labels are durable. Run manual fitting with the worker stopped
+to avoid competing experiments.
+
+## Storage and replay checkpoints
+
+Primary incremental checkpoints preserve positions, subscriptions, trade IDs,
+continuity state, input hashes and the consumed receipt cursor. A fresh, sealed,
+consistent checkpoint protects only the unprocessed tail plus a 15-minute replay
+margin for an unresolved primary outcome. Missing, stale or inconsistent
+checkpoints retain the full original interval. Late-published segments remain
+protected until a later checkpoint consumes them. Operational active setups keep
+their original evidence protection and lifecycle.
+
+At 95% storage usage, the worker prioritizes incremental outcomes and integrity-safe
+pruning. Bootstrap downloads and fitting wait for headroom. Permanent snapshots,
+labels, model artifacts, manifests and audit hashes are retained. Status reports
+protected intervals and checkpoint boundaries; storage pressure cannot be
+described as healthy merely because the worker heartbeat is fresh. SQLite busy
+writes retry briefly and defer the worker loop without a crash/restart cycle.
+
+For a Windows deployment of this repair, PowerShell 7 can run the checked script
+from CMD in the repository directory:
+
+```bat
+pwsh -NoProfile -File scripts\deploy_ml_bootstrap.ps1
+```
+
+It requires green GitHub CI for the exact `main` commit, preserves the data volume,
+records original active plans and delivery receipts, serializes bounded trainer
+work and saves a continuity audit under `data/deployment-audits`. It defers
+backfill if safe cleanup cannot bring storage below 95%. The script has no volume
+deletion or model-promotion step.
 
 Manual research commands:
 

@@ -8,7 +8,7 @@ import pytest
 from bybit_flow.ml.features import snapshot
 from bybit_flow.ml.models import calibrate, fit, predict, records
 from bybit_flow.ml.registry import Registry
-from bybit_flow.ml.store import canonical
+from bybit_flow.ml.store import FeatureStore, canonical
 from bybit_flow.ml.training import train
 from bybit_flow.ml.validation import HOUR, accepted, next_cycle_partitions, partitions, walk_forward
 from bybit_flow.storage import Store
@@ -98,4 +98,36 @@ def test_reproducible_training_registry_holdout_and_no_fake_promotion(settings, 
         store.db.execute("UPDATE ml_models SET sha256='bad'")
     with pytest.raises(ValueError, match="integrity"):
         registry.get(result["id"])
+    store.close()
+
+
+def test_bootstrap_fit_keeps_holdouts_separate_and_never_promotes(settings, signal):
+    from bybit_flow.ml.bootstrap_features import project
+
+    rows = dataset(signal)
+    store = Store(settings.data_dir)
+    primary = train(store, FeatureStore(store).write_dataset(rows), kinds=("logistic",))
+    proxy_rows = []
+    for row in rows:
+        row["label"].update(
+            policy="ohlc-path-v1",
+            data_kind="original-venue-public-1m-OHLC",
+            execution_fidelity="proxy",
+            source=row["source"],
+            event_available_ms=row["label_available_ms"],
+            production_execution_verified=False,
+        )
+        proxy_rows.append(project(row))
+    bootstrap = train(
+        store, FeatureStore(store).write_dataset(proxy_rows), kinds=("logistic",), track="bootstrap"
+    )
+    assert bootstrap["holdout_scope"] != primary["holdout_scope"]
+    assert bootstrap["periods"]["holdout"] == primary["periods"]["holdout"]
+    assert bootstrap["label_fidelity"] == "OHLC_PROXY"
+    assert not bootstrap["promotion_eligible"] and not bootstrap["production_filter_eligible"]
+    assert "quality_score" not in bootstrap["model"]["vocabulary"]
+    with pytest.raises(ValueError, match="cannot be promoted"):
+        Registry(store).promote(bootstrap["id"], "Test reviewer")
+    with pytest.raises(ValueError, match="consumed"):
+        train(store, FeatureStore(store).write_dataset(proxy_rows), kinds=("logistic",), track="bootstrap")
     store.close()

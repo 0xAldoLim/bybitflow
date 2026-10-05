@@ -41,7 +41,7 @@ class Store:
     def __init__(self, root: Path, migration_backup_dir: Path | None = None):
         self.root = root
         root.mkdir(parents=True, exist_ok=True)
-        self.db = sqlite3.connect(root / "research.sqlite")
+        self.db = sqlite3.connect(root / "research.sqlite", timeout=15)
         self.db.row_factory = sqlite3.Row
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("PRAGMA foreign_keys=ON")
@@ -102,8 +102,18 @@ class Store:
             self.put("horizon_counts", counts)
 
     def put(self, key, value):
-        with self.db:
-            self.db.execute("INSERT OR REPLACE INTO kv VALUES(?,?)", (key, json.dumps(value)))
+        payload = json.dumps(value)
+        for attempt in range(4):
+            try:
+                with self.db:
+                    self.db.execute("INSERT OR REPLACE INTO kv VALUES(?,?)", (key, payload))
+                return
+            except sqlite3.OperationalError as exc:
+                if "locked" not in str(exc).lower() and "busy" not in str(exc).lower():
+                    raise
+                if attempt == 3:
+                    raise
+                time.sleep(0.05 * 2**attempt)
 
     def get(self, key, default=None):
         r = self.db.execute("SELECT payload FROM kv WHERE key=?", (key,)).fetchone()

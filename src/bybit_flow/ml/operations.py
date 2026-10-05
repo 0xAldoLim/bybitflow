@@ -1,6 +1,7 @@
 """Small worker heartbeat and bounded advisory-inference diagnostics."""
 
 import json
+import math
 import os
 import sqlite3
 import threading
@@ -50,7 +51,7 @@ def trainability(store, asof_ms=None):
     asof_ms = asof_ms or now_ms()
     active_source = store.get("runtime_health", {}).get("source")
     sources = {
-        name: dict(complete=0, unique=set(), current=set(), sequence=set())
+        name: dict(decisions=0, identities=set(), complete=0, unique=set(), current=set(), sequence=set())
         for name in ("binance", "bybit", "okx")
     }
     excluded = dict.fromkeys(
@@ -66,6 +67,17 @@ def trainability(store, asof_ms=None):
         0,
     )
     cursor = None
+    gaps = dict.fromkeys(
+        (
+            "initial_observation_delay",
+            "trade_feed_stale",
+            "subscription_gap",
+            "recorder_chain_gap",
+            "clock_damage",
+            "retention_missing_interval",
+        ),
+        0,
+    )
     while True:
         page = " AND (s.decision_ms,s.id)>(?,?)" if cursor else ""
         params = list(cursor) if cursor else []
@@ -74,7 +86,7 @@ def trainability(store, asof_ms=None):
             "json_extract(s.payload,'$.source'),json_array_length(s.payload,'$.sequence'),"
             "coalesce(c.candidate_identity,s.signal_id),l.snapshot_id,l.available_ms,"
             "json_extract(l.payload,'$.complete'),json_extract(l.payload,'$.net_r'),"
-            "json_extract(l.payload,'$.exit_ms'),json_extract(l.payload,'$.classification') "
+            "json_extract(l.payload,'$.exit_ms'),json_extract(l.payload,'$.classification'),json_extract(l.payload,'$.data_gaps') "
             "FROM ml_snapshots s LEFT JOIN ml_labels l ON l.snapshot_id=s.id AND l.policy='prints-v1' "
             "LEFT JOIN candidate_identities c ON c.signal_id=s.signal_id "
             "WHERE s.stage='decision'" + page + " ORDER BY s.decision_ms,s.id LIMIT 1000",
@@ -95,8 +107,19 @@ def trainability(store, asof_ms=None):
             net_r,
             exit_ms,
             kind,
+            data_gaps,
         ) in rows:
             cursor = (decision, ident)
+            reason = (data_gaps or "").lower()
+            for category, patterns in {
+                "initial_observation_delay": ("entry coverage", "before the live observation", "initial"),
+                "trade_feed_stale": ("trade-feed stale", "latest trade stale"),
+                "subscription_gap": ("subscription", "continuity lost"),
+                "recorder_chain_gap": ("recording exclusion", "unchained", "recorded coverage gap"),
+                "clock_damage": ("clock", "non-monotonic", "overlapping"),
+                "retention_missing_interval": ("retention", "missing", "recording ended"),
+            }.items():
+                gaps[category] += any(pattern in reason for pattern in patterns)
             excluded["unresolved"] += label_id is None
             excluded["incomplete"] += complete == 0 and kind != "technical_duplicate"
             excluded["technical_duplicate"] += kind == "technical_duplicate"
@@ -109,8 +132,16 @@ def trainability(store, asof_ms=None):
             if source not in sources:
                 continue
             bucket = sources[source]
+            bucket["decisions"] += 1
+            bucket["identities"].add(identity)
             bucket["complete"] += complete == 1
-            if complete != 1 or net_r is None or exit_ms is None or exit_ms > asof_ms or available > asof_ms:
+            if (
+                complete != 1
+                or net_r is None
+                or not math.isfinite(net_r)
+                or exit_ms is None
+                or not decision < exit_ms <= available <= asof_ms
+            ):
                 continue
             bucket["unique"].add(identity)
             if schema == SCHEMA_VERSION:
@@ -124,6 +155,8 @@ def trainability(store, asof_ms=None):
         trainable = len(bucket["current"])
         sequence_ready = len(bucket["sequence"])
         by_source[name] = dict(
+            historical_decision_snapshots=bucket["decisions"],
+            unique_candidate_identities=len(bucket["identities"]),
             complete_labels=bucket["complete"],
             raw_complete_snapshots=bucket["complete"],
             unique_complete_candidates=len(bucket["unique"]),
@@ -143,6 +176,7 @@ def trainability(store, asof_ms=None):
         active_source=active_source,
         by_source=by_source,
         excluded=excluded,
+        coverage_loss_reasons=gaps,
         excluded_unit="raw decision snapshots; categories may overlap",
     )
 
@@ -163,6 +197,12 @@ def status(store, summary, enabled=True):
                 reasons[reason] = reasons.get(reason, 0) + count
     latest_model = store.db.execute("SELECT max(created_ms) FROM ml_models").fetchone()[0]
     latest_model_id = store.db.execute("SELECT id FROM ml_models ORDER BY created_ms DESC LIMIT 1").fetchone()
+    primary_id = store.db.execute(
+        "SELECT id FROM ml_models WHERE coalesce(json_extract(manifest,'$.track'),'primary')='primary' ORDER BY created_ms DESC LIMIT 1"
+    ).fetchone()
+    bootstrap_id = store.db.execute(
+        "SELECT id FROM ml_models WHERE json_extract(manifest,'$.track')='bootstrap' ORDER BY created_ms DESC LIMIT 1"
+    ).fetchone()
     mode = store.get("ml_training_mode", {})
     readiness = store.get("ml_trainability_cache", {})
     if not readiness:
@@ -187,6 +227,20 @@ def status(store, summary, enabled=True):
         if not latest_model
         else "ABSTAINED",
         enabled=enabled,
+        model_status="PRIMARY_CHAMPION"
+        if store.get("ml_champion")
+        else "PRIMARY_CHALLENGER"
+        if primary_id
+        else "BOOTSTRAP_CHALLENGER"
+        if bootstrap_id
+        else "NO_MODEL",
+        primary_model_id=primary_id[0] if primary_id else None,
+        bootstrap_model_id=bootstrap_id[0] if bootstrap_id else None,
+        bootstrap_trainability=store.get("ml_bootstrap_trainability", {}),
+        bootstrap_backfill={
+            source: store.get("ml_bootstrap_backfill:" + source + ":ohlc-path-v1", {})
+            for source in ("binance", "bybit", "okx")
+        },
         champion=store.get("ml_champion"),
         latest_compatible_challenger=advisory.get("compatible_challenger"),
         latest_model_created_ms=latest_model,
