@@ -55,6 +55,14 @@ function funnelPanel(f) {
   return panel("Signal pipeline", `<p>${escape(f.message)}</p>${counts}<h3>Recent rejection reasons</h3>${reasons}<p>Events are not independent setups. Rejection checks may overlap. Historical counts begin where retained evidence is available.</p>`, "Live confirmation and delivery diagnostics");
 }
 function signalTable(rows) {
+  const stateLabel = (s) => {
+    if (s.state === "EXPIRED" && s.coverage?.tracking_end) {
+      const net = s.evidence?.expiry_mark?.estimated_net_r;
+      return net == null ? "TRACKING ENDED · RESULT UNKNOWN" :
+        `TRACKING ENDED · EST. ${net > 0 ? "PROFIT" : net < 0 ? "LOSS" : "FLAT"} ${net >= 0 ? "+" : ""}${number(net, 3)}R`;
+    }
+    return s.state === "ALERTED" && s.coverage?.monitoring === "paused" ? "MONITORING PAUSED" : s.state;
+  };
   return rows.length
     ? table(
         ["Market / direction", "Setup / horizon", "Quality", "State", "Created"],
@@ -62,7 +70,7 @@ function signalTable(rows) {
           `<a href="#signal/${encodeURIComponent(s.id)}">${escape(s.symbol)} <span class="${s.direction === "LONG" ? "green" : "red"}">${escape(s.direction)}</span></a>`,
           escape(s.family) + "<br>" + escape(s.horizon_profile || "LEGACY"),
           `${number(s.quality, 1)} <span class="tag">${escape(s.final_tier)}</span>`,
-          escape(s.state === "ALERTED" && s.coverage?.monitoring === "paused" ? "MONITORING PAUSED" : s.state),
+          escape(stateLabel(s)),
           utc(s.created_ms),
         ]),
       )
@@ -357,7 +365,7 @@ async function render() {
       body =
         panel(
           "Record a paper outcome",
-          `<div class="form-row"><input id="signal-id" placeholder="Signal ID (optional)" aria-label="Signal ID"><input id="net-r" type="number" step=".01" placeholder="Hypothetical net R" aria-label="Hypothetical net R"></div><textarea id="note" placeholder="Manual observations, assumptions, missed fills…" aria-label="Journal note"></textarea><label><input id="resolve" type="checkbox"> Resolve an alerted paper setup</label><br><button id="save-journal">Save journal entry</button>`,
+          `<div class="form-row"><input id="signal-id" value="${escape(id || "")}" placeholder="Signal ID (optional)" aria-label="Signal ID"><input id="net-r" type="number" step=".01" placeholder="Hypothetical net R" aria-label="Hypothetical net R"></div><textarea id="note" placeholder="Manual observations, assumptions, missed fills…" aria-label="Journal note"></textarea><label><input id="resolve" type="checkbox"> Resolve an alerted paper setup</label><br><button id="save-journal">Save journal entry</button>`,
         ) + panel("Entries", json(await api("journal")));
     else if (page === "research") {
       const r = await api("research");
@@ -415,6 +423,7 @@ async function render() {
       const { signal: s } = await api("signals/" + encodeURIComponent(id));
       const observation = await api("observations/" + encodeURIComponent(id));
       const f = s.evidence.flow || {};
+      const expiryMark = s.state === "EXPIRED" && s.coverage?.tracking_end ? s.evidence?.expiry_mark : null;
       body =
         panel(
           `${s.symbol} · ${s.direction} · ${s.final_tier}`,
@@ -436,6 +445,14 @@ async function render() {
         panel("Executed footprint", profile(f.profile), "Window profile; not a full session") +
         panel("Cumulative volume delta", lineChart(f.cvd_path || []), "Base units · execution window") +
         `</div>` +
+        (s.state === "EXPIRED" && s.coverage?.tracking_end ? panel(
+          "At tracking end",
+          (expiryMark
+            ? `<p>Planned entry ${number(s.entry, 8)} → observed ${number(expiryMark.mark_price, 8)} · ${expiryMark.estimated_net_r == null ? `directional move ${number(expiryMark.gross_pct)}%; costs unavailable` : `estimated ${expiryMark.estimated_net_r > 0 ? "profit" : expiryMark.estimated_net_r < 0 ? "loss" : "flat"} ${number(expiryMark.estimated_net_r, 3)}R (${number(expiryMark.estimated_net_pct, 2)}%) after assumed costs`}</p><p class="muted">${escape(expiryMark.method)} · No account exit or fill verified.</p>`
+            : `<p>No reliable price near the deadline or observed entry-zone touch; profit or loss is unknown.</p>`)
+          + `<p><a href="#journal/${encodeURIComponent(s.id)}">Record your actual paper close</a></p>`,
+          "Research only",
+        ) : "") +
         panel("Operational status and later research", `<p>${escape(s.state)} · ${escape(observation.research_observation_status || "No late observation")}</p>` +
           (observation.primary_outcome ? `<p>Primary: ${escape(observation.primary_outcome)} · Extended same rules: ${escape(observation.extended_same_rules_outcome)} · Late target: ${escape(observation.late_target_hit)}</p><p>Later price movement does not rewrite the original result.</p>` : "")) +
         panel(

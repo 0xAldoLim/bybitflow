@@ -21,6 +21,7 @@ def advance(signal, bars, cursor, until, detected_ms):
         coverage_complete=False,
     )
     expected = cursor // 60_000 * 60_000
+    last_close = last_close_ms = None
     for bar in sorted(bars, key=lambda b: b.start):
         if bar.end <= cursor or bar.end > min(until, deadline):
             continue
@@ -55,9 +56,18 @@ def advance(signal, bars, cursor, until, detected_ms):
                 reason="Stop observed during downtime" if stop else "Target observed during downtime",
             )
             return result
+        last_close, last_close_ms = bar.close, bar.end
         expected = bar.end
     result["coverage_complete"] = result["cursor_ms"] >= min(until, deadline) // 60_000 * 60_000
     if result["coverage_complete"] and until >= deadline:
+        if signal.state == "ALERTED" and entered is not None and last_close_ms is not None and entered < last_close_ms:
+            from .lifecycle import expiry_mark
+
+            mark = expiry_mark(
+                signal, last_close, last_close_ms, deadline, 60_000, "CLOSED_1M_OHLC", entered_ms=entered
+            )
+            if mark:
+                result["expiry_mark"] = mark
         result.update(
             state="EXPIRED",
             outcome="EXPIRED",
@@ -163,6 +173,8 @@ async def reconcile(scanner, signal, now):
     if result.get("state"):
         alerted = signal.state == "ALERTED"
         signal.state = result["state"]
+        if signal.state == "EXPIRED":
+            signal.coverage["tracking_end"] = alerted
         signal.coverage["terminal_reason"] = result["reason"]
         if result.get("outcome") == "STOP":
             signal.coverage["terminal_reason"] = "PLANNED_STOP_CROSSED"
@@ -170,12 +182,18 @@ async def reconcile(scanner, signal, now):
             effective_ms=result["effective_ms"],
             detected_ms=now,
             event_price=None,
-            reference_price=signal.stop if result.get("outcome") == "STOP" else signal.tp1,
+            reference_price=signal.stop
+            if result.get("outcome") == "STOP"
+            else signal.tp1
+            if result.get("outcome") == "TARGET"
+            else signal.entry,
             source=signal.source,
             method="CLOSED_1M_OHLC",
             ambiguous=result.get("ambiguous", False),
         )
         signal.evidence["primary_outcome"] = "UNCLEAR" if result.get("ambiguous") else result["outcome"]
+        if result.get("expiry_mark"):
+            signal.evidence["expiry_mark"] = result["expiry_mark"]
         scanner.store.signal(signal, result["reason"])
         if alerted:
             await scanner.notifier.send_research(signal, update=True)

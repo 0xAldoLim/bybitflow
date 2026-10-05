@@ -341,6 +341,16 @@ minimum is `FLOW_HORIZON_MODEL_MIN_SAMPLES` (default 500). Below that it reports
 `INSUFFICIENT_EVIDENCE` and no recommendation. It remains research-only, with no
 production promotion or authority to change live plans.
 
+At the end of an alerted setup's tracking period, BybitFlow compares the latest
+trustworthy original-exchange price with the planned entry. A LONG benefits from
+a higher price; a SHORT benefits from a lower price. If an entry-zone touch was
+observed and cost assumptions are available, the Discord card and signal detail
+show estimated net R even when TP1 was not reached. A missing or stale price,
+incomplete path, or unobserved entry leaves profit or loss unknown. This is a
+paper mark, not proof that your account entered or closed. Use the Paper journal
+link on the signal detail to record your own close; it does not rewrite the
+original expiry or ML label.
+
 Retention is enabled by default for new installations. Explicit
 `FLOW_RECORDING_RETENTION_ENABLED=false` still disables it. Upgrades do not edit
 an existing `.env`. Storage status includes retention state, raw/permanent/protected/

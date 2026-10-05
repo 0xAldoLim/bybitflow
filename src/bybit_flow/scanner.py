@@ -1210,9 +1210,36 @@ class Scanner:
                 await self.notifier.send_research(s, update=True)
                 return
         if now >= (s.holding_deadline_ms or s.expires_ms):
+            deadline = s.holding_deadline_ms or s.expires_ms
+            if (
+                not reasons
+                and s.coverage.get("monitor_status") == "MONITOR_READY"
+                and s.id not in getattr(self, "reconcile_pending", set())
+            ):
+                from .lifecycle import expiry_mark
+
+                mark = expiry_mark(
+                    s,
+                    s.evidence.get("latest_observed_price"),
+                    s.coverage.get("monitor_cursor_event_ms"),
+                    deadline,
+                    self.settings.trade_stale_ms,
+                    "LIVE_EXECUTED_TRADE",
+                )
+                if mark:
+                    s.evidence["expiry_mark"] = mark
             s.state = "EXPIRED"
+            s.coverage["tracking_end"] = True
             s.coverage["monitoring_event"] = "ended"
             s.invalidation = "Tracking period ended; no account outcome is inferred"
+            s.coverage["terminal_reason"] = s.invalidation
+            s.evidence["terminal_event"] = dict(
+                effective_ms=deadline,
+                detected_ms=now,
+                reference_price=s.entry,
+                source=s.source,
+                method="LIFECYCLE_DEADLINE",
+            )
         elif reasons:
             since = previous.get("pause_since_ms") or now
             s.coverage["pause_since_ms"] = since

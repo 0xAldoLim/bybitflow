@@ -18,6 +18,8 @@ def embed(signal, dashboard_url):
 
     terminal = s.state in {"INVALIDATED", "EXPIRED", "RESOLVED"}
     monitoring_event = s.coverage.get("monitoring_event")
+    tracking_end = s.state == "EXPIRED" and s.coverage.get("tracking_end")
+    expiry_mark = s.evidence.get("expiry_mark") if tracking_end else None
     if terminal and monitoring_event in {"paused", "resumed"}:
         monitoring_event = None
     monitoring_update = monitoring_event in {"paused", "resumed", "ended"}
@@ -29,6 +31,8 @@ def embed(signal, dashboard_url):
         "INVALIDATED": "SETUP WITHDRAWN",
         "RESOLVED": "CLOSED",
     }.get(s.state, s.state)
+    if tracking_end:
+        status = "TRACKING ENDED"
 
     if monitoring_update:
         status = {"paused": "MONITORING PAUSED", "resumed": "MONITORING RESUMED", "ended": "TRACKING ENDED"}[
@@ -47,7 +51,9 @@ def embed(signal, dashboard_url):
             {
                 "paused": "Live data interrupted. Monitoring is paused; this is not a stop-loss hit or setup invalidation. Do not open a new entry while data is unavailable.",
                 "resumed": "Historical catch-up is complete and live data is fresh. Monitoring resumed.",
-                "ended": "The tracking period has ended. This does not establish a profit, loss, or account fill.",
+                "ended": "The tracking period has ended. Any price result below is an estimate, not an account fill."
+                if expiry_mark
+                else "The tracking period has ended. This does not establish a profit, loss, or account fill.",
             }[monitoring_event],
         )
 
@@ -58,7 +64,9 @@ def embed(signal, dashboard_url):
             s.invalidation
             if s.state == "INVALIDATED"
             else (
-                "The entry window has ended."
+                "The tracking period has ended."
+                if tracking_end
+                else "The entry window has ended."
                 if s.state == "EXPIRED"
                 else "Tracking has ended; see the recorded outcome."
             )
@@ -196,6 +204,32 @@ def embed(signal, dashboard_url):
                     "Opportunity · informational",
                     f"#{priority['rank']} of {priority['rank_of']} · {priority['cluster_id'].replace('_', ' ')}",
                 )
+
+    if tracking_end:
+        if expiry_mark:
+            method = (
+                "last original-exchange trade"
+                if expiry_mark["method"] == "LIVE_EXECUTED_TRADE"
+                else "original-exchange closed 1-minute candle"
+            )
+            net_r = expiry_mark.get("estimated_net_r")
+            if net_r is None:
+                outcome = f"Directional move {expiry_mark['gross_pct']:+.2f}% · costs unavailable; profit unconfirmed"
+            else:
+                outcome = (
+                    f"Estimated {'profit' if net_r > 0 else 'loss' if net_r < 0 else 'flat'} "
+                    f"{net_r:+.2f}R ({expiry_mark['estimated_net_pct']:+.2f}%) after assumed costs"
+                )
+            field(
+                "At tracking end",
+                f"Entry {s.entry:g} → observed {expiry_mark['mark_price']:g} · {outcome}\n"
+                f"{method}; no account exit or fill verified. Record your actual close in the paper journal.",
+            )
+        else:
+            field(
+                "At tracking end",
+                "No reliable price near the deadline or entry-zone evidence was available; profit or loss is unknown.",
+            )
 
     if monitoring_event in {"paused", "resumed"}:
         color = 0x8B949E

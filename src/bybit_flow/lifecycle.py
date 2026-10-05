@@ -1,11 +1,66 @@
 """Lightweight original-venue executed-path monitoring of immutable plans."""
 
 import asyncio
+import math
 
 from .models import Signal
 from .storage import now_ms
 
 TERMINAL = {"INVALIDATED", "EXPIRED", "RESOLVED"}
+
+
+def expiry_mark(signal, price, price_ms, deadline_ms, max_age_ms, method, entered_ms=None):
+    """Estimate the frozen plan's value at expiry without claiming an account fill."""
+    entered = entered_ms if entered_ms is not None else signal.evidence.get("observed_entry_ms")
+    if entered is None or price_ms is None or not entered < price_ms <= deadline_ms:
+        return None
+    if deadline_ms - price_ms > max_age_ms:
+        return None
+    try:
+        price = float(price)
+        entry = float(signal.entry)
+        distance = abs(entry - float(signal.stop))
+    except (TypeError, ValueError):
+        return None
+    if not all(math.isfinite(x) and x > 0 for x in (price, entry, distance)):
+        return None
+    gross_move = (1 if signal.direction == "LONG" else -1) * (price - entry)
+    result = dict(
+        policy="expiry-mark-v1",
+        method=method,
+        mark_price=price,
+        mark_ms=price_ms,
+        deadline_ms=deadline_ms,
+        observed_entry_ms=entered,
+        gross_pct=100 * gross_move / entry,
+        gross_r=gross_move / distance,
+        estimated_net_r=None,
+        estimated_net_pct=None,
+        classification="FAVORABLE_GROSS_COSTS_UNKNOWN"
+        if gross_move > 0
+        else "UNFAVORABLE_GROSS_COSTS_UNKNOWN"
+        if gross_move < 0
+        else "FLAT_GROSS_COSTS_UNKNOWN",
+        account_fill_verified=False,
+    )
+    cost = signal.risk.get("cost_per_base")
+    if cost is not None:
+        try:
+            cost = float(cost)
+        except (TypeError, ValueError):
+            return result
+        if math.isfinite(cost) and cost >= 0:
+            net_move = gross_move - cost
+            result.update(
+                estimated_net_r=net_move / distance,
+                estimated_net_pct=100 * net_move / entry,
+                classification="ESTIMATED_PROFIT"
+                if net_move > 0
+                else "ESTIMATED_LOSS"
+                if net_move < 0
+                else "ESTIMATED_FLAT",
+            )
+    return result
 
 
 def retire_tradingview(store):
@@ -178,13 +233,38 @@ async def tick(scanner, now):
                 ready += int(fresh)
                 unavailable += int(source_missing)
                 stale += int(not fresh and not source_missing)
-                if signal.state not in TERMINAL and now >= (
+                deadline = (
                     (signal.holding_deadline_ms or signal.expires_ms)
                     if signal.state == "ALERTED"
                     else (signal.trigger_expires_ms or signal.expires_ms)
-                ):
+                )
+                if signal.state not in TERMINAL and now >= deadline:
+                    signal.coverage["tracking_end"] = signal.state == "ALERTED"
+                    if (
+                        signal.state == "ALERTED"
+                        and fresh
+                        and not gap
+                    ):
+                        mark = expiry_mark(
+                            signal,
+                            signal.evidence.get("latest_observed_price"),
+                            signal.coverage.get("monitor_cursor_event_ms"),
+                            deadline,
+                            scanner.settings.trade_stale_ms,
+                            "LIVE_EXECUTED_TRADE",
+                        )
+                        if mark:
+                            signal.evidence["expiry_mark"] = mark
                     signal.state = "EXPIRED"
                     signal.invalidation = "Original lifecycle deadline elapsed"
+                    signal.coverage["terminal_reason"] = signal.invalidation
+                    signal.evidence["terminal_event"] = dict(
+                        effective_ms=deadline,
+                        detected_ms=now,
+                        reference_price=signal.entry,
+                        source=signal.source,
+                        method="LIFECYCLE_DEADLINE",
+                    )
             if signal.state in TERMINAL:
                 if signal.coverage.get("terminal_reason") == "PLANNED_STOP_CROSSED":
                     scanner.store.put(

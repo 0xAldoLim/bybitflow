@@ -70,8 +70,9 @@ def start(store, signal, at_ms, checkpoints=None):
         return
     primary = signal.evidence.get("primary_outcome", signal.state)
     exit_price = signal.evidence.get("latest_observed_price")
-    net_r = None
-    if (
+    expiry = signal.evidence.get("expiry_mark") if signal.state == "EXPIRED" else None
+    net_r = expiry.get("estimated_net_r") if expiry else None
+    if signal.state != "EXPIRED" and (
         exit_price is not None
         and signal.evidence.get("observed_entry_ms")
         and signal.evidence.get("primary_coverage_complete", True)
@@ -86,7 +87,14 @@ def start(store, signal, at_ms, checkpoints=None):
         signal=signal.model_dump(mode="json"),
         primary_outcome=primary,
         primary_net_r=net_r,
-        primary_return_method="observed executable quote versus planned entry, configured costs; not an account return",
+        primary_return_method=(
+            "Observed original-exchange price near deadline versus planned entry, assumed costs; not an account fill"
+            if expiry
+            else "No reliable expiry mark; no account return inferred"
+            if signal.state == "EXPIRED"
+            else "Observed original-exchange price versus planned entry, configured costs; not an account return"
+        ),
+        primary_expiry_mark=expiry,
         primary_terminal_reason=signal.invalidation,
         terminal_ms=at_ms,
         terminal_session=session_context(at_ms)["primary"],

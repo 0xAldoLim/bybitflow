@@ -123,6 +123,13 @@ targets remain visible. The title changes to the current status.
 Updates identify expired or withdrawn setups and say **no new entry**. A withdrawal
 caused by unavailable data does not establish that the stop loss was hit.
 
+When an alerted setup reaches its tracking deadline before TP1 or SL, the updated
+card reports an estimated profit or loss if the entry zone was observed and a
+reliable original-exchange price is available near the deadline. The estimate
+uses the planned entry, direction, stop distance and configured costs; it is not
+an account fill. Missing entry or price evidence leaves the result unknown. Use
+the dashboard's **Paper journal** to record your actual close separately.
+
 Signals require actual order-flow confirmation even when the grade is low. They
 are not sent on a fixed schedule. With the recommended minute-spread configuration, initial liquidity collection takes about
 12–15 minutes; interrupted feeds can extend it. With the 60-second setting, a failed
