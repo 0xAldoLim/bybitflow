@@ -33,6 +33,7 @@ def evaluate_risk(signal, instrument, settings, book, portfolio=None, funding_ra
         net_rr=net_rr,
         cost_per_base=cost_per_base,
         fee_bps_assumption=settings.taker_fee_bps,
+        slippage_bps_assumption=settings.slippage_bps,
         funding_reserve_bps=funding_bps,
         risk_fraction=settings.risk_fraction,
         illustrative_leverage=leverage,

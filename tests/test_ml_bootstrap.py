@@ -191,6 +191,66 @@ async def test_merged_backfill_resumes_deduplicates_and_keeps_prints(settings, s
     store.close()
 
 
+@pytest.mark.asyncio
+async def test_isolated_nonminute_decision_backfills_closed_deadline_and_resumes(settings, signal):
+    store = Store(settings.data_dir)
+    row = frozen(signal, decision=121_000)
+    row["signal"]["risk"].update(fee_bps_assumption=0, slippage_bps_assumption=0, funding_reserve_bps=20)
+    ident = digest(row)
+    with store.db:
+        store.db.execute(
+            "INSERT INTO ml_snapshots VALUES(?,?,?,?,?,?)",
+            (ident, row["signal_id"], "decision", row["decision_ms"], row["schema_version"], canonical(row)),
+        )
+    store.put(
+        "ml_bootstrap_backfill:binance:ohlc-path-v1",
+        dict(status="DEFERRED", reason="Previous bounded retry"),
+    )
+
+    class Market:
+        name = "binance"
+
+        def __init__(self):
+            self.calls = []
+
+        async def candles(self, symbol, interval, asof, limit, start):
+            self.calls.append((interval, start, asof))
+            return [candle(t) for t in range(start, asof, 60_000)]
+
+    market = Market()
+    result = await backfill(store, settings, "binance", market=market)
+    assert market.calls == [("1", 120_000, 420_000)]
+    assert result["status"] == "OBSERVED" and result["complete"] == 1
+    assert "reason" not in result
+    saved = store.db.execute(
+        "SELECT available_ms,payload FROM ml_labels WHERE snapshot_id=? AND policy='ohlc-path-v1'",
+        (ident,),
+    ).fetchone()
+    assert saved is not None
+    import json
+
+    outcome = json.loads(saved["payload"])
+    assert outcome["outcome"] == "TIME_EXIT" and outcome["complete"]
+    assert saved["available_ms"] == outcome["event_available_ms"] == outcome["exit_ms"] == 420_000
+    assert outcome["net_r"] == pytest.approx((1 - 0.2) / 5)
+    assert outcome["cost_assumptions"]["fees_bps"] == 0
+    assert outcome["cost_assumptions"]["slippage_bps"] == 0
+    assert outcome["cost_assumptions"]["funding_assumption_bps"] == 20
+
+    resumed = await backfill(store, settings, "binance", market=market)
+    assert resumed["requests"] == 0 and resumed["complete"] == 1
+    assert market.calls == [("1", 120_000, 420_000)]
+    assert store.db.execute("SELECT count(*) FROM ml_labels WHERE policy='ohlc-path-v1'").fetchone()[0] == 1
+    assert (
+        store.db.execute(
+            "SELECT available_ms,payload FROM ml_labels WHERE snapshot_id=? AND policy='ohlc-path-v1'",
+            (ident,),
+        ).fetchone()
+        == saved
+    )
+    store.close()
+
+
 def test_checkpoint_releases_consumed_tape_and_fails_closed(settings, signal):
     store = Store(settings.data_dir)
     signal.created_ms = 1_000_000

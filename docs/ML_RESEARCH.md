@@ -52,6 +52,11 @@ target is excluded. Partial decision and deadline candles do not supply invented
 intrabar ordering. Event availability is the relevant candle close, separate
 from the time a historical label was materialized.
 
+Backfill includes isolated decisions whose timestamps fall between minute
+boundaries and uses the last fully closed candle before the frozen deadline.
+Labels retain the frozen aggregate cost and fee, slippage and funding components
+when available; missing historical components remain unspecified.
+
 These labels are **OHLC proxies**, with assumed costs and no verified execution.
 They coexist with immutable `prints-v1` labels and never repair or replace them.
 Rejected frozen decisions are included; Discord delivery is not a sampling rule.

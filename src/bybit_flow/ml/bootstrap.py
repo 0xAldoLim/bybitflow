@@ -81,7 +81,11 @@ def evaluate(row, bars, source, asof_ms, materialized_ms=None):
     except (KeyError, TypeError, ValueError):
         return finish("INCOMPLETE", decision, "Frozen plan or cost assumptions unavailable")
     result["cost_assumptions"] = dict(
-        cost_per_base=cost, method="Frozen planned fee, slippage and funding reserve; not verified costs"
+        fees_bps=s["risk"].get("fee_bps_assumption"),
+        slippage_bps=s["risk"].get("slippage_bps_assumption"),
+        funding_assumption_bps=s["risk"].get("funding_reserve_bps"),
+        cost_per_base=cost,
+        method="Frozen planned fee, slippage and funding reserve; not verified costs",
     )
     cutoff = min(until, asof_ms) // MINUTE * MINUTE
     expected = decision // MINUTE * MINUTE
@@ -343,6 +347,7 @@ async def _backfill(store, settings, source, limit, resume, market):
         cache_hits=0,
         cached_ranges=0,
     )
+    state.pop("reason", None)
     if directory_bytes(store.root) >= settings.max_storage_gb * 1e9 * 0.95:
         state.update(
             status="STORAGE_BACKPRESSURE",
@@ -366,10 +371,11 @@ async def _backfill(store, settings, source, limit, resume, market):
                 break
             bars = await cache.get(market, symbol, start, end, state)
             for row in rows:
+                # The requested range and evaluator end at the last closed minute.
                 if (
                     row["signal"]["symbol"] != symbol
                     or not start <= row["decision_ms"] < end
-                    or deadline(row) > end
+                    or deadline(row) // MINUTE * MINUTE > end
                 ):
                     continue
                 outcome = evaluate(row, bars, source, asof)
