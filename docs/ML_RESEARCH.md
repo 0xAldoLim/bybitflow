@@ -144,6 +144,24 @@ bybit-flow ml infer MODEL_ID DATASET.parquet
 Training requires at least 200 training, 100 calibration, 100 validation, and 100
 holdout outcomes after chronological partitioning, purging, and embargo. These
 minimums do not establish promotion eligibility.
+The `adaptive-causal-v1` planner chooses the earliest feasible boundaries from
+distinct decision times. Each development row must have its exit and label
+available more than four hours before the next partition starts. Boundaries
+depend only on timing and sample counts, never returns, classes or model scores.
+This avoids empty partitions caused by fixed decision-time percentiles when
+outcomes have different holding periods. Equal decision times stay together.
+
+Later training cycles require a new holdout starting strictly after the previous
+holdout end plus four hours. The planner can move that start later to leave enough
+causal development data. Existing holdout reservations remain binding, and
+walk-forward research retains its separate chronological checks.
+
+For source/track datasets with at least 500 usable outcomes, `ml status` includes
+cached `partition_feasibility`: selected boundaries, counts before and after
+purging, shortfalls and the blocking partition. The worker computes these details
+while preparing data; normal status requests do not rescan feature payloads.
+`READY` means partition sizes are sufficient. Model fitting still requires both
+outcome classes in training and calibration and does not imply validated edge.
 Millions of recorded events do not substitute for complete, independent outcomes.
 `ml status` reports complete labels, recent worker activity, abstention reasons, and
 whether a compatible challenger exists. Network gaps can leave many labels incomplete.

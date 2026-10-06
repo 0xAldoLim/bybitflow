@@ -10,27 +10,192 @@ WEEK = 7 * 24 * HOUR
 BOUNDS = {"min_probability": (0.50, 0.60, 0.70), "min_quality": (65, 85, 95)}
 
 
-def partitions(rows, embargo_ms=4 * HOUR):
-    if not rows or len({r["id"] for r in rows}) != len(rows):
-        raise ValueError("Empty or duplicate dataset")
-    rows = sorted(rows, key=lambda r: r["decision_ms"])
-    times = sorted({r["decision_ms"] for r in rows})
-    if len(times) < 20:
-        raise ValueError("Insufficient distinct decision times")
-    boundaries = [times[int(len(times) * f)] for f in (0.50, 0.65, 0.80)]
-    groups = []
-    for lo, hi in zip([times[0], *boundaries], [*boundaries, float("inf")], strict=True):
-        groups.append(
-            [
-                r
-                for r in rows
-                if lo <= r["decision_ms"] < hi
-                and r["label"]["exit_ms"] + embargo_ms < hi
-                and r["label_available_ms"] + embargo_ms < hi
-            ]
+REQUIREMENTS = {"training": 200, "calibration": 100, "validation": 100, "holdout": 100}
+MINIMUM_TOTAL = 500
+PARTITION_POLICY = "adaptive-causal-v1"
+
+
+def _earliest_boundary(rows, times, lower, minimum, embargo_ms, ceiling, holdout_after=None):
+    """Heap sweep counts released labels without assuming monotonic availability."""
+    import heapq
+    from bisect import bisect_left, bisect_right
+
+    decisions = [row["decision_ms"] for row in rows]
+    index = bisect_left(decisions, lower)
+    released, waiting = 0, []
+    last = None
+    for upper in times[bisect_right(times, lower) : bisect_right(times, ceiling)]:
+        while index < len(rows) and rows[index]["decision_ms"] < upper:
+            row = rows[index]
+            heapq.heappush(waiting, max(row["label_available_ms"], row["label"]["exit_ms"]) + embargo_ms)
+            index += 1
+        while waiting and waiting[0] < upper:
+            heapq.heappop(waiting)
+            released += 1
+        last = upper
+        if released >= minimum and (holdout_after is None or upper > holdout_after):
+            return upper, upper
+    return None, last
+
+
+def _partition_plan(rows, previous_holdout_end, embargo_ms):
+    """Earliest boundaries dominate later ones by leaving larger future pools.
+
+    Moving a feasible training end earlier adds calibration candidates at every
+    possible calibration end. The earliest calibration end likewise adds
+    validation candidates, and the earliest validation end maximizes holdout.
+    This set-inclusion proof does not require sorted outcome availability.
+    Three heap sweeps plus sorting are bounded O(N log N); outcome values and
+    model performance never influence the boundaries.
+    """
+    import math
+    from time import time_ns
+
+    asof = time_ns() // 1_000_000
+    report = dict(
+        status="NOT_READY",
+        policy=PARTITION_POLICY,
+        asof_ms=asof,
+        total_rows=len(rows),
+        distinct_decision_times=0,
+        minimum_total=MINIMUM_TOTAL,
+        embargo_ms=embargo_ms,
+        requirements=dict(REQUIREMENTS),
+        chosen_boundaries=dict(train_end=None, calibration_end=None, validation_end=None),
+        counts={
+            "training_before_purge": 0,
+            "training_after_purge": 0,
+            "calibration_before_purge": 0,
+            "calibration_after_purge": 0,
+            "validation_before_purge": 0,
+            "validation_after_purge": 0,
+            "holdout": 0,
+        },
+        shortfall=dict(REQUIREMENTS),
+        blocker=None,
+        reason=None,
+    )
+    groups = [[], [], [], []]
+
+    def fail(blocker, detail=None):
+        report["blocker"] = blocker
+        counts = report["counts"]
+        for name, minimum in REQUIREMENTS.items():
+            amount = counts[name if name == "holdout" else name + "_after_purge"]
+            report["shortfall"][name] = max(0, minimum - amount)
+        hours = (
+            f"{embargo_ms / HOUR:g}"
+            if isinstance(embargo_ms, (int, float)) and math.isfinite(embargo_ms)
+            else "invalid"
         )
-    if any(not group for group in groups):
-        raise ValueError("Purging left an empty chronological partition")
+        summary = (
+            f"No causal 200/100/100/100 partition exists after {hours}h embargo: "
+            f"train={counts['training_after_purge']}, calibration={counts['calibration_after_purge']}, "
+            f"validation={counts['validation_after_purge']}, holdout={counts['holdout']}"
+        )
+        report["reason"] = (detail + "; " if detail else "") + summary
+        return report, groups
+
+    if not rows:
+        return fail("total", "Empty dataset; need >=500 complete unique outcomes")
+    if not isinstance(embargo_ms, (int, float)) or not math.isfinite(embargo_ms) or embargo_ms < 0:
+        report["embargo_ms"] = None
+        return fail("invalid_input", "Invalid embargo")
+    try:
+        ids = [row["id"] for row in rows]
+        identities = [row.get("candidate_identity") or row["id"] for row in rows]
+        if len(set(ids)) != len(rows) or len(set(identities)) != len(rows):
+            return fail("duplicate_identity", "Duplicate snapshot IDs or candidate identities")
+        sources = {row["source"] for row in rows if "source" in row}
+        if len(sources) > 1:
+            return fail("source", "Source-specific partitions required")
+        if previous_holdout_end is not None and (
+            not isinstance(previous_holdout_end, (int, float)) or not math.isfinite(previous_holdout_end)
+        ):
+            return fail("invalid_input", "Invalid previous holdout end")
+        for row in rows:
+            decision, available, exit_ms = (
+                row["decision_ms"],
+                row["label_available_ms"],
+                row["label"]["exit_ms"],
+            )
+            if (
+                row["label"].get("complete") is not True
+                or any(
+                    not isinstance(t, (int, float)) or not math.isfinite(t)
+                    for t in (decision, available, exit_ms)
+                )
+                or not decision < exit_ms <= available <= asof
+            ):
+                return fail("labels", "Incomplete, future or noncausal label timing")
+        rows = sorted(rows, key=lambda row: (row["decision_ms"], row["id"]))
+        times = sorted({row["decision_ms"] for row in rows})
+    except (KeyError, TypeError):
+        return fail("invalid_input", "Invalid partition metadata")
+    report["distinct_decision_times"] = len(times)
+    if len(rows) < MINIMUM_TOTAL:
+        return fail("total", "Need >=500 complete unique outcomes")
+    if len(times) < 20:
+        return fail("distinct_decision_times", "Insufficient distinct decision times; need >=20")
+
+    # Every boundary must leave a full holdout. Equal-time rows stay together,
+    # so the latest allowed distinct time may leave more than 100 suffix rows.
+    ceiling = rows[-REQUIREMENTS["holdout"]]["decision_ms"]
+    report["latest_feasible_holdout_start"] = ceiling
+    report["counts"]["holdout"] = sum(row["decision_ms"] >= ceiling for row in rows)
+    if previous_holdout_end is not None and ceiling <= previous_holdout_end + embargo_ms:
+        report["counts"]["holdout"] = sum(
+            row["decision_ms"] > previous_holdout_end + embargo_ms for row in rows
+        )
+        return fail("holdout", "Holdout period already consumed; new unseen outcomes required")
+    lower = times[0]
+    for index, (name, key) in enumerate(
+        (("training", "train_end"), ("calibration", "calibration_end"), ("validation", "validation_end"))
+    ):
+        holdout_after = (
+            previous_holdout_end + embargo_ms
+            if name == "validation" and previous_holdout_end is not None
+            else None
+        )
+        boundary, probe = _earliest_boundary(
+            rows, times, lower, REQUIREMENTS[name], embargo_ms, ceiling, holdout_after
+        )
+        if probe is not None:
+            before = [row for row in rows if lower <= row["decision_ms"] < probe]
+            groups[index] = [
+                row
+                for row in before
+                if max(row["label_available_ms"], row["label"]["exit_ms"]) + embargo_ms < probe
+            ]
+            report["counts"][name + "_before_purge"] = len(before)
+            report["counts"][name + "_after_purge"] = len(groups[index])
+        if boundary is None:
+            report["diagnostic_boundary"] = probe
+            return fail(name)
+        report["chosen_boundaries"][key] = boundary
+        lower = boundary
+    groups[3] = [row for row in rows if row["decision_ms"] >= lower]
+    report["counts"]["holdout"] = len(groups[3])
+    if len(groups[3]) < REQUIREMENTS["holdout"]:
+        return fail(
+            "holdout", "New unseen holdout outcomes required" if previous_holdout_end is not None else None
+        )
+    report.update(
+        status="READY", blocker=None, reason="Causal 200/100/100/100 chronological partitions ready"
+    )
+    report["shortfall"] = dict.fromkeys(REQUIREMENTS, 0)
+    return report, groups
+
+
+def partition_feasibility(rows, previous_holdout_end=None, embargo_ms=4 * HOUR):
+    """Pure bounded timing diagnostics; never inspects outcomes or fits models."""
+    return _partition_plan(rows, previous_holdout_end, embargo_ms)[0]
+
+
+def partitions(rows, embargo_ms=4 * HOUR):
+    report, groups = _partition_plan(rows, None, embargo_ms)
+    if report["status"] != "READY":
+        raise ValueError(report["reason"])
     return groups
 
 
@@ -63,32 +228,11 @@ def walk_forward(rows, folds=3, embargo_ms=4 * HOUR):
 
 
 def next_cycle_partitions(rows, previous_holdout_end, embargo_ms=4 * HOUR):
-    """A past holdout may become past training data; the new final holdout must be unseen."""
-    if previous_holdout_end is None:
-        return partitions(rows, embargo_ms)
-    rows = sorted(rows, key=lambda r: r["decision_ms"])
-    holdout = [r for r in rows if r["decision_ms"] > previous_holdout_end + embargo_ms]
-    if not holdout:
-        raise ValueError("Holdout period already consumed; new unseen outcomes required")
-    first = holdout[0]["decision_ms"]
-    development = [
-        r for r in rows if max(r["label_available_ms"], r["label"]["exit_ms"]) + embargo_ms < first
-    ]
-    times = sorted({r["decision_ms"] for r in development})
-    if len(times) < 20:
-        raise ValueError("Insufficient development history for next cycle")
-    a, b = times[int(len(times) * 0.625)], times[int(len(times) * 0.8125)]
-    groups = []
-    for lo, hi in zip((times[0], a, b), (a, b, first), strict=True):
-        groups.append(
-            [
-                r
-                for r in development
-                if lo <= r["decision_ms"] < hi
-                and max(r["label_available_ms"], r["label"]["exit_ms"]) + embargo_ms < hi
-            ]
-        )
-    return [*groups, holdout]
+    """Consumed holdouts may enter causal development; new holdout stays unseen."""
+    report, groups = _partition_plan(rows, previous_holdout_end, embargo_ms)
+    if report["status"] != "READY":
+        raise ValueError(report["reason"])
+    return groups
 
 
 def cluster_interval(rows, values, alpha=0.05, seed=7, replicates=1000):

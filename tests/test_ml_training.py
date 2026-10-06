@@ -56,8 +56,8 @@ def test_safe_json_prediction_parity_and_calibration(signal, kind):
 
 
 def test_purging_and_same_timestamp_grouping(signal):
-    rows = dataset(signal, 300)
-    rows[145]["label_available_ms"] = rows[170]["decision_ms"]
+    rows = dataset(signal, 700)
+    rows[145]["label_available_ms"] = rows[250]["decision_ms"]
     parts = partitions(rows)
     assert rows[145] not in parts[0]
     for a, b in zip(parts, parts[1:]):
@@ -70,7 +70,7 @@ def test_purging_and_same_timestamp_grouping(signal):
 
 
 def test_new_cycle_never_reuses_old_holdout(signal):
-    rows = dataset(signal, 500)
+    rows = dataset(signal, 700)
     consumed = rows[350]["label_available_ms"]
     tr, ca, va, ho = next_cycle_partitions(rows, consumed)
     assert all(r["decision_ms"] > consumed + 4 * HOUR for r in ho)
@@ -78,8 +78,25 @@ def test_new_cycle_never_reuses_old_holdout(signal):
     assert not {r["id"] for r in ho} & {r["id"] for r in tr + ca + va}
 
 
-def test_reproducible_training_registry_holdout_and_no_fake_promotion(settings, signal):
+def test_reproducible_training_registry_holdout_and_no_fake_promotion(settings, signal, monkeypatch):
+    from bybit_flow.ml import training
+
     rows = dataset(signal)
+    # Reverse ID order at a shared decision time; no tied holdout observation
+    # may enter walk-forward research through an input-order list slice.
+    boundary = partitions(rows)[3][0]["decision_ms"]
+    first = next(i for i, row in enumerate(rows) if row["decision_ms"] == boundary)
+    rows[first + 1]["decision_ms"] = boundary
+    rows[first + 1]["feature_metadata"] = rows[first]["feature_metadata"]
+    rows[first]["id"], rows[first + 1]["id"] = "z-holdout", "a-holdout"
+    research_inputs = []
+    original_walk_forward = training.walk_forward
+
+    def observed_walk_forward(development):
+        research_inputs.extend(development)
+        return original_walk_forward(development)
+
+    monkeypatch.setattr(training, "walk_forward", observed_walk_forward)
     path = settings.data_dir / "synthetic.parquet"
     pq.write_table(pa.Table.from_pylist([{"payload": canonical(r)} for r in rows]), path)
     store = Store(settings.data_dir)
@@ -89,6 +106,9 @@ def test_reproducible_training_registry_holdout_and_no_fake_promotion(settings, 
     assert result["report"]["out_of_sample"]
     assert result["model"]["kind"] == "logistic"
     assert len(result["report"]["experiments"]) == 3
+    assert research_inputs
+    assert all(row["decision_ms"] < result["periods"]["holdout"]["start"] for row in research_inputs)
+    assert result["training_spec"]["partition_planner"] == "adaptive-causal-v1"
     with pytest.raises(ValueError, match="real data"):
         registry.promote(result["id"], "test reviewer")
     assert registry.champion() is None

@@ -442,6 +442,8 @@ def dataset(store, source, asof_ms=None):
 
 
 def readiness(store, asof_ms=None):
+    from .operations import cache_partition_feasibility
+
     result = {}
     asof = asof_ms or now_ms()
     for source in ("binance", "bybit", "okx"):
@@ -452,7 +454,8 @@ def readiness(store, asof_ms=None):
             (POLICY, source),
         ).fetchall():
             counts[row[0]] = row[1]
-        count = len(dataset(store, source, asof_ms))
+        rows = dataset(store, source, asof)
+        count = len(rows)
         complete_unique = store.db.execute(
             "SELECT count(DISTINCT coalesce(c.candidate_identity,s.signal_id)) FROM ml_labels l "
             "JOIN ml_snapshots s ON s.id=l.snapshot_id LEFT JOIN candidate_identities c ON c.signal_id=s.signal_id "
@@ -472,6 +475,10 @@ def readiness(store, asof_ms=None):
             schema=SCHEMA,
             label_policy=POLICY,
         )
+        if count >= MINIMUM:
+            result[source]["partition_feasibility"] = cache_partition_feasibility(
+                store, rows, "bootstrap", source, SCHEMA, POLICY, asof
+            )
     return result
 
 

@@ -67,7 +67,7 @@ def read_dataset(path, max_rows=10_000, track="primary"):
             for meta in row["feature_metadata"].values()
         ):
             raise ValueError("Future feature leakage")
-    return sorted(rows, key=lambda r: r["decision_ms"])
+    return sorted(rows, key=lambda r: (r["decision_ms"], r["id"]))
 
 
 def train(store, path, kinds=("logistic", "lightgbm"), calibration="sigmoid", track="primary"):
@@ -100,9 +100,12 @@ def _train(store, path, kinds, calibration, track):
             raise ValueError(
                 f"Two-stage models need >=500 complete outcomes with 16-observation sequences; available {len(rows)}"
             )
-    previous_end = store.db.execute(
-        "SELECT MAX(end_ms) FROM ml_holdouts WHERE scope IN (?,?)", scopes
-    ).fetchone()[0]
+    from .operations import cache_partition_feasibility
+
+    partition_plan = cache_partition_feasibility(store, rows, track, rows[0]["source"], schema, label_policy)
+    previous_end = partition_plan["previous_holdout_end"]
+    if partition_plan["status"] != "READY":
+        raise ValueError(partition_plan["reason"])
     train_rows, cal_rows, validation, holdout = next_cycle_partitions(rows, previous_end)
     if len(train_rows) < 200 or len(cal_rows) < 100 or len(validation) < 100 or len(holdout) < 100:
         raise ValueError("Need >=200 train, 100 independent calibration, 100 validation, 100 holdout labels")
@@ -170,7 +173,8 @@ def _train(store, path, kinds, calibration, track):
     ]
     incremental_ci, _ = cluster_interval(holdout, differences, alpha=0.05 / max(1, len(reports) * 9))
     wf = []
-    for tr, ca, te in walk_forward(rows[: rows.index(holdout[0])]):
+    development = [r for r in rows if r["decision_ms"] < holdout[0]["decision_ms"]]
+    for tr, ca, te in walk_forward(development):
         try:
             m, _ = fit(tr, winner["kind"], winner["excluded"])
             calibrate(m, ca, calibration)
@@ -202,6 +206,7 @@ def _train(store, path, kinds, calibration, track):
         )
         context_groups[key].append(row)
     report = dict(
+        partition_feasibility=partition_plan,
         sequence_excluded=sequence_excluded,
         out_of_sample=True,
         holdout=final,
@@ -278,7 +283,9 @@ def _train(store, path, kinds, calibration, track):
             threads=1,
             calibration=calibration,
             embargo_ms=14_400_000,
-            partitions=[0.50, 0.15, 0.15, 0.20],
+            partition_planner="adaptive-causal-v1",
+            partition_requirements=partition_plan["requirements"],
+            partition_boundaries=partition_plan["chosen_boundaries"],
             label_policies=sorted({r["label"].get("policy", "unknown") for r in rows}),
         ),
         periods={

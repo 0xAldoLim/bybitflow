@@ -250,9 +250,9 @@ class Registry:
             ).fetchone()[0],
             history=[dict(r) for r in self.db.execute("SELECT * FROM ml_history ORDER BY id DESC LIMIT 100")],
         )
-        from .bootstrap import readiness
         from .operations import status
 
-        result["bootstrap_trainability"] = readiness(self.store)
-        self.store.put("ml_bootstrap_trainability", result["bootstrap_trainability"])
+        # Only the worker materializes readiness/plans from feature datasets.
+        # Normal CLI/API status consumes its bounded cached diagnostics.
+        result["bootstrap_trainability"] = self.store.get("ml_bootstrap_trainability", {})
         return result | status(self.store, result, enabled)

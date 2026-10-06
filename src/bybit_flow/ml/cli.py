@@ -213,6 +213,9 @@ def train_ready(settings, store, manual=False):
                 result.pop("reason", None)
             except Exception as exc:
                 result.update(status="abstained", reason=str(exc))
+            plan = store.get(f"ml_partition_feasibility:{track}:{source}:{schema}:{policy}")
+            if plan:
+                result["partition_feasibility"] = plan
             store.put(key, result)
             results[track + ":" + source] = result
     state = (
@@ -222,7 +225,15 @@ def train_ready(settings, store, manual=False):
         if results
         else "collecting"
     )
-    return dict(at_ms=now_ms(), status=state, tracks=results)
+    result = dict(at_ms=now_ms(), status=state, tracks=results)
+    reasons = [
+        f"{track}: {detail['reason']}"
+        for track, detail in results.items()
+        if detail["status"] == "abstained" and detail.get("reason")
+    ]
+    if reasons:
+        result["reason"] = "; ".join(reasons)
+    return result
 
 
 def worker_step(settings, store, first_monitor=False, manual=False):

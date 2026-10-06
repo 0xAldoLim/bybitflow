@@ -44,6 +44,48 @@ def abstain(store, now, reason):
     store.put("ml_abstentions", {k: v for k, v in buckets.items() if int(k) >= now - 3600000})
 
 
+def cache_partition_feasibility(store, rows, track, source, schema, policy, asof_ms=None):
+    """Plan already-loaded worker rows; operator views only read the small result."""
+    from .validation import partition_feasibility
+
+    scope = "|".join((track, source, schema, policy))
+    scopes = (scope, "legacy-primary") if track == "primary" else (scope, scope)
+    previous_end = store.db.execute(
+        "SELECT MAX(end_ms) FROM ml_holdouts WHERE scope IN (?,?)", scopes
+    ).fetchone()[0]
+    report = partition_feasibility(rows, previous_holdout_end=previous_end) | dict(
+        at_ms=asof_ms or now_ms(),
+        track=track,
+        source=source,
+        schema=schema,
+        policy=policy,
+        previous_holdout_end=previous_end,
+        training_window_limit=10_000,
+    )
+    store.put(f"ml_partition_feasibility:{track}:{source}:{schema}:{policy}", report)
+    return report
+
+
+def partition_status(store, primary, bootstrap):
+    """Expose source/track-specific cached plans without reading feature payloads."""
+    from . import SCHEMA_VERSION
+
+    result = {"primary": {}, "bootstrap": {}}
+    for track, sources in (("primary", primary), ("bootstrap", bootstrap)):
+        schema, policy = (
+            (SCHEMA_VERSION, "prints-v1") if track == "primary" else ("bootstrap-core-v1", "ohlc-path-v1")
+        )
+        for source, detail in sources.items():
+            count = detail.get("baseline_trainable" if track == "primary" else "trainable", 0)
+            if source not in {"binance", "bybit", "okx"} or count < 500:
+                continue
+            report = store.get(f"ml_partition_feasibility:{track}:{source}:{schema}:{policy}", {})
+            result[track][source] = report or dict(
+                status="AWAITING_WORKER_PLAN", total_rows=count, track=track, source=source
+            )
+    return result
+
+
 def trainability(store, asof_ms=None):
     """Cache-ready counts from bounded scalar pages, never sorting feature payloads."""
     from . import SCHEMA_VERSION
@@ -51,7 +93,15 @@ def trainability(store, asof_ms=None):
     asof_ms = asof_ms or now_ms()
     active_source = store.get("runtime_health", {}).get("source")
     sources = {
-        name: dict(decisions=0, identities=set(), complete=0, unique=set(), current=set(), sequence=set())
+        name: dict(
+            decisions=0,
+            identities=set(),
+            complete=0,
+            unique=set(),
+            current=set(),
+            sequence=set(),
+            planning_rows={},
+        )
         for name in ("binance", "bybit", "okx")
     }
     excluded = dict.fromkeys(
@@ -146,6 +196,20 @@ def trainability(store, asof_ms=None):
             bucket["unique"].add(identity)
             if schema == SCHEMA_VERSION:
                 bucket["current"].add(identity)
+                # The latest causal row represents each identity, matching the
+                # source/schema-specific export's bounded 10,000-row window.
+                planning = bucket["planning_rows"]
+                planning.pop(identity, None)
+                planning[identity] = dict(
+                    id=ident,
+                    candidate_identity=identity,
+                    source=source,
+                    decision_ms=decision,
+                    label_available_ms=available,
+                    label=dict(complete=True, net_r=net_r, exit_ms=exit_ms),
+                )
+                if len(planning) > 10_000:
+                    del planning[next(iter(planning))]
                 if sequence == 16:
                     bucket["sequence"].add(identity)
         if len(rows) < 1000:
@@ -169,6 +233,16 @@ def trainability(store, asof_ms=None):
             two_stage_sequence_ready=sequence_ready,
             two_stage_ready=sequence_ready >= 500,
         )
+        if trainable >= 500:
+            by_source[name]["partition_feasibility"] = cache_partition_feasibility(
+                store,
+                list(bucket["planning_rows"].values()),
+                "primary",
+                name,
+                SCHEMA_VERSION,
+                "prints-v1",
+                asof_ms,
+            )
     return dict(
         at_ms=asof_ms,
         current_schema=SCHEMA_VERSION,
@@ -257,9 +331,18 @@ def status(store, summary, enabled=True):
         sequence_outcomes=sum(v["sequence_ready_16"] for v in readiness["by_source"].values()),
         last_training_ms=cycle.get("at_ms"),
         last_training_result=cycle,
-        last_training_reason=cycle.get("reason"),
+        last_training_reason=cycle.get("reason")
+        or "; ".join(
+            f"{track}: {result['reason']}"
+            for track, result in cycle.get("tracks", {}).items()
+            if result.get("status") == "abstained" and result.get("reason")
+        )
+        or None,
         latest_model_id=latest_model_id[0] if latest_model_id else None,
         ml_trainability=readiness,
+        partition_feasibility=partition_status(
+            store, readiness["by_source"], store.get("ml_bootstrap_trainability", {})
+        ),
         trainable_current_schema=sum(v["trainable_current_schema"] for v in readiness["by_source"].values()),
         unique_trainable_candidates=sum(
             v["trainable_current_schema"] for v in readiness["by_source"].values()
