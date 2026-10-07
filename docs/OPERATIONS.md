@@ -109,6 +109,27 @@ Current assumed-cost print labels cannot meet verified-cost promotion requiremen
 Bootstrap OHLC-proxy models can never become champions or filter delivery. There
 is no automatic model promotion, strategy tuning, or threshold optimization.
 
+### Scanner running but no new trading cards
+
+Use `bybit-flow signals status` in the desk container to inspect recent candidate,
+confirmation, rejection, V8 and delivery counts. Repeated confirmation windows
+are attempts, not independent setups; rejection counts can overlap. Check
+`bybit-flow doctor` for the actual selected-market feed state. A healthy recorder
+or REST probe does not establish a healthy trade or order-book WebSocket.
+
+Candidate refresh checks readiness after candle I/O, and each candidate's
+confirmation checks use its current evaluation time. Live receipts can advance
+while earlier candidates await analysis; they must not be compared against an
+obsolete batch timestamp and misclassified as future or stale data. The normal
+book/trade stale limits and all strategy gates still apply.
+
+When confirmed, alert-claimed and HTTP-attempt counts are all zero, qualification
+has stopped before delivery. An empty primary ML cohort does not block the
+deterministic production policy: its ML output is advisory. When HTTP attempts
+exist, inspect durable outbox statuses and message IDs before retrying anything.
+Do not lower strategy gates, fabricate a signal or clear delivery history to
+test connectivity; use the separately labeled connection-test command.
+
 ## Dependencies and licenses
 
 Application source is MIT. Direct runtime libraries include FastAPI, Uvicorn, HTTPX,

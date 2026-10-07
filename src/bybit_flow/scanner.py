@@ -249,6 +249,8 @@ class Scanner:
                 h4 = await self.cached_candles(symbol, "240", now, 160)
                 h1 = await self.cached_candles(symbol, "60", now, 200)
                 m15 = await self.cached_candles(symbol, "15", now, 120)
+                # History I/O can yield to live receipts; readiness uses availability.
+                now = now_ms()
                 self.context[symbol] = c | {"h4": h4, "h1": h1, "m15": m15, "asof": now}
                 if self.settings.execution_window_seconds < 900:
                     self.save_candidates(c["instrument"], h4, h1, m15, now)
@@ -1316,6 +1318,9 @@ class Scanner:
         )
         for payload in self.store.active_signals():
             s = Signal.model_validate(payload)
+            # Feed callbacks advance receipts while earlier candidates await flow
+            # calculations. Assess this candidate against the current clock.
+            now = now_ms()
             if s.source == "tradingview":
                 continue  # Legacy chart rows are retired at startup, not live-monitored.
             if s.state in TERMINAL:
