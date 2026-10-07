@@ -52,7 +52,9 @@ become training data.
 Raw decoding is limited to candidate windows and shared across candidates, with
 hard limits of 1,500 segments, 3 million envelopes and 384 MB of compressed data
 per invocation. Budget exhaustion, safely pruned files and unverifiable evidence
-remain unknown; they do not prove either a false label or retention loss. Narrow
+remain unknown; they do not prove either a false label or retention loss.
+Raw presence is reported separately from successful integrity verification, so
+budget exhaustion does not mark an existing file or archive as missing. Narrow
 the source, horizon, date or candidate limit for another audit. Integrity failures
 cannot produce a complete reconstructed result. No raw payload is copied into
 SQLite. The audit function performs no writes; the CLI saves only its compact

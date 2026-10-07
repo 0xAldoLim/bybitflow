@@ -164,8 +164,11 @@ class EvidenceReader:
         if ident in self.cache:
             self.cache.move_to_end(ident)
             return self.cache[ident]
-        value = dict(rows=[], valid=False, present=False, reason=None, tombstone=tombstone)
         path = Path(manifest["raw"])
+        present = not tombstone and (
+            path.is_file() or (ident in self.packs and Path(self.packs[ident]).is_file())
+        )
+        value = dict(rows=[], valid=False, present=bool(present), reason=None, tombstone=tombstone)
         known = self.exclusions.get(ident)
         if known and (known.get("sha256"), known.get("start"), known.get("end")) != (
             manifest["sha256"],
@@ -177,7 +180,7 @@ class EvidenceReader:
             value["reason"] = (
                 known["reason"] if known else "raw safely released; original cause not reconstructable"
             )
-        elif not path.exists() and ident not in self.packs:
+        elif not present:
             value["reason"] = "committed raw missing without a retention tombstone"
         elif self.segments >= self.max_segments or self.rows >= self.max_rows or self.bytes >= self.max_bytes:
             self.exhausted = True

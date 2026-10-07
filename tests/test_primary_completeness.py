@@ -287,6 +287,18 @@ def test_clock_damage_and_bounded_audit_never_invent_completion(settings, signal
     store.close()
 
 
+def test_budget_limit_does_not_report_present_raw_as_absent(settings, signal):
+    store, recorder, _ = ready_candidate(settings, signal)
+    recorder.flush([trade(1500), trade(5000, 116)])
+    report = audit_completeness(store, settings, asof_ms=20_000_000, max_segments=0)
+    row = report["recent_candidates"][0]
+    assert row["raw_evidence_present"] is True
+    assert not row["reconstruction_complete"]
+    assert row["audit_class"] == "UNKNOWN_INCOMPLETE"
+    assert report["forensic_budget"]["decoded_segments"] == 0
+    store.close()
+
+
 def test_pruned_clock_damage_uses_verified_audit_not_an_invented_trade_gap(settings, signal):
     store, recorder, ident = ready_candidate(settings, signal)
     recorder.flush([trade(1500), event(2000), event(1900), trade(5000, 116)])
