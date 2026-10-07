@@ -357,6 +357,7 @@ def status(store, summary, enabled=True):
         or None,
         latest_model_id=latest_model_id[0] if latest_model_id else None,
         ml_trainability=readiness,
+        primary_data_quality=store.get("primary_data_quality", {}),
         partition_feasibility=partition_status(
             store, readiness["by_source"], store.get("ml_bootstrap_trainability", {})
         ),

@@ -48,6 +48,10 @@ def migrate(db):
       ON ml_snapshots(signal_id,stage,decision_ms);
     CREATE INDEX IF NOT EXISTS ml_snapshot_original_lookup
       ON ml_snapshots(signal_id,stage,decision_ms,id);
+    CREATE INDEX IF NOT EXISTS ml_completeness_cohort ON ml_snapshots(
+      stage,schema_version,decision_ms DESC,id);
+    CREATE INDEX IF NOT EXISTS segments_receipt_window ON segments(
+      json_extract(payload,'$.max_receipt_ms'),json_extract(payload,'$.min_receipt_ms'));
     CREATE INDEX IF NOT EXISTS ml_sequence_lookup ON ml_snapshots(
       json_extract(payload,'$.source'), json_extract(payload,'$.signal.symbol'),
       json_extract(payload,'$.signal.family'), json_extract(payload,'$.signal.direction'), decision_ms DESC
@@ -83,6 +87,16 @@ class FeatureStore:
                 membership = None  # Another venue's current liquidity is not this candidate's history.
         row = snapshot(signal, at_ms, stage, membership)
         if stage == "decision":
+            from ..config import Settings
+            from .coverage import eligibility
+
+            row["primary_ml_eligibility"] = eligibility(
+                self.store,
+                signal.source,
+                signal.symbol,
+                at_ms,
+                Settings.model_fields["trade_stale_ms"].default,
+            )
             from .stacking import SEQUENCE_KEYS
 
             history = self.db.execute(

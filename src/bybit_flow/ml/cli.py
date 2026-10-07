@@ -58,6 +58,7 @@ def cycle(settings, store, source_override=None):
 
 def monitor(settings, store):
     """Resolve paper labels and check drift independently of the weekly fit cadence."""
+    from .completeness import cache_readiness
     from .drift import check
     from .labels import close_pre_retention_decisions, label_recordings
     from .recordings import worker_rows
@@ -115,6 +116,7 @@ def monitor(settings, store):
     if result["status"] == "observed":
         result["last_success_ms"] = now_ms()
     store.put("ml_monitor", result)
+    cache_readiness(store)
     from ..retention import prune_recordings
 
     # Reclaim consumed recordings gradually while under budget. Pressure cleanup
@@ -297,6 +299,14 @@ def run(arguments, settings, store):
     sub.add_parser("status")
     sub.add_parser("cycle")
     sub.add_parser("worker")
+    audit = sub.add_parser("audit-completeness", help="Bounded read-only primary outcome forensics")
+    audit.add_argument("--source", choices=("binance", "bybit", "okx", "all"), default="all")
+    audit.add_argument("--limit", type=int, default=200)
+    audit.add_argument("--days", type=int)
+    audit.add_argument(
+        "--horizon", choices=("SHORT_INTRADAY", "CORE_INTRADAY", "SWING", "EXTENDED_SWING", "LEGACY")
+    )
+    audit.add_argument("--json", action="store_true")
     maturity = sub.add_parser("maturity-start", help="Record the final verified deployment epoch once")
     maturity.add_argument("--code-commit", required=True)
     for name in ("bootstrap-labels", "bootstrap-export", "bootstrap-train"):
@@ -310,7 +320,16 @@ def run(arguments, settings, store):
     drift.add_argument("model_id")
     args = parser.parse_args(arguments)
     registry = Registry(store)
-    if args.command == "maturity-start":
+    if args.command == "audit-completeness":
+        from .completeness import audit_completeness, cache_readiness, cache_report, human_report
+
+        result = audit_completeness(store, settings, args.source, args.limit, args.days, args.horizon)
+        cache_report(store, result)
+        cache_readiness(store)
+        if not args.json:
+            print(human_report(result))
+            return
+    elif args.command == "maturity-start":
         from .maturity import start_epoch
 
         result = start_epoch(store, args.code_commit)

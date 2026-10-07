@@ -13,6 +13,8 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+RECEIPT_QUANTIZATION_MS = 1
+
 
 def now_ms():
     return time.time_ns() // 1_000_000
@@ -296,6 +298,8 @@ class Recorder:
         self.state = "NORMAL"
         self.retries = 0
         self.gaps = {}
+        self.last_offered_receipt_ms = None
+        self.receipt_clock_adjustments = 0
         from collections import deque
 
         self.enqueued = deque(maxlen=120)
@@ -336,23 +340,40 @@ class Recorder:
             last_error_type=self.last_error_type,
             last_error_ms=self.last_error_ms,
             retries=self.retries,
+            receipt_clock_adjustments=self.receipt_clock_adjustments,
         )
 
-    def _gap(self, symbol, at, reason):
+    def _gap(self, source, symbol, at, reason):
+        from .ml.coverage import market_source
+
         self.events_dropped += 1
-        gap = self.gaps.setdefault(symbol, dict(coverage_gap=True, gap_start_ms=at, reason=reason))
+        venue, _ = market_source(source)
+        gap = self.gaps.setdefault(
+            (venue, symbol),
+            dict(coverage_gap=True, gap_start_ms=at, reason=reason, source=venue, dropped_events=0),
+        )
         gap["gap_end_ms"] = at
+        gap["dropped_events"] += 1
 
     def offer(self, source, symbol, event_ms, payload, receipt_ms=None, complete=True):
         # Producer performs no filesystem or SQLite operations.
-        receipt = receipt_ms or now_ms()
+        receipt = receipt_ms if receipt_ms is not None else now_ms()
+        observed_receipt = receipt
+        # Admission time is ordered separately from the observed wall clock.
+        # Recorded 1 ms clock quantization reversals must not reorder new envelopes.
+        # Keep the original clock reading; larger reversals still fail strict replay.
+        if (
+            self.last_offered_receipt_ms is not None
+            and 0 < self.last_offered_receipt_ms - receipt <= RECEIPT_QUANTIZATION_MS
+        ):
+            receipt = self.last_offered_receipt_ms
         optional = symbol not in self.critical_symbols and "control/" not in source
         pressure = max(
             self.queue.qsize() / self.queue.maxsize, self.pending_bytes / self.settings.queue_byte_limit
         )
         if pressure >= 0.7 and optional:
             self.state = "RECORDER_BACKPRESSURE"
-            self._gap(symbol, receipt, "RECORDER_BACKPRESSURE")
+            self._gap(source, symbol, receipt, "RECORDER_BACKPRESSURE")
             return False
         before = time.monotonic()
         row = dict(
@@ -364,12 +385,17 @@ class Recorder:
             complete=complete,
             payload=json.dumps(payload, separators=(",", ":")),
         )
+        if receipt != observed_receipt:
+            row["observed_receipt_ms"] = observed_receipt
+            row["receipt_clock_adjustment_ms"] = receipt - observed_receipt
         self.serialization_ms = (time.monotonic() - before) * 1000
         size = len(row["payload"].encode()) + 256
         try:
             if self.pending_bytes + size > self.settings.queue_byte_limit:
                 raise asyncio.QueueFull
             self.queue.put_nowait(row)
+            self.last_offered_receipt_ms = receipt
+            self.receipt_clock_adjustments += receipt != observed_receipt
             self.pending_bytes += size
             self.queue_high_watermark = max(self.queue_high_watermark, self.queue.qsize())
             self._count_rate(self.enqueued, 1)
@@ -380,7 +406,7 @@ class Recorder:
             self.last_error_type = "QueueFull"
             self.healthy, self.reason = False, "recording queue overflow; collection continuity lost"
             self.state = "RECORDER_BACKPRESSURE"
-            self._gap(symbol, receipt, "RECORDER_BACKPRESSURE")
+            self._gap(source, symbol, receipt, "RECORDER_BACKPRESSURE")
             raise RuntimeError(self.reason) from None
 
     def flush(self, batch, store=None, ident=None):
@@ -448,6 +474,9 @@ class Recorder:
                 "INSERT OR REPLACE INTO kv VALUES('last_segment',?)",
                 (json.dumps({"id": ident, "sha256": digest}),),
             )
+            from .ml.coverage import update_coverage
+
+            update_coverage(store, batch, self.settings.trade_stale_ms)
             from .funnel import emit
 
             emit(store, "recorded_events", now_ms(), key="segment:" + ident, amount=len(batch))
@@ -494,11 +523,11 @@ class Recorder:
                         gaps = {}
                         if batch_id is None:
                             gaps, self.gaps = self.gaps, {}
-                        for symbol, gap in gaps.items():
+                        for (venue, symbol), gap in gaps.items():
                             # Appended controls mark the whole affected interval as incomplete.
                             batch.append(
                                 dict(
-                                    source="control/gap",
+                                    source=f"native/{venue}/control/gap",
                                     symbol=symbol,
                                     event_ms=batch[-1]["event_ms"],
                                     receipt_ms=batch[-1]["receipt_ms"],

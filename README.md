@@ -289,6 +289,7 @@ Stop/update commands preserve the volume and original active plans. Do not use
 
 - [Operator guide](docs/USER_RUNBOOK.md): configuration, horizons, troubleshooting, and backups.
 - [ML research](docs/ML_RESEARCH.md): labels, algorithms, partitions, readiness, and maturity policy.
+- [Primary completeness](docs/PRIMARY_COMPLETENESS.md): coverage forensics, eligibility, and completion rates.
 - [Scoring](docs/SCORING.md): grade bands and evidence rubric.
 - [Asset facts](docs/ASSET_FACTS.md): sourced research and instrument selection.
 - [Operations](docs/OPERATIONS.md): deployment, retention, and delivery semantics.

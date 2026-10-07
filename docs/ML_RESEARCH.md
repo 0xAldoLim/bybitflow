@@ -25,6 +25,11 @@ audited global gaps. Original files and packs remain unchanged. Hash and manifes
 mismatches on readable evidence halt processing.
 Strict explicit replay continues to reject unordered input.
 
+Use the [primary completeness audit](PRIMARY_COMPLETENESS.md) to distinguish
+unready decisions, genuine evidence gaps, duplicates, open horizons and
+unverifiable historical recordings. `ml audit-completeness` performs bounded
+read-only reconstruction; `ml status` shows its cached quality summary.
+
 Snapshot queries materialize a bounded result before yielding. This releases SQLite
 read cursors before concurrent recorder commits and subsequent ML writes.
 
