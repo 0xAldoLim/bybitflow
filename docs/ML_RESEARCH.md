@@ -1,5 +1,10 @@
 # ML research
 
+For installation and everyday operation, use the [README](../README.md). For clock,
+disk, Docker, or feed problems, use [operator troubleshooting](USER_RUNBOOK.md#troubleshooting).
+This guide describes the implemented research pipeline, not the current runtime's
+model count or data readiness; inspect `bybit-flow ml status` for those values.
+
 ## Collection and labels
 
 Current feature schema `candidate-v10` stores immutable generation snapshots and the first
@@ -35,7 +40,8 @@ docker compose exec trainer bybit-flow ml status
 ```
 
 The worker monitors outcomes every 15 minutes. Each source and training track
-starts its first fit on the next loop after reaching 500 usable outcomes. Failed
+starts its first fit on the next loop after reaching 500 usable outcomes and
+meeting causal partition and class requirements. Failed
 fits retry after 15 minutes or a change in the usable count. After a successful
 fit, another cycle needs 50 new outcomes or seven days. A manual cycle can also
 request a fit. Chronological partitions can still leave too few samples; the
@@ -85,22 +91,32 @@ shows “Bootstrap score / 100”, “OHLC-proxy historical challenger” and
 stop or targets, filter delivery, display a validated probability or become a
 champion—even with a named reviewer. A compatible primary model takes priority.
 
-From CMD in the repository directory, inspect or run bounded resumable work:
+The worker already runs bounded resumable backfill automatically. From CMD in
+the repository directory, inspect its status or preview a backfill batch:
 
 ```bat
 docker compose exec trainer bybit-flow ml bootstrap-labels --source binance --limit 500 --resume --dry-run
-docker compose exec trainer bybit-flow ml bootstrap-labels --source binance --limit 500 --resume
-docker compose exec trainer bybit-flow ml bootstrap-export --source binance
-docker compose exec trainer bybit-flow ml bootstrap-train --source binance
 docker compose exec trainer bybit-flow ml status
 ```
 
-Use `bybit` or `okx` only for candidates frozen on that venue. The worker already
-runs bounded backfill automatically. Overlapping symbol ranges are merged, REST
+Use `bybit` or `okx` only for candidates frozen on that venue. Overlapping symbol ranges are merged, REST
 requests use an independent one-request-per-second limiter and bounded retries,
 and progress survives restarts. A small Zstandard Parquet candle cache can be
-reclaimed after labels are durable. Run manual fitting with the worker stopped
-to avoid competing experiments.
+reclaimed after labels are durable. Manual fitting is an advanced operation:
+stop the persistent trainer first, use a one-off container, and resume it afterward.
+The following requests a bounded cycle; it can legitimately abstain on missing
+classes, unseen holdout shortage, or storage pressure:
+
+```bat
+docker compose --profile ml stop trainer
+docker compose --profile ml run --rm --no-deps trainer bybit-flow ml cycle
+docker compose --profile ml up -d trainer
+```
+
+Always run the resume command even if the manual cycle reports a failure. Do not
+use manual cycles to reuse holdouts or bypass compatibility checks. Separate
+`bootstrap-export` and `bootstrap-train` commands are available in the ML CLI;
+fitting should not compete with the running worker.
 
 ## Storage and replay checkpoints
 
@@ -119,8 +135,8 @@ protected intervals and checkpoint boundaries; storage pressure cannot be
 described as healthy merely because the worker heartbeat is fresh. SQLite busy
 writes retry briefly and defer the worker loop without a crash/restart cycle.
 
-For a Windows deployment of this repair, PowerShell 7 can run the checked script
-from CMD in the repository directory:
+For a CI-gated Windows deployment, install PowerShell 7 and Git, then run the
+checked script from CMD in a clean `main` checkout with the desk already running:
 
 ```bat
 pwsh -NoProfile -File scripts\deploy_ml_bootstrap.ps1
@@ -277,9 +293,9 @@ Chronological partitions and class requirements remain unchanged. Feature schema
 remain immutable and incompatible schemas are not silently pooled for training.
 Advisory inference skips incompatible or degraded artifacts. Models are never
 automatically promoted, and deterministic setup scores are not replaced by ML scores.
-The V7.1 flow confirmation mode remains signal provenance. V8.1 bumps the schema once from v9 to v10; historical v9 remains unchanged;
-primary training needs enough completed, source-specific `candidate-v10` outcomes and
-never rewrites historical decision features. Historical bootstrap labels use the separate
+Flow confirmation mode remains signal provenance. Historical v9 snapshots remain
+unchanged; primary training needs enough completed, source-specific `candidate-v10`
+outcomes and never rewrites historical decision features. Historical bootstrap labels use the separate
 `ohlc-path-v1` policy. `python -m bybit_flow.ml.ablation --source binance`
 reports insufficient evidence until at least 500 compatible outcomes exist. Holdout
 consumption requires an explicit offline `--consume-holdout` run and is irreversible

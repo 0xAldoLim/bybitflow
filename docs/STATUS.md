@@ -5,7 +5,7 @@
 - Public REST and WebSocket adapters for Binance, Bybit, and OKX.
 - Automatic source selection, fixed-source operation, and bounded multi-source comparison.
 - Four deterministic setup families with closed-bar features and executed-flow confirmation.
-- SSS–D research alerts with entry zone, stop-loss, TP1/TP2, lifecycle, and deduplication.
+- SSS–F research alerts with entry zone, stop-loss, TP1/TP2, lifecycle, and deduplication.
 - Source-attributed asset facts with knowledge, collection, and expiry timestamps.
 - Bounded recording, integrity manifests, source-separated paper labels, and audited clock gaps.
 - Optional ML collection, challenger training, ranking, drift checks, and guarded promotion.

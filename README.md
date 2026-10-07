@@ -1,411 +1,297 @@
 # BybitFlow
 
-BybitFlow monitors crypto perpetual markets and sends Discord alerts when a setup
-passes price-action, order-flow, liquidity and risk checks. Each alert includes a
-direction, entry zone, stop loss and two targets. It does not place orders.
+BybitFlow monitors public crypto perpetual-market data and sends confirmed research
+setups to Discord. Cards include LONG or SHORT, quality grade, entry zone, stop
+loss, TP1, TP2, entry deadline, and holding horizon. It does not place orders or
+read trading-account fills. Quality scores and ML rankings are not validated win
+probabilities.
 
-The engine evaluates **short intraday (15 minutes–2 hours), core intraday
-(1–4 hours), swing (4–48 hours), and extended swing (2–7 days)** profiles using
-shared market feeds. Extended swing initially runs as shadow research. Core
-intraday preserves the original 4H/1H/15M strategy. A 60-second flow window is an
-entry-confirmation window, not a one-minute holding period. Grades run from SSS
-to F; the combined hand-engineered quality score is not a win probability.
+The application includes a local dashboard, recorded order-flow evidence,
+independent setup monitoring, managed recording retention, and a background ML
+worker. Binance, Bybit, and OKX REST and WebSocket adapters are implemented.
+Automatic source selection uses one working primary venue; ML outcomes remain
+separate by source.
 
-Existing setups retain their original plan, score and lifecycle. Operationally
-expired signals can continue lightweight research observation, but a late target
-never changes an expired trade into a historical win. See the
-[horizon and expiry guide](docs/USER_RUNBOOK.md#multi-horizon-research) and
-[research references](docs/RESEARCH_REFERENCES.md).
+## Quick navigation
 
-ML has two separate source-specific research tracks: verified recorded-print
-outcomes and a historical one-minute candle bootstrap. Both require at least 500
-complete unique outcomes before fitting; millions of market events alone do not
-meet that requirement. The bootstrap model is advisory, cannot filter alerts or
-become a production champion, and is clearly labeled as an OHLC proxy. See the
-[ML collection, training and retention guide](docs/ML_RESEARCH.md).
-
-## Start and stop on Windows
-
-Open **Docker Desktop** and wait for its engine to be ready. Then open **Command
-Prompt (CMD)**. Replace `C:\path\to\bybitflow` with the folder where you cloned
-or extracted this repository.
-
-**Start or resume the scanner and ML worker:**
-
-```bat
-cd /d C:\path\to\bybitflow
-docker compose --profile ml up -d
-```
-
-Open [the dashboard](http://127.0.0.1:8000). Sign in with username `research` and
-the password stored in `FLOW_ADMIN_TOKEN` in the private `.env` file.
-
-**Stop both services and keep recorded data and ML state:**
-
-```bat
-cd /d C:\path\to\bybitflow
-docker compose --profile ml down
-```
-
-**Check whether the services are running:**
-
-```bat
-docker compose --profile ml ps
-docker compose exec desk bybit-flow doctor
-```
-
-**View recent logs:**
-
-```bat
-docker compose --profile ml logs --tail 50
-```
-
-Closing CMD or the dashboard does not stop the services. Keep Docker running and
-the computer awake for continuous monitoring. Use the stop command before shutting
-down when possible. Do not delete Docker's data volume to restart the program.
+- [First-time setup](#first-time-setup)
+- [Start, stop, and check status](#start-stop-and-check-status)
+- [Understand Discord cards](#understand-discord-cards)
+- [ML collection and training](#ml-collection-and-training)
+- [Storage and cleanup](#storage-and-cleanup)
+- [Troubleshooting](#troubleshooting)
+- [Updates and backups](#updates-and-backups)
+- [Reference guides](#reference-guides)
 
 ## First-time setup
 
-Requirements: Docker Desktop, access to public exchange endpoints, and two Discord
-channel webhooks. No exchange trading keys or paid chart subscription are required.
+Install Git and Docker Desktop on Windows, or Docker Engine with the Compose plugin
+on Linux. Docker Desktop must use Linux containers. Keep the host awake and allow
+access to public exchange endpoints. No exchange trading keys or paid chart
+subscription are required. Discord delivery needs two channel webhooks.
 
-From the project folder in CMD:
+In Windows **Command Prompt (CMD)**, clone into a folder of your choice:
 
 ```bat
+git clone https://github.com/0xAldoLim/bybitflow.git
+cd bybitflow
 if not exist .env copy .env.example .env
 notepad .env
 ```
 
-Set a long private dashboard password in `FLOW_ADMIN_TOKEN`. Put the signals-channel
-webhook in `FLOW_RESEARCH_WEBHOOK` and the monitoring-channel webhook in
-`FLOW_MONITORING_WEBHOOK`. Never commit `.env` or share its contents. The older
-`FLOW_DISCORD_WEBHOOK` setting is no longer used for setup delivery.
+For an existing checkout, enter its folder instead:
 
-For confirmed alerts, minute-by-minute order flow, two-stage ML research and bounded
-recording storage, use these settings in `.env`:
+```bat
+cd /d "C:\path\to\bybitflow"
+```
+
+Replace the example path with your own repository location. On Linux or macOS, use
+`cd /path/to/bybitflow` and copy `.env.example` to `.env` only if `.env` does not exist.
+The Docker commands below work on either platform.
+
+Set a long private password and full Discord webhook URLs in `.env`:
 
 ```dotenv
+FLOW_ADMIN_TOKEN=replace-with-a-long-random-password
+FLOW_RESEARCH_WEBHOOK=https://discord.com/api/webhooks/REPLACE_WITH_SIGNALS_WEBHOOK
+FLOW_MONITORING_WEBHOOK=https://discord.com/api/webhooks/REPLACE_WITH_MONITORING_WEBHOOK
 FLOW_SCAN_ENABLED=true
 FLOW_RESEARCH_ALERTS=true
 FLOW_EXECUTION_WINDOW_SECONDS=60
+FLOW_SPREAD_BUCKET_SECONDS=60
+FLOW_SPREAD_WINDOW_MINUTES=30
 FLOW_ML_ENABLED=true
-FLOW_ML_TWO_STAGE=true
 FLOW_ML_FILTER_RESEARCH=false
-FLOW_MAX_STORAGE_GB=10
 FLOW_RECORDING_RETENTION_ENABLED=true
+FLOW_MAX_STORAGE_GB=10
 ```
 
-Build and start both services:
+The webhook values are placeholders. These settings enable all-grade confirmed
+research alerts and minute-by-minute flow confirmation. The shipped example keeps
+research delivery disabled and uses a 900-second confirmation window until you
+change it. Two-stage ML defaults to `FLOW_ML_TWO_STAGE=false` and is optional.
+
+`FLOW_DEEP_SYMBOLS` defaults to 8 and supports up to 30 deep subscriptions. The
+[top-30 configuration example](examples/ml-top30.env) contains a dated watchlist;
+unsupported or ineligible pairs are not guaranteed a subscription. Size storage
+for available disk and collection volume. The 10 GB example limits application
+data, not total Docker disk usage.
+
+Keep `.env` private and preserve existing credentials on upgrades. The older
+`FLOW_DISCORD_WEBHOOK` is not the destination for setup delivery.
+
+Build and start:
 
 ```bat
 docker compose --profile ml up -d --build
 ```
 
-The first build downloads dependencies, including CPU-only PyTorch for LSTM
-training. Later starts can use `up -d` without rebuilding. For a connectivity check:
+The first build downloads application and training dependencies, including CPU-only
+PyTorch in the trainer image. Open [the dashboard](http://127.0.0.1:8000), sign in
+as `research`, and use your `FLOW_ADMIN_TOKEN` as the password.
+
+## Start, stop, and check status
+
+Run from the repository folder with Docker running:
+
+| Action | Command |
+|---|---|
+| Start or resume scanner and ML worker | `docker compose --profile ml up -d` |
+| Stop services and preserve data | `docker compose --profile ml stop` |
+| Check containers | `docker compose --profile ml ps` |
+| Check feeds, recorder, and runtime diagnostics | `docker compose exec desk bybit-flow doctor` |
+| Inspect signal admission and delivery counters | `docker compose exec desk bybit-flow signals status` |
+| Inspect ML readiness, models, and heartbeat | `docker compose exec trainer bybit-flow ml status` |
+| Inspect storage and retention | `docker compose exec desk bybit-flow storage status` |
+| View recent logs | `docker compose --profile ml logs --tail 100` |
+
+For JSON diagnostics, use `bybit-flow doctor --json`. Closing CMD or the browser
+does not stop containers. Docker and the host must stay running. Containers use
+`restart: unless-stopped`; this does not prevent host sleep or ensure Docker
+Desktop starts after a reboot.
+
+Configuration is read at startup. Apply `.env` changes with
+`docker compose --profile ml up -d`; a plain `restart` does not load changed
+container environment values. Repeated restarts reset live flow continuity and
+can prolong warm-up.
+
+## Understand Discord cards
+
+| Destination | Messages |
+|---|---|
+| `FLOW_RESEARCH_WEBHOOK` | New setups, related/conflicting setup context, entry expiry, withdrawal, targets, and other setup lifecycle results |
+| `FLOW_MONITORING_WEBHOOK` | Monitoring paused and monitoring resumed notices |
+
+Terminal results edit the original delivered setup card, retaining entry, stop,
+targets, and first-posted time. Check earlier cards for updated status. Monitoring
+notices are deduplicated by outage episode. An internal setup cannot send any
+user-facing lifecycle update without its own successful initial delivery and
+message ID in the durable outbox. Mentioning a child setup inside another card
+does not establish its initial delivery.
+
+Temporary feed loss pauses monitoring rather than proving a stop or target.
+Recovery requires historical catch-up and fresh live coverage. Each setup keeps
+its original plan and lifecycle even when related notifications are grouped or
+suppressed.
+
+| Horizon | Expected holding | Delivery |
+|---|---|---|
+| Short intraday | 15 minutes–2 hours | Confirmed research setups |
+| Core intraday | 1–4 hours | Confirmed research setups |
+| Swing | 4–48 hours | Confirmed research setups |
+| Extended swing | 2–7 days | Shadow research; no initial Discord setup |
+
+The entry deadline is separate from the holding deadline. A 60-second confirmation
+window does not mean a one-minute holding period. Implemented grade bands are
+**SSS 95+, SS 90+, S 85+, A 75+, B 65+, C 50+, D 35+, E 20+, F below 20**.
+Every grade must still pass structure, flow, liquidity, freshness, entry, risk,
+and applicable production gates.
+
+At a tracking deadline, a reliable original-venue price and observed entry can
+support a paper profit/loss estimate before TP1. Missing evidence leaves the result
+unknown. Late research observations never turn an expired setup into a historical
+win. The Paper journal records an account close separately.
+
+There is no guaranteed alert interval. Minute-spread qualification usually needs
+12–15 minutes of uninterrupted quotes after subscription; discovery, cold candle
+loading, and feed gaps can add time. A healthy scanner can reject every current
+setup. See the [horizon and lifecycle guide](docs/USER_RUNBOOK.md#multi-horizon-research).
+
+## ML collection and training
+
+| Track | Evidence | Authority |
+|---|---|---|
+| Primary | Current `candidate-v10` decisions with complete `prints-v1` outcomes from recorded trades | Preferred compatible model; promotion requires independent admission checks |
+| Bootstrap | `bootstrap-core-v1` features with `ohlc-path-v1` historical one-minute candle outcomes | Advisory OHLC-proxy challenger; promotion and production filtering disabled |
+
+Each track needs **500 complete unique outcomes per source**. Millions of exchange
+events, repeated evaluations, incomplete paths, and manual journal entries do not
+meet that requirement. A positive label means simulated net R above zero after
+assumed costs, not a verified account win.
+
+The baseline compares Logistic Regression and LightGBM. With
+`FLOW_ML_TWO_STAGE=true`, the primary sequence pipeline can compare LightGBM,
+Random Forest, and LSTM, followed by Logistic Regression, SVM, and Random Forest
+probabilities. It needs 500 complete outcomes with 16 compatible prior observations
+each. Below that threshold it attempts the tabular baseline. XGBoost is not installed.
+
+Training preserves chronological partitions, a four-hour embargo, at least
+200 training / 100 calibration / 100 validation / 100 untouched holdout outcomes,
+and both classes in training and calibration. `adaptive-causal-v2` refines only
+pathological V1 allocations using timing and counts, with a V1 fallback. Previously
+consumed holdouts cannot become unseen evidence again.
+
+Readiness refreshes every 15 minutes. The first eligible fit is dispatched on the
+next worker loop; later fits require 50 new usable outcomes, seven days, or a manual
+cycle, and must still satisfy readiness. Status reports partition/class blockers,
+compatibility abstentions, models, and heartbeat. Collection does not guarantee
+immediate fitting or a prediction on every setup. With `FLOW_ML_FILTER_RESEARCH=false`,
+ML abstention does not block otherwise qualified alerts; bootstrap can never filter them.
+
+The verified deployment workflow creates an immutable maturity epoch. Keep feature
+definitions, gates, strategy rules, score weights, labels, partition policy, and
+ML minimums fixed while outcomes mature, except for correctness, safety, exchange
+API, or severe runtime/storage repairs. There is no automatic strategy tuning or
+model promotion. See [ML research](docs/ML_RESEARCH.md).
+
+## Storage and cleanup
+
+Docker stores recordings, SQLite history, snapshots, labels, datasets, and models
+in the persistent `research-data` volume. `FLOW_MAX_STORAGE_GB` defaults to
+**10 decimal GB** and may differ in an existing installation. It excludes Docker
+images, build cache, and Docker/WSL virtual-disk allocation.
+
+Retention preserves permanent ML records and protected evidence. Routine worker
+cleanup releases finalized, unprotected raw data after its retention floor; it
+does not wait for every future model fit. Active plans, unresolved primary outcomes,
+checkpoints, and replay leases prevent unsafe deletion. Raw cleanup keeps learned
+model artifacts, but deleted raw history cannot be replayed again.
+
+Inspect the plan before manual cleanup:
 
 ```bat
-docker compose exec desk bybit-flow test-market
+docker compose exec desk bybit-flow storage status
+docker compose exec desk bybit-flow storage cleanup --dry-run
+docker compose exec desk bybit-flow storage cleanup
+docker compose exec desk bybit-flow storage compact
 ```
 
-To send an explicitly labelled Discord connection test:
+Manual cleanup can report no deletion below the pressure threshold. Maturity health
+shows healthy below 80%, warning at 80–90%, pressure at 90–95%, and training/backfill
+backpressure at 95% or above. Maintenance separately starts packing at 70% and safe
+pressure pruning at 85%. If protected or permanent data fills the budget, recording
+can stop rather than delete it. See [managed storage](docs/USER_RUNBOOK.md#managed-storage).
+
+## Troubleshooting
+
+Start with `docker compose --profile ml ps`, `doctor`, and recent logs. A running
+container does not prove every selected market has fresh evidence.
+
+| Symptom | First action |
+|---|---|
+| Clock skew, future events, or timestamp errors | Open Windows **Settings → Time & language → Date & time**, enable automatic time, choose the correct time zone, and select **Sync now**. Run `doctor` again. |
+| Dashboard unavailable | Start Docker Desktop, run `docker compose --profile ml up -d`, and inspect `ps` and logs. Use `http://127.0.0.1:8000`; sign in as `research` with `FLOW_ADMIN_TOKEN`. |
+| Docker engine or socket initialization error | Confirm Linux-container mode. Restart Docker Desktop from its Troubleshoot menu and check `docker info` before starting Compose again. Avoid factory reset or volume deletion as ordinary recovery. |
+| Disk full or recording-budget error | Check Windows free space, `docker system df`, and application `storage status`. Preview managed cleanup; preserve the database, models, protected recordings, and volume. |
+| No Discord setups | Check alert settings, `signals status`, feed freshness, warm-up, gate rejections, and webhook results. There is no fixed signal schedule. |
+| Pending confirmation | Required executed-flow/entry checks have not passed. Missing or interrupted flow cannot be replaced by a higher score. |
+| Monitoring paused | Restore source/recording coverage and let catch-up finish. The original plan remains monitored internally. |
+| ML collecting or abstaining | Inspect unique outcomes, class counts, unseen holdout shortage, compatibility, storage backpressure, and heartbeat in `ml status`. Do not weaken checks to force fitting. |
+| Browser exchange access works, but feeds fail | Test REST and WebSocket access inside the container; browser DNS/proxy behavior can differ. Keep certificate verification enabled. |
+| Downtime after sleep or reboot | Keep the host awake, start Docker Desktop, and resume Compose. Closing the browser is harmless; sleep interrupts collection. |
+
+Test actual connections:
 
 ```bat
+docker compose exec desk bybit-flow test-market --exchange binance
+docker compose exec desk bybit-flow test-market --exchange bybit
+docker compose exec desk bybit-flow test-market --exchange okx
 docker compose exec desk bybit-flow test-discord
 ```
 
-A connection test confirms signals-webhook access; it is not a trade signal.
-Monitoring pause/resume cards use the separate monitoring webhook and are sent only
-for setups whose initial card was delivered. Entry expiry, withdrawal, outcome and
-other setup updates use the signals webhook. Settings are read at startup. Apply
-`.env` changes with `docker compose --profile ml up -d`.
+`test-discord` posts **BYBITFLOW CONNECTION TEST / NOT A TRADE SIGNAL** to the
+signals webhook. It does not verify the separate monitoring destination or qualify
+a market setup. Detailed [troubleshooting](docs/USER_RUNBOOK.md#troubleshooting)
+includes administrator CMD clock commands, cache cleanup, sleep recovery, and
+project-local encrypted DNS. See [Microsoft's clock settings guide](https://support.microsoft.com/en-us/windows/experience/personalization/set-time-date-and-time-zone-settings-in-windows)
+and [Docker's troubleshooting guide](https://docs.docker.com/desktop/troubleshoot-and-support/troubleshoot/).
 
-## What to expect from alerts
+## Updates and backups
 
-A new card shows LONG or SHORT, grade, entry, SL, TP1, TP2 and the entry deadline.
-Terminal updates edit the original Discord setup card in place. **Updated original
-card** and its first-posted time identify the earlier alert; its entry, SL and
-targets remain visible. The title changes to the current status.
-
-Updates identify expired or withdrawn setups and say **no new entry**. A withdrawal
-caused by unavailable data does not establish that the stop loss was hit.
-
-When an alerted setup reaches its tracking deadline before TP1 or SL, the updated
-card reports an estimated profit or loss if the entry zone was observed and a
-reliable original-exchange price is available near the deadline. The estimate
-uses the planned entry, direction, stop distance and configured costs; it is not
-an account fill. Missing entry or price evidence leaves the result unknown. Use
-the dashboard's **Paper journal** to record your actual close separately.
-
-Signals require actual order-flow confirmation even when the grade is low. They
-are not sent on a fixed schedule. With the recommended minute-spread configuration, initial liquidity collection takes about
-12–15 minutes; interrupted feeds can extend it. With the 60-second setting, a failed
-confirmation gets a new opportunity in the next minute while the price setup is valid.
-
-If alerts stop, check the dashboard and `doctor`. Common causes include clock skew,
-exchange connection failures, incomplete market history and the storage limit.
-Restarting repeatedly discards live flow history and can prolong warm-up.
-
-## Trace missing alerts
-
-Use the Signal journal's **Signal pipeline** panel or run:
+Create a uniquely named metadata backup before updating:
 
 ```bat
-docker compose exec desk bybit-flow signals status
+docker compose exec desk bybit-flow backup /app/data/research-backup-YYYYMMDD-HHMM.sqlite
+docker compose cp desk:/app/data/research-backup-YYYYMMDD-HHMM.sqlite ./research-backup-YYYYMMDD-HHMM.sqlite
 ```
 
-The report separates recorded events from actual setups and shows 15-minute,
-hourly, daily and process counters, confirmation checks, rejection reasons and
-Discord results. Tests and synthetic cards do not count as genuine deliveries.
-Rejection checks can overlap. Historical gate outcomes that were not recorded
-remain unavailable.
+Replace `YYYYMMDD-HHMM` with the actual backup time. This backs up SQLite metadata,
+not recordings or model files. A complete archive needs the entire stopped volume
+and a separately protected copy of `.env`; see the [backup guide](docs/USER_RUNBOOK.md#backups).
 
-A confirmation runtime error is a software failure. A healthy pipeline reporting
-flow, entry-zone or risk rejections has evaluated those gates without passing them.
-A successful connection test verifies Discord access, not setup qualification.
-
-## How machine learning works
-
-The optional two-stage pipeline compares these algorithms:
-
-| Stage | Models | Purpose |
-|---|---|---|
-| 1 | LightGBM, Random Forest, LSTM | Estimate a setup's outcome from its recorded evidence |
-| 2 | Logistic Regression, SVM, Random Forest probabilities | Combine stage-one estimates and produce a separately calibrated ranking |
-
-LightGBM is the selected boosting implementation; XGBoost is not installed.
-Stage two trains on later observations that stage one did not train on. Separate
-calibration, validation and untouched test periods follow. LSTM inputs contain
-16 past observations for the same venue, symbol, direction and setup family.
-
-Learning uses saved candidate snapshots, including rejected setups, and simulated
-outcomes from later recorded trades. A win means positive simulated profit after
-assumed costs, using TP1, SL or the frozen horizon's time limit (four hours for
-legacy/core intraday). Missing data and incomplete
-fills are excluded. It does not read a personal trading account or know actual fills.
-
-**Enabling ML starts collection and background processing, not an instantly trained
-model.** Two-stage training requires at least 500 complete sequence-labelled outcomes,
-plus enough data and both outcome classes in each partition. Below that sequence
-threshold, the worker attempts a Logistic Regression/LightGBM baseline using complete
-tabular outcomes. The baseline still requires chronological training, calibration,
-validation and holdout partitions; incomplete outcomes never count. Readiness is updated
-every 15 minutes; the first fit starts on the next worker loop once a source and track
-are ready. Later fits require 50 new usable outcomes or seven days. Bootstrap challengers
-remain advisory and cannot be promoted. There is no automatic promotion to validated
-probability.
-
-`FLOW_ML_ENABLED=false` leaves the trainer idle and disables desk inference; its
-service heartbeat may still be present. Advisory inference selects the newest
-compatible, non-degraded challenger when no compatible champion is available.
-`doctor` and `ml status` report the worker heartbeat,
-training mode, current-schema unique trainable outcomes by venue, sequence readiness,
-last training reason, recent predictions and abstention reasons. No model
-means deterministic confirmed alerts continue, with ML explicitly abstaining.
-
-With `FLOW_ML_FILTER_RESEARCH=false`, an unavailable or untrained model does not
-block otherwise confirmed Discord research signals. See [ML research](docs/ML_RESEARCH.md)
-for the training policy and validation requirements.
-
-The final stabilization release starts an immutable maturity epoch after verified
-deployment. The ML page shows causal partition and class readiness, progress
-toward 500 usable outcomes per venue, and storage/recorder health. Keep feature
-definitions, strategy rules, score weights, label policies and ML requirements
-fixed while data matures. Change them only for a correctness or safety bug,
-broken exchange API, or severe runtime/storage failure. There is no automatic
-strategy tuning or model promotion.
-
-## Local storage
-
-Market recordings and ML data are stored **locally in Docker's `research-data`
-volume**. `FLOW_MAX_STORAGE_GB=10` sets the application data budget; it does not
-include Docker images or installed training software.
-
-With retention enabled and the ML worker running, routine cleanup reclaims finalized,
-unprotected raw evidence older than `FLOW_ML_RAW_RETENTION_MINUTES` (default 60)
-in small batches. At 85% budget pressure it may shorten that floor to 15 minutes
-and reclaim safe old recordings toward 60% usage. Manual cleanup keeps its
-conservative six-hour floor. Active setups, unresolved ML outcomes and replay readers
-protect their evidence regardless of the floor. Saved feature snapshots, labels,
-training datasets, models and audit hashes are kept. Decisions older than the retained replay boundary
-are recorded as incomplete, never as wins or losses. Deleted raw history cannot be
-replayed later. If protected data alone fills the budget, recording stops explicitly.
-
-## Updating the program
-
-Back up important data first, then run from the project folder:
+For an ordinary update:
 
 ```bat
-docker compose --profile ml down
-git pull --ff-only
+docker compose --profile ml stop
+git pull --ff-only origin main
 docker compose --profile ml up -d --build
+docker compose exec desk bybit-flow doctor
+docker compose exec trainer bybit-flow ml status
 ```
 
-## Further reading
+If Git reports local changes or a failed pull, resolve that before rebuilding.
+For CI-gated ML deployment and continuity auditing, use the
+[deployment workflow](docs/ML_RESEARCH.md#storage-and-replay-checkpoints).
+Stop/update commands preserve the volume and original active plans. Do not use
+`docker compose down -v`: it removes the saved data volume.
 
-- [Operator guide](docs/USER_RUNBOOK.md): configuration, troubleshooting and backups.
-- [ML research](docs/ML_RESEARCH.md): outcome labels, algorithms and validation.
-- [Scoring](docs/SCORING.md): evidence scoring and grades.
-- [Asset facts](docs/ASSET_FACTS.md): reviewed research and asset selection.
-- [Contributing](CONTRIBUTING.md): development setup and tests.
-- [Architecture](docs/SELF_HOSTED_ORDERFLOW.md) and [exchange adapters](docs/MULTI_EXCHANGE.md): technical design.
+## Reference guides
 
-## Optional encrypted DNS for Docker
-
-If exchange domains resolve incorrectly on the local network, BybitFlow can use a project-local DNS-over-HTTPS relay. It forwards DNS wire queries to [Google Public DNS](https://developers.google.com/speed/public-dns/docs/doh) using verified HTTPS. It does not fall back to unencrypted upstream DNS. Only the project containers use it; Windows and browser DNS settings stay unchanged.
-
-After building the normal project images, enable it in Windows CMD:
-
-```cmd
-copy compose.doh.yaml compose.override.yaml
-docker compose --profile ml up -d --no-build
-```
-
-The local override is ignored by Git. The relay uses the existing `bybitflow-desk:latest` image, exposes no host ports, and reserves Docker subnet `172.30.53.0/24`. Choose an unused subnet and update the DNS addresses in the override if that subnet conflicts with another network. Google receives the containers' DNS queries. DNS latency includes an HTTPS request; established exchange connections are unaffected by that lookup overhead.
-
-The usual start and stop commands also manage the DNS service. Check it with `docker compose ps`. To disable the override without deleting it:
-
-```cmd
-ren compose.override.yaml compose.override.yaml.disabled
-docker compose --profile ml up -d --no-build --remove-orphans
-```
-
-Do not disable certificate verification or pin exchange IP addresses as a workaround. The relay pins only Google's DNS bootstrap address; exchange addresses are resolved dynamically.
-
-### Signal liquidity warm-up
-
-For the one-minute signal configuration, set `FLOW_SPREAD_BUCKET_SECONDS=60` and `FLOW_SPREAD_WINDOW_MINUTES=30`. The scanner requires at least 12 distinct valid minute observations, at least 80% coverage, and acceptable median and tail spreads. Repeated quotes in one minute count once. A fresh start normally needs about 12–15 minutes of uninterrupted quotes; gaps may extend this. Older six-hour/five-minute histories remain separate and are not treated as minute observations. The legacy defaults remain available when these settings are omitted.
-
-Order-flow confirmation still uses a fully observed closed minute. Setups whose confirmation window has expired are marked expired, while new minutes create independent decisions. ML training and research scores do not bypass flow, entry, spread, or risk requirements.
-
-Selected live feeds continue generating fresh minute candidates after older candidates expire. Transient refresh errors retain the last observed context for retry; existing candle and context-age checks prevent stale data from qualifying. Refresh activity and errors are recorded under `refresh_health` for diagnostics.
-
-### Feed interruptions after a signal
-
-A temporary feed interruption pauses monitoring; it does not establish a stop-loss hit or invalidate the price setup. The dashboard shows **MONITORING PAUSED** immediately. An interruption lasting at least one minute produces one Discord pause notice, followed by a recovery notice only after historical catch-up and fresh live coverage both succeed. These updates are not new entry signals. Closed candles can establish conservative historical price outcomes; intrabar order flow and account fills remain unverified. New signals still require complete order-flow evidence.
-
-Published setups are monitored until their holding deadline, independently of the shorter entry window. Fresh observed stop crossings, a changed market regime, or a known major asset event can invalidate a setup. At the holding deadline, **TRACKING ENDED** reports the end of monitoring without claiming an account result. Previously withdrawn messages are historical records and are not reactivated.
-
-## Automatic maintenance
-
-The scanner, recording writer, source checks, storage maintenance, calendar and
-research workers recover independently. The recorder uses a bounded queue and a
-separate writer process. Under pressure, optional collection is reduced before
-active setups, unresolved primary outcomes and BTC/ETH evidence. Any lost data is
-recorded as a coverage gap; it cannot count as complete research evidence.
-
-Storage maintenance starts lossless compaction at 70% of the configured budget,
-adds safe pruning at 85%, and enters emergency maintenance at 95%. Short renewable
-range leases protect only data being read. Permanent signals, labels, model
-artifacts and audit provenance remain. Explicit retention opt-out is respected;
-existing `.env` files are never rewritten. If protected evidence fills the budget,
-the dashboard reports backpressure rather than deleting it.
-
-After downtime, existing setups are checked against original-exchange closed
-one-minute candles before monitoring resumes. Stops, targets and deadlines retain
-the original plan. Missing history keeps monitoring paused. Same-candle stop and
-target ambiguity is treated conservatively; reconstructed prices are not account
-fills.
-
-New entries pause around high-impact USD events scheduled during the New York
-08:00–17:00 session (DST-aware). Active setup monitoring continues. The calendar
-uses [Forex Factory's weekly export](https://www.forexfactory.com/calendar), caches
-schedules and reports provider failures. With no fresh cache, entry delivery is
-fail-open and the calendar is visibly degraded.
-
-New policy versions add market-conflict checks and persistent, multi-source thesis
-health checks. Existing setups keep their original version. Notification clusters
-provide exposure context only: every individual setup continues its own lifecycle.
-
-ML labels are accumulated incrementally using durable restart checkpoints. Repeated
-technical evaluations are excluded as independent opportunities. Horizon and
-score-profile studies remain research-only; insufficient evidence means abstention.
-Swing stop research does not move existing stops or automatically widen future ones.
-Current Swing stop policy retained until convincing out-of-sample evidence exists.
-
-Use `docker compose exec desk bybit-flow doctor` for health and
-`docker compose exec desk bybit-flow storage status` for storage details.
-Do not use `docker compose down -v` for ordinary shutdown: `-v` removes data volumes.
-
-See [deployment verification](docs/AUTONOMY_VERIFICATION.md) for test evidence, continuity checks and current research limitations.
-
-## Decision evidence and policy research
-
-New decisions retain participation percentiles from prior observations of the same
-market, venue, horizon and session. At least 20 prior windows are required. These
-baselines sample complete flow windows from selected markets independently of
-setup generation. Missing feed coverage contributes no observation.
-
-Executed-volume profiles use complete closed 30-minute intraday or four-hour Swing
-native trade windows with
-explicit tick size, binning and availability time. Profile work runs outside the
-confirmation loop. Missing coverage produces no profile levels. New plans may use
-suitable POC, value-area or volume-node targets, subject to the existing risk gates.
-Existing plans are never retargeted.
-
-Swing path research freezes four stop policies at the decision and follows closed
-one-minute candles separately from live monitoring. It records stop/target timing,
-overshoot, reclaim and post-stop excursions. Ambiguous paths are excluded from
-complete executable-return samples. The original live stop remains unchanged.
-Confirmation and stop challengers use separate chronological partitions, purging
-and an embargo. Descriptive results do not automatically promote a policy.
-
-Current feature schema `candidate-v10` repairs the V8 price, OFI, breadth, value-area
-and event-window OI definitions. Historical `candidate-v9` snapshots, labels and
-models remain immutable. Old decisions are never recaptured or rescored.
-
-The `v8-production-gating-v1` policy evaluates only new V7-valid confirmations.
-A fresh, ready adverse feature may reject a candidate; supportive evidence cannot
-override structure, flow, risk, entry, macro or BTC-alignment gates. Missing optional
-data falls back to V7. Active and previously pending setups retain their original
-plans and lifecycle monitoring. Rejected V8 candidates keep frozen shadow snapshots
-for complete `prints-v1` outcomes where recorded coverage allows.
-
-Spot returns use closed one-minute candles. Executed delta uses at most three
-aggregate-trade pages and stays missing when coverage is truncated. One pooled
-public spot client shares REST pacing/concurrency and samples at most ten symbols.
-OFI requires at least 45 observed seconds in one continuity epoch and 20 prior
-same-source, symbol and session windows before strong directional gating. Breadth
-uses actual candle regimes separately from latest-bar returns; production requires
-20 fresh symbols. Weekly AVWAP uses H1 history. Liquidation gates require causal
-event-window OI and independent trusted flow. Venues without current minute OI
-remain unavailable for that gate; multi-hour OI is not a substitute.
-
-Current OI uses public venue endpoints, including Binance `/fapi/v1/openInterest`.
-The collector samples at most ten core, active, pending or selected symbols about
-once per minute, caches attempts for 55 seconds and retains at most 30 observations
-per symbol. Endpoint outages leave minute OI unavailable rather than inserting zeros.
-
-`FLOW_V8_PRODUCTION_GATING=true` is the default. Set it to `false` to continue
-recording shadow decisions without blocking live confirmations. Individual switches
-`FLOW_V8_GATE_SPOT_PERP`, `FLOW_V8_GATE_OFI`, `FLOW_V8_GATE_BREADTH`,
-`FLOW_V8_GATE_ANCHORED`, `FLOW_V8_GATE_LIQUIDATION`, `FLOW_V8_GATE_VOLATILITY`
-and `FLOW_V8_GATE_CONTEXT_EV` also default to `true`. Malformed feature evidence
-disables only that gate for the current process and appears as degraded in `doctor`.
-Historical Context EV is descriptive research. The separate production cache uses
-only same-source `candidate-v10`, `v8-production-gating-v1` decisions with complete
-causal `prints-v1` outcomes. It stays inactive until at least 200 effective samples
-support mature confidence; blocking still requires a fresh lower confidence bound
-at or below -0.10R. Older strategies cannot establish production expectancy.
-
-`doctor` reports feature readiness, hourly gate counters and scanner timings.
-Run `docker compose exec desk bybit-flow v8-effectiveness` for research-only blocked
-versus comparable passed outcomes. The report declares insufficient evidence until
-enough complete outcomes exist; it never tunes thresholds or promotes models.
-Opportunity rank stays separate from quality. Delivery suppression requires verified
-high correlation, a materially stronger active setup and a fresh manual portfolio
-already near the configured correlated-risk limit.
-
-For an offline ablation readiness report, run
-`docker compose exec trainer python -m bybit_flow.ml.ablation --source binance`
-(replace the source with the active venue). It leaves the holdout untouched by default.
-
-An offline recorder smoke test runs in CI. For a longer test, use a separate empty
-data directory, never the production directory:
-
-```bat
-python examples/recorder_soak.py --seconds 1800 --rate 1000 --data-dir recorder-soak-data
-```
-
-This tests the recorder without exchange or Discord connections. See
-[v4 verification](docs/V4_VERIFICATION.md) for measured results and limitations.
+- [Operator guide](docs/USER_RUNBOOK.md): configuration, horizons, troubleshooting, and backups.
+- [ML research](docs/ML_RESEARCH.md): labels, algorithms, partitions, readiness, and maturity policy.
+- [Scoring](docs/SCORING.md): grade bands and evidence rubric.
+- [Asset facts](docs/ASSET_FACTS.md): sourced research and instrument selection.
+- [Operations](docs/OPERATIONS.md): deployment, retention, and delivery semantics.
+- [Architecture](docs/SELF_HOSTED_ORDERFLOW.md) and [exchange adapters](docs/MULTI_EXCHANGE.md).
+- [Contributing](CONTRIBUTING.md): development setup and verification.
+- [Verification records](docs/AUTONOMY_VERIFICATION.md): dated test evidence and limitations; use live diagnostics for current runtime state.

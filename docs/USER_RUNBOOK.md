@@ -1,184 +1,158 @@
 # Operator guide
 
-For everyday Windows start/stop commands, begin with the [README](../README.md).
-This guide covers configuration and recovery in more detail.
-
-## Requirements
-
-- Docker Desktop on Windows, or Docker Engine with Compose on Linux.
-- Separate Discord webhooks for signals and monitoring pause/resume notices.
-- Network access to the selected exchange's public REST and WebSocket endpoints.
-- Persistent storage and an awake host during collection.
-
-The dashboard binds to `127.0.0.1:8000`. The default Compose limits are 4 GB for
-the desk and 2 GB for the trainer, with two CPUs for the desk and one CPU for the
-trainer. The desk limit includes filesystem cache for continuous market recordings.
+Use the [README](../README.md) for installation and everyday CMD commands. This
+guide explains configuration, recovery, and the limits of the recorded evidence.
+Commands assume the terminal is in the repository folder, with Docker running.
 
 ## Configuration
 
-Copy `.env.example` to `.env`. Existing installations should update selected
-settings without replacing their credentials.
+Copy `.env.example` only for a new installation. Existing installations should
+edit selected settings without replacing credentials or their data budget.
 
-| Setting | Purpose |
+| Setting | Implemented behavior |
 |---|---|
-| `FLOW_ADMIN_TOKEN` | Required dashboard password; username is `research` |
-| `FLOW_RESEARCH_WEBHOOK` | Discord signals-channel webhook for setups and setup lifecycle updates |
-| `FLOW_MONITORING_WEBHOOK` | Discord channel for monitoring pause/resume notices only |
-| `FLOW_RESEARCH_ALERTS=true` | Enable confirmed SSS–F research cards; mandatory rejection still blocks delivery |
-| `FLOW_SSS_RESEARCH=true` | Enable SSS-only cards when broader research alerts are disabled |
-| `FLOW_SCAN_ENABLED=true` | Enable public-data collection and scanning |
-| `FLOW_MARKET_SOURCE=auto` | Probe Binance, Bybit, then OKX and retain a working primary |
-| `FLOW_ML_ENABLED=true` | Enable trainer labeling/training and advisory inference; false leaves the trainer idle |
-| `FLOW_ML_TWO_STAGE=true` | Collect LSTM sequences and compare the two-stage research models |
-| `FLOW_ML_FILTER_RESEARCH=false` | Keep ML acceptance from filtering research alerts |
-| `FLOW_DEEP_SYMBOLS` | Concurrent deep subscription capacity; default 8, maximum 30 |
-| `FLOW_EXECUTION_WINDOW_SECONDS` | Required complete executed-flow window; default 900, set 60 for minute-by-minute confirmation |
+| `FLOW_ADMIN_TOKEN` | Required private dashboard password; HTTP Basic username `research` |
+| `FLOW_RESEARCH_WEBHOOK` | Signals and setup lifecycle destination |
+| `FLOW_MONITORING_WEBHOOK` | Monitoring pause/resume destination |
+| `FLOW_RESEARCH_ALERTS=true` | Enable confirmed SSS–F research cards; mandatory gates still apply |
+| `FLOW_SSS_RESEARCH=true` | SSS-only opt-in when broader research alerts are disabled |
+| `FLOW_SCAN_ENABLED=true` | Enable scanning and collection |
+| `FLOW_MARKET_SOURCE=auto` | Select a working primary from Binance, Bybit, and OKX |
+| `FLOW_DEEP_SYMBOLS` | Deep subscription capacity; default 8, maximum 30 |
+| `FLOW_EXECUTION_WINDOW_SECONDS` | Complete flow window; default 900, set 60 for minute confirmation |
+| `FLOW_SPREAD_BUCKET_SECONDS=60` / `FLOW_SPREAD_WINDOW_MINUTES=30` | Minute-spread baseline; included in `.env.example` |
+| `FLOW_ML_ENABLED=true` | Enable labeling, training, and compatible inference in the ML worker/desk |
+| `FLOW_ML_TWO_STAGE=true` | Optional sequence collection and two-stage research; default false |
+| `FLOW_ML_FILTER_RESEARCH=false` | Keep ML abstention/acceptance from filtering research signals |
+| `FLOW_MAX_STORAGE_GB` | Application-data budget in decimal GB; default 10 |
+| `FLOW_RECORDING_RETENTION_ENABLED=true` | Enable protected-range-aware raw retention |
+| `FLOW_ML_RAW_RETENTION_MINUTES` | Routine worker retention floor; default 60 minutes |
 
-`examples/ml-top30.env` provides non-secret settings for broader coverage.
-[Asset facts](ASSET_FACTS.md) describes the dated research pack and symbol selection.
+Apply changed environment settings with `docker compose --profile ml up -d`.
+A plain container restart retains the old environment. Do not print `.env` or
+paste webhook URLs into public troubleshooting reports.
 
-Settings are read at startup. Apply changes with:
-
-```sh
-docker compose --profile ml up -d
-```
+The default Compose limits are 4 GB/two CPUs for the desk and 2 GB/one CPU for
+the trainer. These are container limits, not a promise of total host/WSL usage.
+The dashboard binds to `127.0.0.1:8000`. Use one collector and at most one ML
+worker per data directory.
 
 ## Startup and verification
 
-```sh
+```bat
 docker compose --profile ml up -d --build
 docker compose --profile ml ps
 docker compose exec desk bybit-flow doctor
-docker compose exec desk bybit-flow test-market
-docker compose exec desk bybit-flow test-discord
-docker compose exec desk bybit-flow test-signal
+docker compose exec desk bybit-flow signals status
+docker compose exec trainer bybit-flow ml status
 ```
 
-Open [the dashboard](http://127.0.0.1:8000). The Discord test is labelled as a
-connection test and does not represent a trade setup.
+Use `doctor --json` to save structured diagnostics. `doctor` reports probes and
+cached runtime state; a healthy probe alone does not establish continuity for
+every selected symbol. Check required active feeds, recorder health, heartbeat,
+storage, and observation times.
 
-`doctor` reports configuration, storage, database, source probes, and recorded
-runtime health. `test-market` verifies REST and actual trade WebSocket reception.
-A configured webhook or passing offline test does not establish external delivery.
+```bat
+docker compose exec desk bybit-flow test-market --exchange binance
+docker compose exec desk bybit-flow test-market --exchange bybit
+docker compose exec desk bybit-flow test-market --exchange okx
+docker compose exec desk bybit-flow test-discord
+```
+
+`test-market` checks public REST and real trade WebSocket reception. `test-discord`
+posts **BYBITFLOW CONNECTION TEST / NOT A TRADE SIGNAL** to the signals webhook.
+It does not test the monitoring webhook. The optional `test-signal` command sends
+an explicitly synthetic pipeline/format test. Neither test is a real opportunity
+or an ML outcome; neither proves profitable performance.
 
 ## Multi-horizon research
 
-| Profile | Context / setup / execution | Expected holding | Publication |
+| Profile | Context / setup / execution bars | Holding period | Publication |
 |---|---|---|---|
-| SHORT_INTRADAY | 1H / 15M / 5M | 15 minutes–2 hours | Confirmed research alerts |
-| CORE_INTRADAY | 4H / 1H / 15M | 1–4 hours | Original strategy remains supported |
-| SWING | 1D / 4H / 1H | 4–48 hours | Confirmed research alerts |
-| EXTENDED_SWING | 1D / 4H / 1H | 2–7 days | Shadow research initially; no automatic public SSS |
-| LEGACY | Original frozen configuration | Original deadline | Original lifecycle continues |
+| SHORT_INTRADAY | 1H / 15M / 5M | 15 minutes–2 hours | Confirmed research setups |
+| CORE_INTRADAY | 4H / 1H / 15M | 1–4 hours | Confirmed research setups |
+| SWING | 1D / 4H / 1H | 4–48 hours | Confirmed research setups |
+| EXTENDED_SWING | 1D / 4H / 1H | 2–7 days | Shadow research; no initial Discord alert |
+| LEGACY | Original frozen configuration | Original deadline | Original lifecycle |
 
-The scanner evaluates each configured profile with its corresponding closed bars,
-using the same public streams and candle cache. A minute of executed flow remains
-the confirmation requirement when configured; it does not set the holding period.
-Each horizon receives its own immutable candidate and one combined quality score.
-Related plans have a thesis ID. Near-identical plans are suppressed at delivery;
-materially different entry/stop/target plans may receive separate alerts. The
-cooldown suppresses substantially repeated plans; legacy signals retain their
-original symbol cooldown. Longer holding periods reserve more funding.
-Extended-swing observations do not bypass validation by receiving a high score.
+The executed-flow confirmation window is distinct from these candle timeframes
+and holding periods. Entry expiry does not extend when research observation
+continues after the operational deadline. Each setup retains its frozen plan,
+score, horizon, source, and policy through restarts and notification clustering.
+Duplicate or related setups remain independently monitored internally.
 
-`FLOW_HORIZON_PROFILES` accepts a JSON list of enabled profiles. Core intraday
-remains the baseline strategy. `FLOW_POST_TERMINAL_ENABLED` controls the lightweight
-worker. `FLOW_POST_TERMINAL_CHECKPOINTS` can override research checkpoint minutes
-from creation, for example `{"CORE_INTRADAY":[480,720,1440,2880]}`. Checkpoints are
-research policies, not optimized holding-time promises.
+Grades are absolute: SSS 95+, SS 90+, S 85+, A 75+, B 65+, C 50+, D 35+,
+E 20+, F below 20. Mandatory rejections apply to every grade. The [scoring guide](SCORING.md)
+describes the seven evidence categories. Missing observations earn no invented
+credit; the quality score is separate from opportunity priority and ML ranking.
 
-Default research checkpoints are 4/8/24 hours for short intraday; 8/12/24/48 hours
-for core intraday; 72 hours/5 days/7 days for swing; 10/14 days for extended swing.
-The original operational deadline is stored separately and never extended by a
-research checkpoint.
+`FLOW_HORIZON_PROFILES` accepts a JSON list. `FLOW_POST_TERMINAL_ENABLED` enables
+lightweight late-outcome research. `FLOW_POST_TERMINAL_CHECKPOINTS` accepts increasing
+checkpoint minutes keyed by profile. These research checkpoints do not extend
+operational deadlines, reactivate expired entries, or change primary ML labels.
 
-### Existing signal continuity
+Late closed-candle observations can describe favorable/adverse moves after an
+expiry. They do not retroactively make the original trade a win. At the holding
+deadline, an observed entry and reliable original-venue price can support a paper
+net-R estimate even without TP1. Missing price/path evidence leaves the result
+unknown. A manual Paper journal close remains separate from simulated outcomes.
 
-Before the horizon schema is created, the application makes an SQLite backup.
-Original serialized signals and their checksums are preserved in `signal_origins`.
-Historical terminal payloads are not rewritten. Older active records load as
-LEGACY, retain their plan and score, and continue through their original lifecycle.
-Restart is not an invalidation event, and the persistent Discord outbox prevents
-resending the original entry alert. No account fills are inferred from public data.
+## Collection and Discord delivery
 
-### WHAT IF A SIGNAL EXPIRES BUT PRICE LATER REACHES THE TARGET?
+Contracts must pass age, turnover, spread, liquidity, and history checks. The
+minute-spread configuration needs at least 12 distinct valid minute observations
+and 80% coverage; repeated quotes in one bucket count once. Warm-up usually takes
+12–15 uninterrupted minutes after subscription, with additional discovery/candle
+loading time possible. Omitting those settings uses the legacy five-minute,
+six-hour spread history.
 
-The original trade remains expired. Operational status and research observation
-status are separate: an EXPIRED setup can be FOLLOWING_LATE_OUTCOME, then COMPLETE.
-Compact closed one-minute candles record later favorable/adverse excursions,
-target/stop visits, elapsed times, sessions and checkpoints. They do not reactivate
-the trade or send a late move as an ordinary target-hit alert.
+With `FLOW_EXECUTION_WINDOW_SECONDS=60`, closed minutes create independent
+confirmation opportunities while the price setup remains valid. A complete
+executed-flow window, fresh book, family-specific trigger, entry, and risk checks
+still apply. Missing flow cannot qualify. Broad scans use a configured delay after
+completion; they are separate from selected-symbol live candidate refresh.
 
-The extended same-rules policy ignores the original time deadline while retaining
-the original stop and target. Stop before target means STOP, even if the target
-is reached later. If a candle touches both, stop wins conservatively. Missing
-coverage cannot establish an extended winner. Directional afterlife separately
-records favorable movement even after a stop. Price observations are bounds,
-not verified account executions.
+New confirmations also face applicable market alignment, macro, and V8 gates.
+High-impact USD calendar pauses apply around scheduled events in the DST-aware
+New York session. Active monitoring continues. Provider failure with no fresh
+calendar cache is visibly degraded and fail-open. Optional missing V8 features
+fall back to prior qualification rather than supplying fabricated evidence.
+No automatic threshold tuning is implemented.
 
-Primary model labels remain separate from `research_labels`. Late results are
-labels available only after observation, never inputs at the original decision.
-The pooled horizon research summary initially abstains below 100 completed,
-coverage-qualified family observations; it does not change production horizons or
-old signals. Timing classifications use deterministic rules and retain UNCLEAR
-when the data cannot distinguish poor entry from an overly tight stop.
+The durable outbox must show `sent` with the exact setup's initial message ID
+before any lifecycle Discord update is allowed. Known initial destinations must
+match the current signals webhook. Suppressed, uncertain, dry-run, disabled, or
+never-delivered setups keep internal monitoring but return
+`blocked:no-visible-initial` for user-facing updates. A mention inside another
+card does not establish delivery for a child setup.
 
-### Sessions and one combined score
-
-UTC timestamps are classified through IANA zones: Asia/Singapore 08:00–16:00,
-Europe/London 08:00–16:00, America/New_York 08:00–17:00. London and New York DST
-changes are handled by timezone data; overlap and off-session periods are explicit.
-Moving into another session does not invalidate an active thesis.
-
-The original seven score categories remain. Location, auction/value, sustained
-order flow, book pressure, factor-adjusted residuals and execution noise refine
-their evidence. Short intraday places more emphasis on sustained book/flow timing;
-longer horizons penalize accumulated funding more. Missing data earns no invented
-evidence. Quality tiers are SSS 95+, SS 90+, S 85+, A 75+, B 65+, C 50+, D 35+,
-E 20+, F below 20 or mandatory rejection. Thresholds are absolute rather than
-daily ranks. High quality does not override risk, coverage or execution gates.
-
-ML retains the regularized logistic baseline and the configured two-stage
-LightGBM/Random Forest/LSTM → logistic/SVM/probability-forest research pipeline.
-Training uses chronological partitions, purging and embargo. The worker resolves
-paper labels independently of model fitting. A bounded rolling training window
-does not delete older records. Models are not automatically called validated just
-because training succeeds. Probability and expected R are shown as UNCALIBRATED
-until independent qualification passes. SSS RESEARCH remains distinct from a
-statistically validated SSS recommendation.
+Terminal updates edit the original signals card. Monitoring pause/resume notices
+use the monitoring webhook, keyed by setup and outage episode. Catch-up must
+finish before resumption; a terminal result found during catch-up does not first
+send a resume notice. Do not clear delivery records to force resends. See
+[delivery semantics](OPERATIONS.md#discord-delivery-semantics).
 
 ## Managed storage
 
-The outcome worker checks recording integrity before replay. Its progress appears
-in ML diagnostics. Completed labels are immutable. If a recording gap covers the
-rest of an elapsed holding period, the worker records an incomplete outcome rather
-than waiting indefinitely or inventing an exit. Incomplete outcomes never become
-training wins or losses. Decisions still within their holding period remain pending.
+The `research-data` volume contains application data, including metadata backups.
+Its Compose name normally has a project prefix. Reusing the checkout/project name
+preserves the intended volume. Docker images, build cache, and virtual-disk size
+are outside `FLOW_MAX_STORAGE_GB`.
 
-Replay dispatches prints by venue and symbol and processes deadlines in time order.
-Order-book envelopes remain integrity-checked but are not replayed as price fills.
-Historical feature snapshots and labels survive raw-recording cleanup.
+| Mechanism | Threshold / action |
+|---|---|
+| Maturity health display | Healthy below 80%; warning 80–90%; pressure 90–95%; backpressure at 95% |
+| Independent maintenance | Packing at 70%; safe pressure pruning at 85%; emergency maintenance at 95% |
+| Worker retention | Release eligible finalized raw data in bounded batches; retain at least 60 recent minutes by default |
+| Pressure retention | At 85%, the recent raw floor may shorten to 15 minutes; protected ranges remain |
+| Training/bootstrap guard | At 95%, defer fitting and historical bootstrap downloads |
+| Recorder budget guard | Try safe cleanup, then stop recording if required evidence cannot fit |
 
-The application budget remains `FLOW_MAX_STORAGE_GB=10`. It includes application
-data and metadata backups, not Docker images or the Docker virtual-disk allocation.
-Do not raise the limit repeatedly or delete the volume to recover space.
-
-Permanent data includes signals, original plans, features, labels, models,
-experiments and provenance. Raw event/depth segments are temporary only after
-their evidence is no longer required. Active setups, unresolved primary labels,
-replay/training leases and unprocessed records block unsafe deletion. Post-terminal
-research uses compact candles/checkpoints and releases the need for full DOM.
-
-Normal operation is below 70%; 70–85% triggers lossless packing; 85–95% permits
-oldest-safe raw cleanup; above 95% requires aggressive *safe* cleanup. The recorder
-stops if the budget cannot be respected without losing required evidence. This
-condition is operational, not permission to fabricate missing confirmation.
-Segment packing preserves original compressed bytes, hashes and manifests inside
-verified archives; replay can read packed segments. New recordings rotate at
-15 seconds or 10,000 rows by default, with a memory-pressure flush, rather than
-creating a tiny segment for each hundred events.
-
-From CMD in the project directory:
+These health thresholds and maintenance triggers serve different purposes. Packing
+preserves verified bytes/hashes inside archives. Pruning releases only eligible
+evidence. Active plans, unresolved primary labels, checkpoints, and reader leases
+protect their required ranges. Snapshots, labels, datasets, models, and audit
+provenance remain permanent.
 
 ```bat
 docker compose exec desk bybit-flow storage status
@@ -187,193 +161,209 @@ docker compose exec desk bybit-flow storage cleanup
 docker compose exec desk bybit-flow storage compact
 ```
 
-Dry-run reports candidate segment/archive IDs, the protection cutoff, the reason
-and bytes that would be freed. SQLite history and model state are not cleanup
-targets. A replay lease protects evidence while a worker is processing it.
+Manual cleanup normally reports no deletion below 85% unless resuming a prior
+prune. Its ordinary recent floor is six hours; pressure cleanup at 85% can use
+the 15-minute floor. Worker cleanup below pressure uses the configured routine
+floor. Retention opt-out is respected.
 
-`test-discord` verifies external delivery with BYBITFLOW CONNECTION TEST / NOT A
-TRADE SIGNAL. `test-signal` exercises a synthetic candidate, score, horizon, risk
-and formatting before sending TEST SIGNAL / NOT A REAL TRADE. Neither enters the
-signal or ML datasets. Passing these tests is separate from receiving an actual
-market-confirmed setup, and neither proves profitable performance.
+Incomplete ML outcomes are excluded from fitting and can release raw evidence
+once no operational setup or reader needs it. Clean pending outcomes retain
+protection. Deleting consumed raw recordings does not delete learned models,
+but those recordings cannot be replayed again. Permanent records themselves can
+eventually require capacity planning; retention is not unlimited storage.
 
-## Collection and alerts
+## Troubleshooting
 
-Eligible contracts require sufficient history and turnover. Spread qualification
-requires at least 12 observed five-minute buckets and coverage checks. Execution
-confirmation requires a complete closed trade window and a fresh book. With
-`FLOW_EXECUTION_WINDOW_SECONDS=60`, the scanner evaluates a new immutable candidate
-each minute using the preceding complete minute of executed trades. The 4H/1H/15M
-price setup, required family-specific order-flow trigger, entry zone and risk gates
-still apply. Missing or interrupted flow cannot confirm a signal. A prior minute's
-failed confirmation does not prevent the next minute from qualifying. Fast decisions
-must be evaluated within two minutes of window close. Discord cooldowns still apply.
-This policy has a separate strategy version; incompatible ML models abstain until
-trained on that version. Lower latency does not establish predictive accuracy.
-With FLOW_SPREAD_BUCKET_SECONDS=60 and FLOW_SPREAD_WINDOW_MINUTES=30, the spread baseline requires at least 12 distinct valid minute samples and 80% coverage. Initial warm-up normally takes 12–15 minutes; gaps can extend it. The legacy five-minute/six-hour defaults remain available when these settings are omitted. A healthy process alone does not prove that a signal has enough evidence to confirm.
+### Clock skew or future timestamps
 
-The Compose setup uses a five-minute delay between broad scans. Each closed
-15-minute execution window receives a distinct candidate ID under rules-0.2.0,
-while repeated scans of the same window remain deduplicated. Native feeds recover
-per symbol; one stale coin does not reset the other coins' retained history.
-Source changes and interruptions reset affected continuity.
+1. Open Windows **Settings → Time & language → Date & time**.
+2. Enable **Set time automatically**, select the correct time zone, and click
+   **Sync now** under clock synchronization.
+3. Run `docker compose exec desk bybit-flow doctor` again and inspect exchange
+   `clock_skew_ms` and live-feed freshness.
 
-Cards include direction, setup, quality, entry zone, stop, TP1, TP2, and risk
-information. Grades do not override confirmation or freshness checks. A quiet
-channel can indicate warmup, unavailable data, or no qualifying setup.
+For CMD recovery, open **Command Prompt as administrator**:
 
-The model worker monitors labels and updates readiness every 15 minutes. Each source
-and training track starts its first fit on the next worker loop once it has at least
-500 usable outcomes and meets the chronological partition requirements. Later fits
-require 50 new outcomes or seven days. Historical candle bootstrap models remain
-advisory and cannot be promoted. A new installation can collect data without a model.
-See [ML research](ML_RESEARCH.md) for readiness, storage limits and approval.
+```bat
+net start w32time
+w32tm /resync
+w32tm /query /status
+```
 
-## Recording retention
+An already-running service message is harmless. If no time source is available,
+check network/time-service policy rather than repeatedly restarting BybitFlow.
+If Windows is synchronized but container time remains wrong, restart Docker
+Desktop once, resume Compose, and recheck. A corrected clock does not repair
+previously recorded clock-damaged evidence; affected flow must warm up again.
+See [Microsoft's Windows Time documentation](https://learn.microsoft.com/en-us/windows-server/networking/windows-time-service/windows-time-service-tools-and-settings).
 
-`FLOW_RECORDING_RETENTION_ENABLED=true` enables raw-data cleanup in the ML worker
-after outcome processing. Below 85% of `FLOW_MAX_STORAGE_GB`, the worker removes
-eligible old evidence in batches of about 256 MB per monitoring pass. At 85% it
-removes safe old files toward 60% usage to restore headroom. Routine worker cleanup
-retains at least `FLOW_ML_RAW_RETENTION_MINUTES` of raw tape (default 60 minutes).
-At 85% budget pressure, safe cleanup may shorten the floor to 15 minutes. Older active
-plans, unresolved labels and replay leases retain their evidence in either case.
-Manual cleanup retains six recent hours. The database,
-feature snapshots, labels, training datasets, models and segment hashes remain.
-Removed raw history cannot be replayed again; unlabelled decisions before the
-retention boundary receive an incomplete label, never an invented win or loss. The
-worker must remain enabled. If protected history or preserved ML artifacts alone
-fill the budget, recording stops explicitly rather than deleting those records.
+### Disk full or application storage limit
+
+Check both physical free space and the application budget:
+
+```bat
+docker system df
+docker compose exec desk bybit-flow storage status
+docker compose exec desk bybit-flow storage cleanup --dry-run
+```
+
+Free unrelated downloads/temporary files through Windows **Settings → System →
+Storage**. Review Docker's usage before removing anything. To reclaim dangling
+build cache, run the following and review Docker's confirmation prompt:
+
+```bat
+docker builder prune
+```
+
+This removes build cache, not BybitFlow's data volume, and future builds may need
+downloads again. Review and run managed `storage cleanup`/`storage compact` for
+eligible application evidence. If cleanup reports protected history, let the
+worker finish outcomes or investigate its blocker. Do not delete SQLite, model
+files, Docker/WSL disks, active recordings, or the volume to force headroom.
+Do not use `down -v`, `volume prune`, or factory reset as a space-recovery shortcut.
+Docker virtual-disk allocation may not shrink immediately when internal files are
+removed. See [Docker disk usage](https://docs.docker.com/reference/cli/docker/system/df/)
+and [build-cache cleanup](https://docs.docker.com/reference/cli/docker/builder/prune/).
+
+### Docker engine unavailable or socket initialization failure
+
+This includes Docker Desktop startup errors involving `dockerInference` or
+`docker-secrets-engine/engine.sock`; the application cannot start until the engine
+works. Confirm Linux-container mode, restart Docker Desktop from its Troubleshoot
+menu, then run:
+
+```bat
+docker info
+docker compose --profile ml up -d
+docker compose --profile ml ps
+```
+
+If the engine still fails, gather Docker Desktop diagnostics and consult its
+[troubleshooting guide](https://docs.docker.com/desktop/troubleshoot-and-support/troubleshoot/).
+Avoid deleting socket folders, factory-resetting, or changing unrelated Windows
+services without diagnosing the engine error. Restarting Docker Desktop interrupts
+other containers too.
+
+### Dashboard unavailable or authentication fails
+
+Check `ps`, desk logs, Docker availability, and port 8000. Open
+`http://127.0.0.1:8000`, not a remote/public URL. Use username `research` and the
+current `.env` password. A missing `FLOW_ADMIN_TOKEN` blocks Compose startup.
+After changing it, recreate services with `up -d` before signing in again.
+
+### No signals, pending confirmation, or monitoring paused
+
+```bat
+docker compose exec desk bybit-flow signals status
+docker compose exec desk bybit-flow doctor
+docker compose --profile ml logs --tail 100 desk
+```
+
+Inspect warm-up, required stream freshness, recorder gaps, confirmation checks,
+gate rejection reasons, and actual Discord attempts. `FLOW_RESEARCH_ALERTS=true`
+and a valid `FLOW_RESEARCH_WEBHOOK` are needed for broader research delivery.
+`test-discord` confirms signals-webhook access only. A connection test cannot
+force a real setup. Terminal results may be edits of an older card.
+
+Pending confirmation means required evidence has not passed. A pause after an
+alert retains the plan and requires historical catch-up plus fresh data. Do not
+clear an outbox, fabricate evidence, or weaken risk checks to generate a message.
+
+### Exchange access, DNS, or certificate errors
+
+Run `test-market --exchange binance`, `bybit`, and `okx` separately. Browser access
+does not prove container REST/WebSocket access. Check host time, DNS, Docker proxy
+settings, firewall/network filtering, and provider availability. Keep TLS
+verification enabled and do not pin exchange IPs. If one primary fails, auto mode
+can select another working venue; active plans still use their original source.
+
+An optional project-local DNS-over-HTTPS relay is described below. It can help
+incorrect DNS resolution; it does not guarantee access through filtering or fix
+exchange outages. Normal scan failures retry after the attempt completes; recovery
+may require fresh spread/flow history.
+
+### ML remains collecting, not ready, or abstaining
+
+Inspect `docker compose exec trainer bybit-flow ml status` and trainer logs.
+Millions of events do not replace complete independent outcomes. Check source,
+schema, class counts, causal partitions, unseen holdout shortage, compatibility,
+storage guard, and worker state. A heartbeat alone does not mean ML is enabled:
+`FLOW_ML_ENABLED=false` leaves the worker idle. Restarting or manually fitting
+cannot create missing evidence. See [ML readiness](ML_RESEARCH.md#training).
+
+### Downtime after sleep or reboot
+
+Keep Docker running and the host awake while monitoring. In Windows power settings,
+choose an appropriate plugged-in sleep policy; turning the screen off is separate
+from sleep. Configure Docker Desktop startup if automatic recovery after sign-in
+is desired, and verify services afterward. `restart: unless-stopped` cannot prevent
+host sleep or resume a service deliberately stopped with Compose.
+
+After downtime, resume with `docker compose --profile ml up -d`. Original setups
+are reconciled against closed one-minute candles from their original venue.
+Missing history keeps monitoring paused; same-candle ambiguity is conservative.
+No downtime recovery establishes an actual account fill.
+
+## Optional encrypted DNS
+
+The relay in `compose.doh.yaml` uses verified HTTPS to Google Public DNS and does
+not fall back to unencrypted upstream DNS. It affects these project containers,
+not Windows/browser DNS. Google receives their queries. It reserves
+`172.30.53.0/24`; use an unused subnet if that conflicts with another Docker network.
+
+For a checkout without an existing `compose.override.yaml`, run in CMD:
+
+```bat
+docker compose -p bybitflow build desk
+copy compose.doh.yaml compose.override.yaml
+docker compose --profile ml up -d --no-build
+```
+
+The build command supplies the `bybitflow-desk:latest` tag used by the relay; it
+does not create containers or replace volumes. If an override already exists,
+merge the DNS configuration rather than overwriting it. The local override is
+ignored by Git. Check the `dns` service with `docker compose ps`.
+
+To disable a DNS-only override, provided the destination filename does not exist:
+
+```bat
+ren compose.override.yaml compose.override.yaml.disabled
+docker compose --profile ml up -d --no-build --remove-orphans
+```
+
+For a merged override, remove only its DNS sections instead. Review other orphan
+services before using `--remove-orphans`. See [Google's DoH protocol](https://developers.google.com/speed/public-dns/docs/doh).
 
 ## Stop, restart, and update
 
-In Windows CMD, first enter the repository directory. Replace
-`C:\path\to\bybitflow` with the folder where you cloned or extracted this
-repository:
-
 ```bat
-cd /d C:\path\to\bybitflow
-```
-
-Use these commands for everyday operation:
-
-```bat
-REM Stop both services; preserve data.
 docker compose --profile ml stop
-
-REM Resume.
 docker compose --profile ml up -d
-
-REM Inspect recent logs.
 docker compose --profile ml logs --tail 100
 ```
 
-Closing the dashboard or terminal does not stop containers. Windows sleep interrupts
-collection. For an update, create a backup, stop the services, pull the intended
-revision with `git pull --ff-only`, and rebuild with
-`docker compose --profile ml up -d --build`.
+The first command stops services without deleting data; the second resumes them.
+Closing the dashboard or terminal does not stop them. For an update, back up,
+stop, run `git pull --ff-only origin main`, then rebuild with
+`docker compose --profile ml up -d --build`. Resolve a failed pull before rebuilding.
+Run `doctor` and `ml status` afterward. Preserve the Compose project name/volume;
+do not run `docker compose down -v`.
 
-## Connectivity recovery
+The CI-gated PowerShell deployment script also audits existing active plans and
+delivery receipts and preserves the maturity epoch. See [ML deployment](ML_RESEARCH.md#storage-and-replay-checkpoints).
 
-Use Exchange health and `test-market` to identify the failing source. Certificate
-hostname mismatches indicate that the endpoint cannot be authenticated; check DNS,
-network filtering, and the network provider. Keep TLS verification enabled.
+## Backups
 
-Scan failures retry within 60 seconds after an attempt completes. Normal successful
-scans use the configured interval. Correcting connectivity allows automatic
-requalification and fresh-data warmup.
+For an online metadata backup, choose a new filename:
 
-## Backups and retention
-
-The persistent `research-data` volume contains SQLite metadata, segments, and ML
-artifacts. Credentials remain in the private `.env`.
-
-For an online metadata backup:
-
-```sh
-docker compose exec desk bybit-flow backup /app/data/research-backup.sqlite
-docker compose cp desk:/app/data/research-backup.sqlite ./research-backup.sqlite
+```bat
+docker compose exec desk bybit-flow backup /app/data/research-backup-YYYYMMDD-HHMM.sqlite
+docker compose cp desk:/app/data/research-backup-YYYYMMDD-HHMM.sqlite ./research-backup-YYYYMMDD-HHMM.sqlite
 ```
 
-Use a new backup filename each time. A metadata backup alone excludes raw recordings
-and model files. For a complete archive, stop both writers and back up the entire
-volume plus an encrypted copy of the environment configuration. Verify file hashes
-and restore into a separate volume before replacing an installation.
-
-`bybit-flow retention-plan` reports archive candidates; it does not delete data.
-Keep the outbox and recording manifests with their related artifacts.
-See [operations](OPERATIONS.md) for recovery and delivery semantics.
-
-## Multi-horizon discovery and notification hardening
-
-Stage A1 ranks short intraday, core intraday and swing opportunities independently
-using closed candles, spread and liquidity. The best supported priority determines
-shortlisting; these ranks are not quality scores or probabilities. Stage A2 checks
-real visible depth for protected active/core symbols, exploit and exploration
-selections, then reserves only as needed. `FLOW_STAGE_A_DEPTH_CANDIDATES=0` derives
-reserve capacity as three times deep capacity. Existing active feeds remain protected.
-
-New versions use explicit context/setup/execution timeframe provenance. Existing
-plans, scores, horizons and deadlines are unchanged. Fundamentals now separate
-source coverage from an explicit sourced quality/risk assessment; unassessed facts
-provide no favorable quality. Severe adverse evidence reduces credit. The five
-cross-market points primarily use beta-adjusted residual evidence, with a capped
-fallback when factors are unavailable. The seven category weights still total 100.
-
-An economic plan has an `alert-fingerprint-v1` identity independent of evaluation
-timestamps. SQLite atomically claims it before HTTP delivery. Existing outbox
-idempotency remains. Ambiguous delivery is not automatically retried. Candidate
-reevaluations remain in history but contribute at most one independent opportunity
-to future ML datasets. Different horizons and families retain separate research data.
-
-Thesis clustering affects **notification presentation only**. A stronger related
-plan can become the primary displayed thesis, but it never replaces, pauses,
-rescales, merges or terminates either original setup. Related horizons receive
-compact confirmations; materially different plans can receive separate cards;
-opposite directions are labelled as conflicting. These cards do not imply multiple
-full positions. Existing active alerts are seeded individually, without retroactive
-clustering. `/api/delivery` and the Signals page report real initial delivery metrics,
-excluding connection/synthetic tests and lifecycle-only updates.
-
-Late-outcome research joins immutable decision-time snapshots to separate completed
-post-terminal labels. Future labels never enter decision inputs or rewrite a primary
-expiry. The pooled logistic horizon experiment uses chronological train/validation/
-test partitions, outcome purging, a one-day embargo and a reserved holdout. Its
-minimum is `FLOW_HORIZON_MODEL_MIN_SAMPLES` (default 500). Below that it reports
-`INSUFFICIENT_EVIDENCE` and no recommendation. It remains research-only, with no
-production promotion or authority to change live plans.
-
-At the end of an alerted setup's tracking period, BybitFlow compares the latest
-trustworthy original-exchange price with the planned entry. A LONG benefits from
-a higher price; a SHORT benefits from a lower price. If an entry-zone touch was
-observed and cost assumptions are available, the Discord card and signal detail
-show estimated net R even when TP1 was not reached. A missing or stale price,
-incomplete path, or unobserved entry leaves profit or loss unknown. This is a
-paper mark, not proof that your account entered or closed. Use the Paper journal
-link on the signal detail to record your own close; it does not rewrite the
-original expiry or ML label.
-
-Retention is enabled by default for new installations. Explicit
-`FLOW_RECORDING_RETENTION_ENABLED=false` still disables it. Upgrades do not edit
-an existing `.env`. Storage status includes retention state, raw/permanent/protected/
-deletable bytes, usage percentage, cleanup history and cumulative reclaimed space.
-Active setups and unresolved primary recording outcomes remain
-protected. At budget pressure the recorder attempts safe cleanup before opening its
-storage circuit breaker. Late observations use compact candle checkpoints rather than pinning raw depth for days.
-
-
-## Signal pipeline diagnostics
-
-Run `docker compose exec desk bybit-flow signals status` or open the Signal journal.
-Recorded exchange events are separate from generated setups. The panel reports
-confirmation checks, rejection reasons and genuine Discord attempts over recent
-windows. Tests and synthetic cards are excluded from genuine delivery counts.
-A runtime-error state requires attention; healthy flow or risk rejections are
-recorded strategy decisions. A successful Discord test does not bypass those gates.
-
-ML dashboard summaries are materialized by the worker and include their observation
-time. Participation baselines need 20 prior complete windows from the same market,
-venue, horizon and session. Swing path and confirmation challengers remain research
-until their independent sample and chronological validation requirements are met.
-Existing signals keep their original entry, stop, targets and deadlines throughout
-these experiments. See [v4 verification](V4_VERIFICATION.md).
+Replace the timestamp placeholder. The backup command refuses to overwrite an
+existing destination. A metadata backup excludes raw recordings, packs, datasets,
+and model files. Stop both writers for a complete volume archive and protect
+`.env` separately. Verify hashes and restore into a separate volume before
+replacing an installation. Keep outbox and manifests with their artifacts.
+See [operations](OPERATIONS.md#backups-and-migrations).

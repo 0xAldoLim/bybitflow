@@ -12,8 +12,10 @@ Binance uses REST snapshot plus buffered U/u bridge, then pu continuity. OKX req
 snapshot plus matching prevSeqId and rejects resets; obsolete checksums are not used.
 Bybit retains audited V5 snapshot/delta semantics. Prices and quantities use Decimal.
 New native connection IDs, separate event/receipt times, raw source, schema and quality
-are retained. Auto source changes reset tape/book/context and invalidate affected plans.
-Fixed modes never silently switch. Failover is conservative, not zero-gap or zero-latency.
+are retained. Auto source changes reset affected collection continuity. Existing
+plans retain their original venue and pause monitoring if that venue's required
+coverage is lost. Fixed modes never silently switch. Failover is conservative,
+not zero-gap or zero-latency.
 Raw envelope schema remains v1; additive normalized observation schema is explicitly v2
 in each new row and segment manifest. Old segments are not rewritten. Unknown generic
 observation exchange remains null, not assumed Bybit. Binance funding freshness uses the
@@ -71,8 +73,9 @@ notional. OKX liquidation stream is not implemented. OKX current OI is sampled l
 not mislabeled as backfilled history. Unknown settlement intervals use an explicit hourly
 funding reserve assumption; no account-specific leverage brackets are invented.
 
-Feature schema v4 adds trapped-participant and mean-execution-size fields. Old snapshots
-and models remain preserved. Exports separate schema and venue methodology. Current labels
+Historical feature schema v4 introduced trapped-participant and mean-execution-size
+fields; current decisions use `candidate-v10`. Old snapshots and models remain
+preserved. Exports separate schema and venue methodology. Current labels
 use assumed costs, exclude gaps/unresolved outcomes and cannot approve validated SSS.
 The earlier full-strategy replay is still Bybit-specific and explicitly refuses Binance/OKX
 input. Source-tagged native recordings can label frozen candidates through `ml label`.
