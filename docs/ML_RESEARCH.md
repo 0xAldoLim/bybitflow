@@ -144,8 +144,15 @@ bybit-flow ml infer MODEL_ID DATASET.parquet
 Training requires at least 200 training, 100 calibration, 100 validation, and 100
 holdout outcomes after chronological partitioning, purging, and embargo. These
 minimums do not establish promotion eligibility.
-The `adaptive-causal-v1` planner chooses the earliest feasible boundaries from
-distinct decision times. Each development row must have its exit and label
+The `adaptive-causal-v2` policy keeps V1's earliest feasible boundaries unless
+the split has at least 1,500 outcomes, at least half in holdout and at most a
+quarter in training. In that case, a bounded search of at most 64 timing-based
+boundaries prefers post-purge shares near 50% training, 15% calibration,
+15% validation and 20% holdout. These shares are targets, not minimums. Exact
+causal counts validate every candidate. If no better feasible allocation exists,
+the V1 split remains available with a recorded fallback reason.
+
+Each development row must have its exit and label
 available more than four hours before the next partition starts. Boundaries
 depend only on timing and sample counts, never returns, classes or model scores.
 This avoids empty partitions caused by fixed decision-time percentiles when
@@ -162,6 +169,13 @@ purging, shortfalls and the blocking partition. The worker computes these detail
 while preparing data; normal status requests do not rescan feature payloads.
 `READY` means partition sizes are sufficient. Model fitting still requires both
 outcome classes in training and calibration and does not imply validated edge.
+Cached `model_fit_feasibility` reports each partition's row and class counts,
+`fit_ready`, and a specific blocker: partition shortage, single-class training
+or calibration, or model-library failure. Positive means net R above zero;
+the negative class includes zero. Class counts are diagnostics only and never
+move a partition boundary. Status also records `partition_policy_used` and
+`fallback_reason`. A consumed holdout can make the next cycle `NOT_READY`
+while the existing challenger remains usable for compatible advisory inference.
 Millions of recorded events do not substitute for complete, independent outcomes.
 `ml status` reports complete labels, recent worker activity, abstention reasons, and
 whether a compatible challenger exists. Network gaps can leave many labels incomplete.
@@ -218,6 +232,41 @@ into training.
 
 Datasets, recordings, models, audit files, and failed experiments belong in persistent
 research storage, outside Git. See [operations](OPERATIONS.md) for backup and restore.
+
+## Stable maturity period
+
+The CI-verified deployment script creates `ml_maturity_epoch` after its runtime
+and continuity checks. It records the deployed commit, start time, schemas,
+label policies, partition policy and V8 gating policy. Creation is atomic;
+restarts, normal worker cycles and later deployments preserve the original epoch.
+This marker describes collection provenance and never participates in trade
+decisions. `ml status` and the ML dashboard show the marker and cached progress.
+Primary progress uses the active venue's complete, unique `candidate-v10` /
+`prints-v1` outcomes divided by 500. Venues remain separate; percentage progress
+is training eligibility, not confidence or evidence of profitable predictions.
+The view also includes sequence progress, decisions since the epoch, model IDs,
+storage usage and recorder drops.
+
+After this final stabilization pass, keep candidate-v10 feature meanings, V8
+production-gate thresholds, strategy family rules, quality-score weights, label
+policies, bootstrap projection, partition policy and ML minimums fixed. Change
+them only to repair a correctness bug, safety issue, broken exchange API or
+severe runtime/storage failure. A handful of recent trades is not a reason to
+tune policy. There is no automatic strategy optimization, threshold tuning or
+model promotion.
+
+Let the collector materialize causal print outcomes, bootstrap outcomes and shadow
+V8 counterfactuals. The worker still trains its first ready model immediately and
+subsequent models after 50 new usable outcomes, seven days, or a manual cycle.
+Unseen contexts and insufficient unseen holdouts remain explicit abstentions.
+Do not force a fit by shortening embargoes, reusing holdouts or weakening
+compatibility checks.
+
+Storage status uses healthy below 80%, warning at 80–90%, cleanup pressure at
+90–95% and bootstrap/training backpressure at 95% or above. Checkpoint-aware
+retention and recorder priority remain unchanged. Permanent labels, models,
+snapshots and active setup evidence are preserved; raising the cap is not a
+retention repair.
 
 ## Two-stage outcome models
 

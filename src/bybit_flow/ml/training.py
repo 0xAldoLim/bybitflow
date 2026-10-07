@@ -18,7 +18,6 @@ from .validation import (
     breakdown,
     cluster_interval,
     metrics,
-    next_cycle_partitions,
     optimize,
     walk_forward,
 )
@@ -102,11 +101,15 @@ def _train(store, path, kinds, calibration, track):
             )
     from .operations import cache_partition_feasibility
 
-    partition_plan = cache_partition_feasibility(store, rows, track, rows[0]["source"], schema, label_policy)
-    previous_end = partition_plan["previous_holdout_end"]
+    partition_plan, groups = cache_partition_feasibility(
+        store, rows, track, rows[0]["source"], schema, label_policy, include_groups=True
+    )
     if partition_plan["status"] != "READY":
         raise ValueError(partition_plan["reason"])
-    train_rows, cal_rows, validation, holdout = next_cycle_partitions(rows, previous_end)
+    fit_plan = store.get(f"ml_model_fit_feasibility:{track}:{rows[0]['source']}:{schema}:{label_policy}")
+    if not fit_plan["fit_ready"]:
+        raise ValueError(f"{fit_plan['blocker']}: {fit_plan['reason']}")
+    train_rows, cal_rows, validation, holdout = groups
     if len(train_rows) < 200 or len(cal_rows) < 100 or len(validation) < 100 or len(holdout) < 100:
         raise ValueError("Need >=200 train, 100 independent calibration, 100 validation, 100 holdout labels")
     ident = uuid.uuid4().hex
@@ -207,6 +210,7 @@ def _train(store, path, kinds, calibration, track):
         context_groups[key].append(row)
     report = dict(
         partition_feasibility=partition_plan,
+        model_fit_feasibility=fit_plan,
         sequence_excluded=sequence_excluded,
         out_of_sample=True,
         holdout=final,
@@ -283,9 +287,12 @@ def _train(store, path, kinds, calibration, track):
             threads=1,
             calibration=calibration,
             embargo_ms=14_400_000,
-            partition_planner="adaptive-causal-v1",
+            partition_planner=partition_plan["partition_policy_used"],
+            partition_policy_used=partition_plan["partition_policy_used"],
+            fallback_reason=partition_plan["fallback_reason"],
             partition_requirements=partition_plan["requirements"],
             partition_boundaries=partition_plan["chosen_boundaries"],
+            partition_counts=partition_plan["counts"],
             label_policies=sorted({r["label"].get("policy", "unknown") for r in rows}),
         ),
         periods={

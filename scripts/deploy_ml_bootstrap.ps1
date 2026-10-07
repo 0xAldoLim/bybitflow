@@ -99,5 +99,6 @@ foreach ($sent in $before.sent_initial) {
 @{ commit=$commit; ci_url=$run.html_url; before=$before; after=$after; continuity='Original plans and delivery receipts retained' } | ConvertTo-Json -Depth 15 | Set-Content -LiteralPath $reportPath
 Invoke-Docker -DockerArgs @('compose','exec','-T','desk','bybit-flow','doctor','--json')
 Invoke-Docker -DockerArgs @('compose','exec','-T','desk','bybit-flow','signals','status')
+Invoke-Docker -DockerArgs @('compose','exec','-T','trainer','bybit-flow','ml','maturity-start','--code-commit',$commit)
 Invoke-Docker -DockerArgs @('compose','exec','-T','trainer','bybit-flow','ml','status')
 Write-Host "Audit saved to $reportPath"

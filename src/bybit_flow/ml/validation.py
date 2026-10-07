@@ -12,7 +12,8 @@ BOUNDS = {"min_probability": (0.50, 0.60, 0.70), "min_quality": (65, 85, 95)}
 
 REQUIREMENTS = {"training": 200, "calibration": 100, "validation": 100, "holdout": 100}
 MINIMUM_TOTAL = 500
-PARTITION_POLICY = "adaptive-causal-v1"
+PARTITION_POLICY = "adaptive-causal-v2"
+V1_POLICY = "adaptive-causal-v1"
 
 
 def _earliest_boundary(rows, times, lower, minimum, embargo_ms, ceiling, holdout_after=None):
@@ -38,7 +39,7 @@ def _earliest_boundary(rows, times, lower, minimum, embargo_ms, ceiling, holdout
     return None, last
 
 
-def _partition_plan(rows, previous_holdout_end, embargo_ms):
+def _v1_plan(rows, previous_holdout_end, embargo_ms):
     """Earliest boundaries dominate later ones by leaving larger future pools.
 
     Moving a feasible training end earlier adds calibration candidates at every
@@ -54,7 +55,8 @@ def _partition_plan(rows, previous_holdout_end, embargo_ms):
     asof = time_ns() // 1_000_000
     report = dict(
         status="NOT_READY",
-        policy=PARTITION_POLICY,
+        policy=V1_POLICY,
+        partition_policy_used=V1_POLICY,
         asof_ms=asof,
         total_rows=len(rows),
         distinct_decision_times=0,
@@ -185,6 +187,123 @@ def _partition_plan(rows, previous_holdout_end, embargo_ms):
     )
     report["shortfall"] = dict.fromkeys(REQUIREMENTS, 0)
     return report, groups
+
+
+def pathological_allocation(report):
+    """Predeclared count-only trigger; model outcomes cannot request refinement."""
+    counts, total = report["counts"], report["total_rows"]
+    return (
+        report["status"] == "READY"
+        and total >= 1500
+        and counts["holdout"] >= total * 0.5
+        and counts["training_after_purge"] <= total * 0.25
+    )
+
+
+def _candidate_boundaries(rows, times, report, embargo_ms):
+    """At most 64 distinct boundaries, around timing/count targets and V1 anchors."""
+    from bisect import bisect_left, bisect_right
+
+    anchors = {bisect_left(times, t) for t in report["chosen_boundaries"].values()}
+    ceiling = bisect_left(times, report["latest_feasible_holdout_start"])
+    indices = set(anchors) | {ceiling}
+    # A fixed coarse grid covers asymmetric outcome delays. Fine target probes
+    # use decision counts and released-label counts, never feature/return values.
+    for numerator in range(1, 33):
+        row = rows[min(len(rows) - 1, len(rows) * numerator // 32)]
+        indices.add(bisect_left(times, row["decision_ms"]))
+    for share in (0.50, 0.65, 0.80):
+        center = bisect_left(times, rows[int(len(rows) * share)]["decision_ms"])
+        indices.update(range(center - 2, center + 3))
+    released = sorted(max(r["label_available_ms"], r["label"]["exit_ms"]) + embargo_ms for r in rows)
+    center = bisect_right(times, released[len(rows) // 2 - 1])
+    indices.update(range(center - 2, center + 3))
+    candidates = sorted(i for i in indices if min(anchors) <= i <= ceiling)
+    if len(candidates) > 64:
+        extra = [i for i in candidates if i not in anchors | {ceiling}]
+        slots = 64 - len(anchors | {ceiling})
+        candidates = sorted(anchors | {ceiling} | {extra[i * len(extra) // slots] for i in range(slots)})
+    return [times[i] for i in candidates]
+
+
+def _allocation_key(counts, boundaries):
+    from fractions import Fraction
+
+    total = sum(counts)
+    # Exact rational comparison avoids platform-dependent floating-point ties.
+    loss = Fraction(sum(abs(20 * n - weight * total) for n, weight in zip(counts, (10, 3, 3, 4))), total)
+    a, b, c = boundaries
+    return loss, -counts[0], -counts[1], -counts[2], -c, a, b, c
+
+
+def _partition_plan(rows, previous_holdout_end, embargo_ms):
+    report, groups = _v1_plan(rows, previous_holdout_end, embargo_ms)
+    report.update(requested_partition_policy=PARTITION_POLICY, fallback_reason=None)
+    if not pathological_allocation(report):
+        report["fallback_reason"] = (
+            "V1 has no feasible causal split"
+            if report["status"] != "READY"
+            else "V1 allocation is not pathological"
+        )
+        return report, groups
+    from bisect import bisect_left
+    from itertools import combinations
+
+    ordered = sorted(rows, key=lambda r: (r["decision_ms"], r["id"]))
+    decisions = [r["decision_ms"] for r in ordered]
+    times = sorted(set(decisions))
+    candidates = _candidate_boundaries(ordered, times, report, embargo_ms)
+    releases = np.array([max(r["label_available_ms"], r["label"]["exit_ms"]) + embargo_ms for r in ordered])
+    offsets = [bisect_left(decisions, boundary) for boundary in candidates]
+    prefixes = [np.r_[0, np.cumsum(releases < boundary)] for boundary in candidates]
+    original = tuple(report["chosen_boundaries"].values())
+    best_boundaries, best_counts = original, tuple(map(len, groups))
+    best_key = _allocation_key(best_counts, original)
+    for i, j, k in combinations(range(len(candidates)), 3):
+        a, b, c = candidates[i], candidates[j], candidates[k]
+        if previous_holdout_end is not None and c <= previous_holdout_end + embargo_ms:
+            continue
+        counts = (
+            int(prefixes[i][offsets[i]]),
+            int(prefixes[j][offsets[j]] - prefixes[j][offsets[i]]),
+            int(prefixes[k][offsets[k]] - prefixes[k][offsets[j]]),
+            len(ordered) - offsets[k],
+        )
+        if any(n < minimum for n, minimum in zip(counts, REQUIREMENTS.values(), strict=True)):
+            continue
+        key = _allocation_key(counts, (a, b, c))
+        if key < best_key:
+            best_key, best_counts, best_boundaries = key, counts, (a, b, c)
+    report.update(allocation_loss=float(best_key[0] / 20), candidate_boundaries_evaluated=len(candidates))
+    if best_boundaries == original:
+        report["fallback_reason"] = "No better feasible allocation in bounded timing-only search"
+        return report, groups
+    lower = times[0]
+    for index, (name, key, boundary) in enumerate(
+        zip(
+            ("training", "calibration", "validation"),
+            ("train_end", "calibration_end", "validation_end"),
+            best_boundaries,
+            strict=True,
+        )
+    ):
+        before = [r for r in ordered if lower <= r["decision_ms"] < boundary]
+        groups[index] = [
+            r for r in before if max(r["label_available_ms"], r["label"]["exit_ms"]) + embargo_ms < boundary
+        ]
+        report["counts"][name + "_before_purge"] = len(before)
+        report["counts"][name + "_after_purge"] = len(groups[index])
+        report["chosen_boundaries"][key] = boundary
+        lower = boundary
+    groups[3] = [r for r in ordered if r["decision_ms"] >= lower]
+    report["counts"]["holdout"] = len(groups[3])
+    report.update(policy=PARTITION_POLICY, partition_policy_used=PARTITION_POLICY)
+    return report, groups
+
+
+def plan_partitions(rows, previous_holdout_end=None, embargo_ms=4 * HOUR):
+    """Plan once and expose exact groups to worker-only fit-readiness diagnostics."""
+    return _partition_plan(rows, previous_holdout_end, embargo_ms)
 
 
 def partition_feasibility(rows, previous_holdout_end=None, embargo_ms=4 * HOUR):

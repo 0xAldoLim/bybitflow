@@ -207,6 +207,14 @@ With `FLOW_ML_FILTER_RESEARCH=false`, an unavailable or untrained model does not
 block otherwise confirmed Discord research signals. See [ML research](docs/ML_RESEARCH.md)
 for the training policy and validation requirements.
 
+The final stabilization release starts an immutable maturity epoch after verified
+deployment. The ML page shows causal partition and class readiness, progress
+toward 500 usable outcomes per venue, and storage/recorder health. Keep feature
+definitions, strategy rules, score weights, label policies and ML requirements
+fixed while data matures. Change them only for a correctness or safety bug,
+broken exchange API, or severe runtime/storage failure. There is no automatic
+strategy tuning or model promotion.
+
 ## Local storage
 
 Market recordings and ML data are stored **locally in Docker's `research-data`

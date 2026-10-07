@@ -213,9 +213,17 @@ def train_ready(settings, store, manual=False):
                 result.pop("reason", None)
             except Exception as exc:
                 result.update(status="abstained", reason=str(exc))
+                fit_key = f"ml_model_fit_feasibility:{track}:{source}:{schema}:{policy}"
+                fit_plan = store.get(fit_key, {})
+                if fit_plan.get("fit_ready") or not fit_plan:
+                    fit_plan.update(fit_ready=False, blocker="MODEL_FIT_ERROR", reason=str(exc))
+                    store.put(fit_key, fit_plan)
             plan = store.get(f"ml_partition_feasibility:{track}:{source}:{schema}:{policy}")
             if plan:
                 result["partition_feasibility"] = plan
+            fit_plan = store.get(f"ml_model_fit_feasibility:{track}:{source}:{schema}:{policy}")
+            if fit_plan:
+                result["model_fit_feasibility"] = fit_plan
             store.put(key, result)
             results[track + ":" + source] = result
     state = (
@@ -289,6 +297,8 @@ def run(arguments, settings, store):
     sub.add_parser("status")
     sub.add_parser("cycle")
     sub.add_parser("worker")
+    maturity = sub.add_parser("maturity-start", help="Record the final verified deployment epoch once")
+    maturity.add_argument("--code-commit", required=True)
     for name in ("bootstrap-labels", "bootstrap-export", "bootstrap-train"):
         command = sub.add_parser(name)
         command.add_argument("--source", choices=("binance", "bybit", "okx"), required=True)
@@ -300,7 +310,11 @@ def run(arguments, settings, store):
     drift.add_argument("model_id")
     args = parser.parse_args(arguments)
     registry = Registry(store)
-    if args.command.startswith("bootstrap-"):
+    if args.command == "maturity-start":
+        from .maturity import start_epoch
+
+        result = start_epoch(store, args.code_commit)
+    elif args.command.startswith("bootstrap-"):
         from . import bootstrap
 
         if args.command == "bootstrap-labels":

@@ -44,16 +44,20 @@ def abstain(store, now, reason):
     store.put("ml_abstentions", {k: v for k, v in buckets.items() if int(k) >= now - 3600000})
 
 
-def cache_partition_feasibility(store, rows, track, source, schema, policy, asof_ms=None):
+def cache_partition_feasibility(
+    store, rows, track, source, schema, policy, asof_ms=None, include_groups=False
+):
     """Plan already-loaded worker rows; operator views only read the small result."""
-    from .validation import partition_feasibility
+    from .readiness import model_fit_feasibility
+    from .validation import plan_partitions
 
     scope = "|".join((track, source, schema, policy))
     scopes = (scope, "legacy-primary") if track == "primary" else (scope, scope)
     previous_end = store.db.execute(
         "SELECT MAX(end_ms) FROM ml_holdouts WHERE scope IN (?,?)", scopes
     ).fetchone()[0]
-    report = partition_feasibility(rows, previous_holdout_end=previous_end) | dict(
+    report, groups = plan_partitions(rows, previous_holdout_end=previous_end)
+    report |= dict(
         at_ms=asof_ms or now_ms(),
         track=track,
         source=source,
@@ -63,10 +67,13 @@ def cache_partition_feasibility(store, rows, track, source, schema, policy, asof
         training_window_limit=10_000,
     )
     store.put(f"ml_partition_feasibility:{track}:{source}:{schema}:{policy}", report)
-    return report
+    store.put(
+        f"ml_model_fit_feasibility:{track}:{source}:{schema}:{policy}", model_fit_feasibility(report, groups)
+    )
+    return (report, groups) if include_groups else report
 
 
-def partition_status(store, primary, bootstrap):
+def partition_status(store, primary, bootstrap, prefix="ml_partition_feasibility"):
     """Expose source/track-specific cached plans without reading feature payloads."""
     from . import SCHEMA_VERSION
 
@@ -79,7 +86,7 @@ def partition_status(store, primary, bootstrap):
             count = detail.get("baseline_trainable" if track == "primary" else "trainable", 0)
             if source not in {"binance", "bybit", "okx"} or count < 500:
                 continue
-            report = store.get(f"ml_partition_feasibility:{track}:{source}:{schema}:{policy}", {})
+            report = store.get(f"{prefix}:{track}:{source}:{schema}:{policy}", {})
             result[track][source] = report or dict(
                 status="AWAITING_WORKER_PLAN", total_rows=count, track=track, source=source
             )
@@ -95,6 +102,8 @@ def trainability(store, asof_ms=None):
     sources = {
         name: dict(
             decisions=0,
+            current_decisions=0,
+            epoch_decisions=0,
             identities=set(),
             complete=0,
             unique=set(),
@@ -128,6 +137,7 @@ def trainability(store, asof_ms=None):
         ),
         0,
     )
+    epoch_start = store.get("ml_maturity_epoch", {}).get("started_ms")
     while True:
         page = " AND (s.decision_ms,s.id)>(?,?)" if cursor else ""
         params = list(cursor) if cursor else []
@@ -184,6 +194,9 @@ def trainability(store, asof_ms=None):
             bucket = sources[source]
             bucket["decisions"] += 1
             bucket["identities"].add(identity)
+            if schema == SCHEMA_VERSION:
+                bucket["current_decisions"] += 1
+                bucket["epoch_decisions"] += epoch_start is not None and decision >= epoch_start
             bucket["complete"] += complete == 1
             if (
                 complete != 1
@@ -220,6 +233,8 @@ def trainability(store, asof_ms=None):
         sequence_ready = len(bucket["sequence"])
         by_source[name] = dict(
             historical_decision_snapshots=bucket["decisions"],
+            current_schema_decisions=bucket["current_decisions"],
+            epoch_current_schema_decisions=bucket["epoch_decisions"],
             unique_candidate_identities=len(bucket["identities"]),
             complete_labels=bucket["complete"],
             raw_complete_snapshots=bucket["complete"],
@@ -290,6 +305,8 @@ def status(store, summary, enabled=True):
             excluded={},
             status="AWAITING_WORKER_SUMMARY",
         )
+    from .maturity import progress
+
     return dict(
         status="DISABLED"
         if not enabled
@@ -342,6 +359,16 @@ def status(store, summary, enabled=True):
         ml_trainability=readiness,
         partition_feasibility=partition_status(
             store, readiness["by_source"], store.get("ml_bootstrap_trainability", {})
+        ),
+        model_fit_feasibility=partition_status(
+            store,
+            readiness["by_source"],
+            store.get("ml_bootstrap_trainability", {}),
+            "ml_model_fit_feasibility",
+        ),
+        ml_maturity_epoch=store.get("ml_maturity_epoch"),
+        maturity=progress(
+            store, primary_id[0] if primary_id else None, bootstrap_id[0] if bootstrap_id else None, now
         ),
         trainable_current_schema=sum(v["trainable_current_schema"] for v in readiness["by_source"].values()),
         unique_trainable_candidates=sum(

@@ -108,7 +108,11 @@ def test_reproducible_training_registry_holdout_and_no_fake_promotion(settings, 
     assert len(result["report"]["experiments"]) == 3
     assert research_inputs
     assert all(row["decision_ms"] < result["periods"]["holdout"]["start"] for row in research_inputs)
-    assert result["training_spec"]["partition_planner"] == "adaptive-causal-v1"
+    assert (
+        result["training_spec"]["partition_planner"]
+        == result["report"]["partition_feasibility"]["partition_policy_used"]
+    )
+    assert result["report"]["model_fit_feasibility"]["fit_ready"]
     with pytest.raises(ValueError, match="real data"):
         registry.promote(result["id"], "test reviewer")
     assert registry.champion() is None

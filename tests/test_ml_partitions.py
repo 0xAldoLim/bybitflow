@@ -228,3 +228,69 @@ def test_earliest_greedy_plan_matches_small_exhaustive_timing_oracle(monkeypatch
         assert (plan["status"] == "READY") == (oracle is not None)
         if oracle is not None:
             assert tuple(plan["chosen_boundaries"].values()) == oracle
+
+
+def test_v2_refines_only_pathological_allocation_with_bounded_search():
+    data = rows(3700)
+    original, old_groups = validation._v1_plan(data, None, 4 * HOUR)
+    assert validation.pathological_allocation(original)
+    plan, groups = validation.plan_partitions(data)
+    assert plan["partition_policy_used"] == "adaptive-causal-v2"
+    assert plan["candidate_boundaries_evaluated"] <= 64
+    old_key = validation._allocation_key(
+        tuple(map(len, old_groups)), tuple(original["chosen_boundaries"].values())
+    )
+    new_key = validation._allocation_key(tuple(map(len, groups)), tuple(plan["chosen_boundaries"].values()))
+    assert new_key[0] < old_key[0]
+    assert len(groups[0]) > 0.4 * sum(map(len, groups))
+    assert 0.15 <= len(groups[3]) / sum(map(len, groups)) <= 0.25
+    satisfactory = partition_feasibility(rows(900))
+    assert satisfactory["partition_policy_used"] == "adaptive-causal-v1"
+    assert satisfactory["fallback_reason"] == "V1 allocation is not pathological"
+
+
+def test_v2_boundaries_ignore_classes_features_and_input_order():
+    data = rows(3700)
+    altered = deepcopy(data)
+    for i, row in enumerate(altered):
+        row["label"].update(net_r=(-1 if i % 2 else 10), classification="arbitrary")
+        row["values"] = {"arbitrary": i * 100}
+        row["model_predictions"] = i / len(data)
+    random.Random(91).shuffle(altered)
+    first, second = partition_feasibility(data), partition_feasibility(altered)
+    assert first["chosen_boundaries"] == second["chosen_boundaries"]
+    assert first["counts"] == second["counts"]
+    assert [[r["id"] for r in g] for g in partitions(data)] == [
+        [r["id"] for r in g] for g in partitions(altered)
+    ]
+
+
+def test_v2_falls_back_to_v1_when_bounded_candidates_cannot_improve(monkeypatch):
+    data = rows(3700)
+    monkeypatch.setattr(
+        validation, "_candidate_boundaries", lambda _r, _t, plan, _e: list(plan["chosen_boundaries"].values())
+    )
+    original, old_groups = validation._v1_plan(data, None, 4 * HOUR)
+    plan, groups = validation.plan_partitions(data)
+    assert plan["status"] == "READY" and plan["partition_policy_used"] == "adaptive-causal-v1"
+    assert plan["fallback_reason"] == "No better feasible allocation in bounded timing-only search"
+    assert plan["chosen_boundaries"] == original["chosen_boundaries"]
+    assert groups == old_groups
+
+
+def test_v2_strict_causality_and_previously_consumed_holdout():
+    data = rows(3700)
+    consumed = data[1300]["label_available_ms"]
+    plan, groups = validation.plan_partitions(data, consumed)
+    assert plan["status"] == "READY"
+    for group, boundary in zip(groups[:3], plan["chosen_boundaries"].values(), strict=True):
+        assert all(max(r["label_available_ms"], r["label"]["exit_ms"]) + 4 * HOUR < boundary for r in group)
+    assert all(r["decision_ms"] > consumed + 4 * HOUR for r in groups[3])
+    blocked = partition_feasibility(data, data[-50]["decision_ms"])
+    assert blocked["status"] == "NOT_READY" and blocked["blocker"] == "holdout"
+
+
+def test_v2_planning_ten_thousand_rows_stays_bounded():
+    plan = partition_feasibility(rows(10_000))
+    assert plan["status"] == "READY"
+    assert plan["candidate_boundaries_evaluated"] <= 64

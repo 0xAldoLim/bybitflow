@@ -479,6 +479,9 @@ def readiness(store, asof_ms=None):
             result[source]["partition_feasibility"] = cache_partition_feasibility(
                 store, rows, "bootstrap", source, SCHEMA, POLICY, asof
             )
+            result[source]["model_fit_feasibility"] = store.get(
+                f"ml_model_fit_feasibility:bootstrap:{source}:{SCHEMA}:{POLICY}"
+            )
     return result
 
 
