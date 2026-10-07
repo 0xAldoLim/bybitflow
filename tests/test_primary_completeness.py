@@ -316,6 +316,56 @@ def test_eligibility_metadata_does_not_change_frozen_features_or_plan(settings, 
     store.close()
 
 
+def test_idle_checkpoint_replays_intervening_subscription_outside_candidate_overlap(settings, signal):
+    from bybit_flow.replay import segment_rows
+
+    source = "binance"
+    plans = signal.model_copy(update={"source": source})
+    stores = [Store(settings.data_dir / name) for name in ("full", "incremental")]
+    for store in stores:
+        recorder = Recorder(store, settings)
+        recorder.flush(
+            [
+                event(500, source=source),
+                trade(700, source=source),
+                event(2000, "control/gap", {"reason": "old connection lost"}, source=source, complete=False),
+            ]
+        )
+        recorder.flush([event(5000, source=source), trade(5500, source=source)])
+        rows = [trade(at, source=source) for at in range(12000, 1_000_000, 10000)]
+        for offset in range(0, len(rows), 5):
+            recorder.flush(rows[offset : offset + 5])
+        FeatureStore(store).capture(plans, 1_000_000, "decision")
+        recorder.flush([trade(1_000_500, source=source), trade(1_010_000, 116, source=source)])
+    full, incremental = stores
+    expected = label_recordings(full, segment_rows([m["raw"] for m in full.rows("segments")]), settings)
+    incremental.put(
+        "primary_materialization",
+        seal(
+            dict(
+                policy="incremental-prints-v1",
+                cursor_ms=2000,
+                positions={},
+                subscribed=[],
+                last=[[[source, signal.symbol], 700]],
+                seen=[],
+                pending=0,
+                input_event_hash="a" * 64,
+                verified_boundary_ms=2000,
+            ),
+            3000,
+        ),
+    )
+    result = label_recordings(
+        incremental, worker_rows(incremental, after_ms=2000), settings, incremental=True
+    )
+    assert expected["complete"] == 1
+    assert result["complete"] == expected["complete"]
+    assert result["outcomes"][0]["data_gaps"] == []
+    for store in stores:
+        store.close()
+
+
 def test_new_one_ms_clock_jitter_is_explicit_larger_damage_is_not_hidden(settings):
     store, recorder = Store(settings.data_dir), None
     recorder = Recorder(store, settings)

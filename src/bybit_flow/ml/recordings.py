@@ -15,10 +15,11 @@ from ..replay import segment_rows
 from ..storage import now_ms
 
 
-def worker_rows(store, after_ms=None):
-    from ..leases import RangeLease
-
+def replay_start(store, after_ms=None):
+    """A resumed checkpoint needs all intervening controls, including while idle."""
     start = store.get("recording_retention", {}).get("through_ms", 0)
+    if after_ms is not None:
+        return max(start, after_ms)
     pending = store.db.execute(
         "SELECT min(s.decision_ms) FROM ml_snapshots s WHERE s.stage='decision' AND s.decision_ms>? "
         "AND NOT EXISTS (SELECT 1 FROM ml_labels l WHERE l.snapshot_id=s.id AND l.policy='prints-v1')",
@@ -26,8 +27,13 @@ def worker_rows(store, after_ms=None):
     ).fetchone()[0]
     if pending is not None:
         start = max(start, pending - 900_000)
-    if after_ms is not None:
-        start = max(start, after_ms)
+    return start
+
+
+def worker_rows(store, after_ms=None):
+    from ..leases import RangeLease
+
+    start = replay_start(store, after_ms)
     with RangeLease(store, start, now_ms(), "ML verified replay") as lease:
         yield from _worker_rows(store, lease, after_ms)
 
@@ -51,16 +57,7 @@ def committed_manifests(store, retained_after):
 
 def _worker_rows(store, lease=None, after_ms=None):
     # SQLite publication happens after gzip, parquet and manifest have closed.
-    retained_after = store.get("recording_retention", {}).get("through_ms", 0)
-    pending = store.db.execute(
-        "SELECT min(s.decision_ms) FROM ml_snapshots s WHERE s.stage='decision' AND s.decision_ms>? AND NOT EXISTS "
-        "(SELECT 1 FROM ml_labels l WHERE l.snapshot_id=s.id AND l.policy='prints-v1')",
-        (retained_after,),
-    ).fetchone()
-    if pending and pending[0] is not None:
-        retained_after = max(retained_after, pending[0] - 900_000)
-    if after_ms is not None:
-        retained_after = max(retained_after, after_ms)
+    retained_after = replay_start(store, after_ms)
     manifests = committed_manifests(store, retained_after)
     spans = []
     for manifest in manifests:

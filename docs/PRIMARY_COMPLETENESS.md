@@ -93,6 +93,15 @@ does not establish loss. Invalid checkpoints fail closed in existing retention
 protection, retaining the original unresolved interval. Audits preserve labels,
 models, plans and delivery receipts. There is no automatic historical repair.
 
+Incremental replay resumes from its durable cursor, including subscription and
+gap controls recorded while no outcome was pending. It must not jump straight
+to a new candidate's fifteen-minute overlap and discard intervening subscription
+acknowledgements. The `idle-checkpoint-subscription-skip-v1` regression reproduces
+that false exclusion and requires agreement with strict full replay. Non-incremental
+candidate-window bounds and all integrity/continuity checks remain unchanged.
+This fixture proves the edge case; the measured historical cohort did not prove
+an old label eligible for repair, so no historical labels are replaced.
+
 ## Measured baseline: 7 October 2026
 
 The read-only audit at 03:51 UTC covered decisions from 1 October 01:01 UTC
