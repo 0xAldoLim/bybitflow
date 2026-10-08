@@ -144,6 +144,11 @@ still verifies hashes before deletion and preserves plans, feature snapshots,
 labels, models and delivery receipts. A long-running setup therefore does not
 pin all already-processed raw history throughout its holding period.
 
+A new scan attempt clears the previous attempt's error text. After storage
+recovers, the next successful ML worker cycle replaces the backpressure status
+even when more labeled outcomes are needed before fitting. These status updates
+do not change clock tolerance, freshness limits or ML training requirements.
+
 When confirmed, alert-claimed and HTTP-attempt counts are all zero, qualification
 has stopped before delivery. An empty primary ML cohort does not block the
 deterministic production policy: its ML output is advisory. When HTTP attempts

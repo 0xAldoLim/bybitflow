@@ -671,7 +671,9 @@ class Scanner:
         async with self.scan_lock:
             await self.select_source()
             scan_started = now_ms()
-            self.status.update(state="scanning", started_ms=scan_started)
+            for key in ("error_type", "reason", "live_feed_preserved"):
+                self.status.pop(key, None)
+            self.status.update(state="scanning", started_ms=scan_started, at_ms=scan_started)
             self.store.put("scanner", self.status)
             body = await self.api.get("time")
             asof = int(body["time"])

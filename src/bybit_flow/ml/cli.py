@@ -261,7 +261,8 @@ def worker_step(settings, store, first_monitor=False, manual=False):
             except Exception as exc:
                 store.put("ml_monitor", dict(at_ms=now_ms(), status="abstained", reason=str(exc)))
         result = train_ready(settings, store, manual)
-        if result.get("tracks") or manual or result["status"] == "STORAGE_BACKPRESSURE":
+        recovered_storage = store.get("ml_cycle", {}).get("status") == "STORAGE_BACKPRESSURE"
+        if result.get("tracks") or manual or result["status"] == "STORAGE_BACKPRESSURE" or recovered_storage:
             store.put("ml_cycle", result)
         return result
     except sqlite3.OperationalError as exc:

@@ -1,4 +1,11 @@
+import asyncio
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
+import pytest
+
 from bybit_flow.identity import claim
+from bybit_flow.scanner import Scanner
 from bybit_flow.storage import Store
 
 
@@ -28,4 +35,23 @@ def test_delivery_claim_uses_active_index_with_large_terminal_history(settings, 
     assert result["primary"].id == signal.id
     assert dict(store.db.execute("SELECT id,payload FROM signals")) == before
     assert {s["id"] for s in store.active_signals()} == {signal.id, other.id}
+    store.close()
+
+
+async def test_scan_retry_clears_previous_failure_before_waiting_for_public_data(settings):
+    store = Store(settings.data_dir)
+    scanner = Scanner.__new__(Scanner)
+    scanner.scan_lock = asyncio.Lock()
+    scanner.select_source = AsyncMock()
+    scanner.store = store
+    scanner.status = dict(
+        state="error", error_type="ValueError", reason="Old clock warning", live_feed_preserved=False
+    )
+    scanner.api = SimpleNamespace(get=AsyncMock(side_effect=RuntimeError("end test at public I/O")))
+    with pytest.raises(RuntimeError, match="end test at public I/O"):
+        await scanner.scan_once()
+    saved = store.get("scanner")
+    assert saved["state"] == "scanning"
+    assert saved["at_ms"] == saved["started_ms"]
+    assert not {"error_type", "reason", "live_feed_preserved"} & saved.keys()
     store.close()
