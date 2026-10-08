@@ -1,3 +1,4 @@
+import asyncio
 import json
 from datetime import datetime, timezone
 from urllib.parse import urlparse
@@ -5,6 +6,8 @@ from urllib.parse import urlparse
 import httpx
 
 from .storage import now_ms
+
+INITIAL_REQUEST_TIMEOUT = 15
 
 
 def iso(ms):
@@ -501,11 +504,28 @@ class Notifier:
             if status == "sent":
                 self.store.put("last_terminal_delivery_ms", now_ms())
 
-    async def deliver_initial(self, key, signal, payload, secret):
-
-        current = self.store.db.execute("SELECT state FROM signals WHERE id=?", (signal.id,)).fetchone()
+    def initial_delivery_block(self, signal_id, signal=None):
+        current = self.store.db.execute(
+            "SELECT state,payload FROM signals WHERE id=?", (signal_id,)
+        ).fetchone()
         if current and current[0] in {"INVALIDATED", "EXPIRED", "RESOLVED"}:
             return "terminal-setup"
+        plan = json.loads(current[1]) if current else signal.model_dump() if signal is not None else None
+        if plan is None:
+            return "blocked:no-active-setup"
+        deadline = min(plan["expires_ms"], plan.get("trigger_expires_ms") or plan["expires_ms"])
+        remaining = deadline - now_ms()
+        if remaining <= 0:
+            return "blocked:entry-window-expired"
+        # Reserve the existing HTTP timeout, not extra time for the trading plan.
+        if remaining < INITIAL_REQUEST_TIMEOUT * 1000:
+            return "blocked:entry-window-too-short"
+        return None
+
+    async def deliver_initial(self, key, signal, payload, secret):
+        blocked = self.initial_delivery_block(signal.id, signal)
+        if blocked:
+            return blocked
 
         from .identity import claim
         from .macro import state as macro_state
@@ -539,7 +559,7 @@ class Notifier:
                 signal, primary, relation, self.settings.dashboard_url, claimed["cluster_id"]
             )
 
-        status = await self.deliver(key, signal.id, payload, secret)
+        status = await self.deliver(key, signal.id, payload, secret, initial_signal=signal)
         self.was_initially_delivered(signal.id, key.split(":", 1)[0])
         if status == "sent":
             with self.store.db:
@@ -589,7 +609,7 @@ class Notifier:
 
         return await self.deliver("connection-test:" + event_id, None, payload, secret)
 
-    async def deliver(self, key, signal_id, payload, secret):
+    async def deliver(self, key, signal_id, payload, secret, *, initial_signal=None):
 
         channel = key.split(":", 1)[0]
         if signal_id is not None and channel in {"research", "validated"} and not key.endswith(":initial"):
@@ -603,6 +623,12 @@ class Notifier:
 
         if self.store.db.execute("SELECT 1 FROM outbox WHERE key=?", (key,)).fetchone():
             return "already-attempted"
+
+        real_initial = signal_id is not None and key.endswith(":initial")
+        if real_initial:
+            blocked = self.initial_delivery_block(signal_id, initial_signal)
+            if blocked:
+                return blocked
 
         with self.store.db:
             claimed = self.store.db.execute(
@@ -619,37 +645,45 @@ class Notifier:
 
         from .funnel import emit
 
-        real_initial = signal_id is not None and key.endswith(":initial")
-
-        if real_initial:
-            emit(self.store, "discord_http_attempts", now_ms(), key="http:" + key)
-
+        http_attempted = False
         status, message_id, discord_channel_id = "uncertain", None, None
 
         transport_detail = dict(at_ms=now_ms(), category="UNKNOWN", http_status=None)
 
         try:
             async with httpx.AsyncClient(timeout=15, transport=self.transport) as client:
-                response = await client.post(secret, params={"wait": "true"}, json=payload)
-
-                transport_detail.update(http_status=response.status_code, category="HTTP")
-
-                if response.status_code == 429:
-                    status = "rate-limited"
-
-                elif response.is_success:
-                    result = response.json()
-                    status, message_id = "sent", result.get("id")
-                    discord_channel_id = result.get("channel_id")
-
+                # Claiming, SQLite contention and client setup can consume the entry window.
+                # Re-read durable lifecycle state immediately before dispatching an initial.
+                blocked = self.initial_delivery_block(signal_id, initial_signal) if real_initial else None
+                if blocked:
+                    status = blocked
+                    transport_detail["category"] = "BLOCKED"
                 else:
-                    status = "rejected"
+                    if real_initial:
+                        emit(self.store, "discord_http_attempts", now_ms(), key="http:" + key)
+                    http_attempted = True
+                    # HTTPX's timeout is per phase. Bound initial connect/write/read together.
+                    async with asyncio.timeout(INITIAL_REQUEST_TIMEOUT if real_initial else None):
+                        response = await client.post(secret, params={"wait": "true"}, json=payload)
 
-        except httpx.TransportError as exc:
+                    transport_detail.update(http_status=response.status_code, category="HTTP")
+
+                    if response.status_code == 429:
+                        status = "rate-limited"
+
+                    elif response.is_success:
+                        result = response.json()
+                        status, message_id = "sent", result.get("id")
+                        discord_channel_id = result.get("channel_id")
+
+                    else:
+                        status = "rejected"
+
+        except (httpx.TransportError, TimeoutError) as exc:
             # Store a category only: exception messages can contain webhook secrets.
 
             transport_detail["category"] = (
-                "TIMEOUT" if isinstance(exc, httpx.TimeoutException) else "CONNECTION_ERROR"
+                "TIMEOUT" if isinstance(exc, (httpx.TimeoutException, TimeoutError)) else "CONNECTION_ERROR"
             )
 
             transport_detail["error_type"] = type(exc).__name__
@@ -678,7 +712,7 @@ class Notifier:
 
         self.store.put("discord_transport", transport_detail | dict(status=status))
 
-        if real_initial:
+        if real_initial and http_attempted:
             metric = {"sent": "discord_sent", "uncertain": "discord_uncertain"}.get(
                 status, "discord_rejected"
             )

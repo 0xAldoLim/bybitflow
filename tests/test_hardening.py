@@ -42,7 +42,7 @@ def test_fingerprint_ignores_minute_and_score_but_tracks_plan(signal):
 
 
 @pytest.mark.asyncio
-async def test_atomic_same_plan_across_connections_and_restart(settings, signal):
+async def test_atomic_same_plan_across_connections_and_restart(settings, signal, notification_clock):
     configured(settings)
     first = Store(settings.data_dir)
     first.signal(signal)
@@ -74,7 +74,7 @@ async def test_atomic_same_plan_across_connections_and_restart(settings, signal)
 
 
 @pytest.mark.asyncio
-async def test_clustering_does_not_mutate_either_lifecycle(settings, signal):
+async def test_clustering_does_not_mutate_either_lifecycle(settings, signal, notification_clock):
     configured(settings)
     store = Store(settings.data_dir)
     signal.horizon_profile = "CORE_INTRADAY"
@@ -298,7 +298,7 @@ def test_protected_post_terminal_observation(settings, signal):
 
 
 @pytest.mark.asyncio
-async def test_same_signal_twice_one_http_and_tests_excluded(settings, signal):
+async def test_same_signal_twice_one_http_and_tests_excluded(settings, signal, notification_clock):
     configured(settings)
     store = Store(settings.data_dir)
     calls = []
@@ -386,7 +386,7 @@ async def test_stage_a_shortlist_avoids_universe_depth_and_verifies_each_selecte
 
 
 @pytest.mark.asyncio
-async def test_restart_seeds_older_runtime_send_without_mutating_active(settings, signal):
+async def test_restart_seeds_older_runtime_send_without_mutating_active(settings, signal, notification_clock):
     store = Store(settings.data_dir)
     signal.state = "ALERTED"
     store.signal(signal)

@@ -128,7 +128,7 @@ def test_asset_fact_preserves_compound_market_symbol():
             Fact(**(fact.model_dump() | {"asset": invalid}))
 
 
-async def test_discord_deduplicates_and_omits_mentions(settings, signal):
+async def test_discord_deduplicates_and_omits_mentions(settings, signal, notification_clock):
     from pydantic import SecretStr
 
     cfg = settings.model_copy(

@@ -477,6 +477,8 @@ class Scanner:
     def entry_ready(self, signal, book, now):
         from .production import entry_position
 
+        if now >= min(signal.expires_ms, signal.trigger_expires_ms or signal.expires_ms):
+            return False
         if not book.fresh(now, self.settings.book_stale_ms):
             return False
         price = float(min(book.asks) if signal.direction == "LONG" else max(book.bids))

@@ -45,7 +45,7 @@ def test_refresh_recommendations_executes_bound_query(settings):
 
 
 @pytest.mark.asyncio
-async def test_connection_test_not_counted_as_real_delivery(settings):
+async def test_connection_test_not_counted_as_real_delivery(settings, signal, notification_clock):
     store = Store(settings.data_dir)
     settings.research_webhook = SecretStr("https://discord.com/api/webhooks/test/test")
     transport = httpx.MockTransport(lambda request: httpx.Response(200, json={"id": "test-message"}))
@@ -55,6 +55,8 @@ async def test_connection_test_not_counted_as_real_delivery(settings):
         == "sent"
     )
     assert status(store)["cumulative"]["discord_sent"] == 0
+    signal.id = "real"
+    store.signal(signal)
     assert (
         await notifier.deliver(
             "research:real:initial", "real", {}, settings.research_webhook.get_secret_value()

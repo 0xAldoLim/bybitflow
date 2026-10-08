@@ -30,7 +30,9 @@ from bybit_flow.storage import Store
         (100, "SSS"),
     ],
 )
-async def test_all_research_grades_send_without_claiming_validation(settings, signal, points, grade):
+async def test_all_research_grades_send_without_claiming_validation(
+    settings, signal, points, grade, notification_clock
+):
     assert tier(points) == grade
     cfg = settings.model_copy(
         update={
@@ -62,7 +64,9 @@ async def test_all_research_grades_send_without_claiming_validation(settings, si
     store.close()
 
 
-async def test_validated_lower_grade_still_uses_requested_research_channel(settings, signal):
+async def test_validated_lower_grade_still_uses_requested_research_channel(
+    settings, signal, notification_clock
+):
     cfg = settings.model_copy(
         update={
             "research_alerts": True,

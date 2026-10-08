@@ -59,6 +59,12 @@ def signal():
     )
 
 
+@pytest.fixture
+def notification_clock(monkeypatch):
+    """Notifier fixtures use a fixed, open entry window rather than wall-clock expiry."""
+    monkeypatch.setattr("bybit_flow.notifications.now_ms", lambda: 1000)
+
+
 def synthetic_bars(count=200, interval=3_600_000, start=0):
     bars = []
     for i in range(count):

@@ -100,6 +100,13 @@ the underlying plans. Switching webhooks does not republish old initials.
 
 Initial HTTP timeouts can remain `uncertain`: exactly-once external delivery cannot
 be guaranteed. Check the Discord channel by setup ID before reconciling ambiguity.
+Initial delivery rechecks the stored lifecycle state and entry deadline after
+claiming and immediately before HTTP dispatch. At least the existing 15-second
+request budget must remain; otherwise it returns `blocked:entry-window-too-short`
+or `blocked:entry-window-expired` without posting. The initial request also has
+a total 15-second timeout across connection, write and response phases. This
+does not extend an entry window or change qualification. A timeout after dispatch
+can still be ambiguous, so it never causes a blind retry.
 Do not clear the outbox to force a resend. Missing/deleted original messages and
 non-retryable terminal edit failures remain diagnostic results. Synthetic and
 connection tests are excluded from genuine signal/ML metrics.

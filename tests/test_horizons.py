@@ -140,7 +140,9 @@ def test_thesis_material_difference_not_deduplicated(signal):
 
 
 @pytest.mark.asyncio
-async def test_materially_different_horizon_can_alert_during_symbol_cooldown(settings, signal):
+async def test_materially_different_horizon_can_alert_during_symbol_cooldown(
+    settings, signal, notification_clock
+):
     from bybit_flow.notifications import Notifier
 
     settings.research_alerts = True

@@ -74,7 +74,9 @@ async def test_validated_monitoring_uses_monitoring_webhook(settings, signal):
     store.close()
 
 
-async def test_initial_destination_survives_restart_and_blocks_new_channel(settings, signal):
+async def test_initial_destination_survives_restart_and_blocks_new_channel(
+    settings, signal, notification_clock
+):
     settings.research_alerts = True
     settings.research_webhook = SecretStr("https://discord.com/api/webhooks/123/signals")
     store = Store(settings.data_dir)
