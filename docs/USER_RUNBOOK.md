@@ -154,6 +154,12 @@ evidence. Active plans, unresolved primary labels, checkpoints, and reader lease
 protect their required ranges. Snapshots, labels, datasets, models, and audit
 provenance remain permanent.
 
+For active setups, already-processed raw history can be released after durable
+monitoring progress is saved. Cleanup keeps 15 minutes of overlap and all
+unprocessed history. Missing or invalid progress retains the original interval.
+Unresolved ML outcomes and reader leases can still protect older recordings.
+This preserves each original plan and its restart/reconciliation path.
+
 ```bat
 docker compose exec desk bybit-flow storage status
 docker compose exec desk bybit-flow storage cleanup --dry-run

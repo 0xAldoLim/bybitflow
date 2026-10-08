@@ -130,8 +130,11 @@ continuity state, input hashes and the consumed receipt cursor. A fresh, sealed,
 consistent checkpoint protects only the unprocessed tail plus a 15-minute replay
 margin for an unresolved primary outcome. Missing, stale or inconsistent
 checkpoints retain the full original interval. Late-published segments remain
-protected until a later checkpoint consumes them. Operational active setups keep
-their original evidence protection and lifecycle.
+protected until a later checkpoint consumes them. Operational active setups
+independently protect their unprocessed history plus 15 minutes around the
+durable event/receipt cursors. Missing or inconsistent lifecycle progress keeps
+the original interval protected. Cleanup preserves original plans and their
+independent lifecycle; finalized ML evidence cannot release unprocessed setup data.
 
 At 95% storage usage, the worker prioritizes incremental outcomes and integrity-safe
 pruning. Bootstrap downloads and fitting wait for headroom. Permanent snapshots,

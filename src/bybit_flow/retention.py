@@ -99,13 +99,33 @@ def byte_attribution_sample(store, now, cutoff, limit=200):
     return totals
 
 
+def active_evidence_start(signal, now):
+    """Retain unprocessed lifecycle tape plus overlap around durable live progress.
+
+    Lifecycle restart consumes the stored cursor, entry/target touches and original
+    plan, rather than replaying from creation. ML evidence has separate protection.
+    Missing or inconsistent progress must keep the original interval protected.
+    """
+    origin = signal["created_ms"]
+    coverage = signal.get("coverage", {})
+    event = coverage.get("monitor_cursor_event_ms")
+    receipt = coverage.get("monitor_cursor_receipt_ms")
+    checked = coverage.get("last_monitor_ms")
+    valid = (
+        all(type(value) is int and origin <= value <= now for value in (event, receipt, checked))
+        and checked >= max(event, receipt)
+        and bool(coverage.get("last_checked_trade_id"))
+    )
+    return (min(event, receipt) if valid else origin) - 900_000
+
+
 def protection_cutoff(store, now, cutoff):
     starts = []
     for (payload,) in store.db.execute(
         "SELECT payload FROM signals WHERE state NOT IN ('INVALIDATED','EXPIRED','RESOLVED')"
     ):
         s = json.loads(payload)
-        starts.append(s["created_ms"] - 900_000)
+        starts.append(active_evidence_start(s, now))
     for row in store.db.execute("SELECT payload FROM observations WHERE status='FOLLOWING_LATE_OUTCOME'"):
         observation = json.loads(row[0])
         # Protect unprocessed observation evidence; durable checkpoints move this forward.
@@ -426,7 +446,7 @@ def protection_ranges(store, now):
         s = json.loads(row[0])
         ranges.append(
             (
-                s["created_ms"] - 900_000,
+                active_evidence_start(s, now),
                 max(now, s.get("holding_deadline_ms") or s["expires_ms"]),
                 "active setup",
             )

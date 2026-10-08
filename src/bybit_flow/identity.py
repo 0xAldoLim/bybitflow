@@ -150,9 +150,12 @@ def claim(store, signal, at_ms):
     # Serializes independent processes, not just async tasks in one event loop.
     store.db.execute("BEGIN IMMEDIATE")
     try:
+        # Match the existing partial-index predicate exactly. SQLite does not
+        # normalize reordered NOT IN lists when choosing a partial index.
+        # Scanning historical payloads here blocks feeds and holds the writer lock.
         members = store.db.execute(
             """SELECT a.cluster_id,s.payload FROM alert_members a JOIN signals s ON s.id=a.signal_id
-          WHERE s.symbol=? AND s.state NOT IN ('EXPIRED','INVALIDATED','RESOLVED') ORDER BY json_extract(s.payload,'$.quality') DESC,a.created_ms DESC""",
+          WHERE s.symbol=? AND s.state NOT IN ('INVALIDATED','EXPIRED','RESOLVED') ORDER BY json_extract(s.payload,'$.quality') DESC,a.created_ms DESC""",
             (signal.symbol,),
         ).fetchall()
         cluster, relation, primary = "cluster:" + signal.id, "MATERIALLY_DIFFERENT_PLAN", None

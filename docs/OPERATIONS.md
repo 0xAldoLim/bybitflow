@@ -130,6 +130,20 @@ while earlier candidates await analysis; they must not be compared against an
 obsolete batch timestamp and misclassified as future or stale data. The normal
 book/trade stale limits and all strategy gates still apply.
 
+Duplicate checking uses the active-setup index, so its work does not grow with
+the number of historical signals. Its terminal-state predicate must match the
+partial index; a regression test checks the actual delivery query plan.
+
+Raw retention protects the unprocessed portion of each active setup, with a
+15-minute overlap around its durable event and receipt cursors. Missing, future
+or inconsistent cursors retain protection from creation. Monitoring pauses do
+not discard the last saved progress. Restart reconciliation continues from that
+progress with the original entry, stop, targets and deadlines. Unresolved primary
+ML outcomes and active readers protect their evidence independently. Cleanup
+still verifies hashes before deletion and preserves plans, feature snapshots,
+labels, models and delivery receipts. A long-running setup therefore does not
+pin all already-processed raw history throughout its holding period.
+
 When confirmed, alert-claimed and HTTP-attempt counts are all zero, qualification
 has stopped before delivery. An empty primary ML cohort does not block the
 deterministic production policy: its ML output is advisory. When HTTP attempts
