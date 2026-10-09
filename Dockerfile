@@ -1,6 +1,4 @@
 FROM python:3.12-slim AS base
-ARG FLOW_CODE_COMMIT=unknown
-ENV FLOW_CODE_COMMIT=$FLOW_CODE_COMMIT
 ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 FLOW_DATA_DIR=/app/data
 WORKDIR /app
 RUN useradd --uid 10001 --create-home researcher
@@ -9,6 +7,8 @@ RUN --mount=type=cache,target=/root/.cache/pip pip install --timeout 60 --retrie
 RUN --mount=type=cache,target=/root/.cache/pip pip install --timeout 60 --retries 5 setuptools==78.1.0
 
 FROM base AS runtime
+ARG FLOW_CODE_COMMIT=unknown
+ENV FLOW_CODE_COMMIT=$FLOW_CODE_COMMIT
 COPY pyproject.toml README.md ./
 COPY src ./src
 COPY docs/v2 ./docs/v2
@@ -24,6 +24,8 @@ COPY requirements-ml.lock ./
 RUN --mount=type=cache,target=/root/.cache/pip pip install --timeout 60 --retries 5 -r requirements-ml.lock
 COPY requirements-lstm.lock ./
 RUN --mount=type=cache,target=/root/.cache/pip pip install --timeout 60 --retries 5 -r requirements-lstm.lock
+ARG FLOW_CODE_COMMIT=unknown
+ENV FLOW_CODE_COMMIT=$FLOW_CODE_COMMIT
 COPY pyproject.toml README.md ./
 COPY src ./src
 COPY docs/v2 ./docs/v2
