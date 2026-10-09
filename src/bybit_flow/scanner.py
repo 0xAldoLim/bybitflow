@@ -612,11 +612,21 @@ class Scanner:
             if now_ms() - failed_since >= 120_000:
                 async with self.scan_lock:
                     # Recover current source first. Active plans never change venue.
+                    previous = self.exchange
                     self.streams.required_symbols = set(self.pending_symbols())
                     await self.streams.select(list(self.streams.selected) + self.pending_symbols())
+                    if self.settings.market_source in {"auto", "multi"}:
+                        self.source_ready = False
+                        try:
+                            # New scans may use a healthy venue while original
+                            # plans keep their own peer and historical recovery.
+                            await self.select_source()
+                        except ConnectionError:
+                            self.source_ready = True
                     self.status.update(
-                        state="reconnecting",
-                        reason="original-source stream recovery in progress",
+                        state="reconnecting" if self.exchange == previous else "warming",
+                        exchange=self.exchange,
+                        reason="source recovery; original setup venues and plans retained",
                         at_ms=now_ms(),
                     )
                     self.store.put("scanner", self.status)

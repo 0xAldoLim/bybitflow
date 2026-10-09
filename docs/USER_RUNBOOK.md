@@ -61,6 +61,13 @@ history is retried, and ambiguous paths stay excluded. Notifications are sent
 after the application returns; nothing runs or sends alerts while the laptop
 is shut down. See [monitored learning](ML_RESEARCH.md#monitored-setups-and-laptop-downtime).
 
+In `auto` or `multi` source mode, an unavailable live primary feed is retried
+first. After two minutes of failure, the scanner probes other supported venues
+and can move new scans to a healthy one. Existing setups remain on their original
+venue with their original plans; historical reconciliation continues there.
+An explicitly selected venue is not changed automatically. A new primary must
+complete its own book, tape and quote warm-up before qualifying alerts.
+
 ```bat
 docker compose exec desk bybit-flow test-market --exchange binance
 docker compose exec desk bybit-flow test-market --exchange bybit
