@@ -9,6 +9,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
+from . import __version__
 from .config import Settings
 from .fundamentals import Fact, add_fact
 from .models import Signal
@@ -73,7 +74,7 @@ def create_app(settings=None):
         store.close()
 
     app = FastAPI(
-        title="Bybit Flow · Research", version="0.1.0", lifespan=lifespan, docs_url=None, redoc_url=None
+        title="Bybit Flow · Research", version=__version__, lifespan=lifespan, docs_url=None, redoc_url=None
     )
 
     @app.middleware("http")
