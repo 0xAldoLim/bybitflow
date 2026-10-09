@@ -52,6 +52,29 @@ participants, and sampled liquidation acceleration alone never establishes a fad
 All coefficients are implementation inferences; predictive advantage is unvalidated.
 See the [research ledger](v2/INSILICO_RESEARCH_LEDGER.md).
 
+### Why v2 scores can be lower
+
+V1 added seven category contributions. V2 weights three evidence dimensions and
+then applies a weakest-dimension adjustment. Strong flow and reward/risk therefore
+cannot fully compensate for weak location. The grade cutoffs are unchanged, but
+a historical B and a v2 D are scores under different rubrics, not evidence that
+win probability fell by the difference between them.
+
+Unavailable volume profiles earn no value-location or clear-path credit. The
+intraday profile needs 30 minutes of continuously retained native executions;
+the swing profile needs four hours. Restarting or losing continuity can restart
+warm-up. Window completeness and the bounded profile-worker capacity also apply,
+so elapsed runtime alone does not guarantee a usable profile. A one-minute flow
+window can be complete while a longer profile is still unavailable.
+
+New v20 candidates read the latest causal profile from their native venue and
+applicable horizon immediately before the first scored confirmation decision.
+This prevents a missing or stale generation-time profile from masking evidence
+that became available during confirmation. Future, stale, wrong-source, or
+incomplete profiles receive no credit. Once scored, the decision and published
+plan remain frozen; later profile maturity does not rewrite their score or ML
+snapshot. Older active plans keep their original policy.
+
 Pre-cutover active plans retain every original price level, score, tier, deadline,
 and stored rubric through their original lifecycle. Historical scores remain
 comparable only within their stored score profile.

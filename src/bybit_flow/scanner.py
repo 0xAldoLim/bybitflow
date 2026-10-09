@@ -1728,6 +1728,13 @@ class Scanner:
                         return []
                     return self.candle_cache.get((symbol, s.setup_timeframe), (None, []))[1]
 
+                if s.feature_schema_version == "candidate-v20":
+                    # Profile readiness can change after candidate generation.
+                    # Freeze the causal native profile at the first scored decision,
+                    # alongside the current flow; never revise an existing decision.
+                    s.evidence["volume_profile"] = deepcopy(
+                        self.generation_profile(c["instrument"], setup_bars, now)
+                    )
                 s.evidence.update(
                     range=range_context(setup_bars, now),
                     auction=auction_context(flow, previous_flow, mid),

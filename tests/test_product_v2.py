@@ -227,6 +227,27 @@ def test_path_barriers_deduplicate_and_do_not_change_original_plan(signal):
     assert trade_offer(s, 2000)["score"] <= clear["score"]
 
 
+@pytest.mark.parametrize(
+    "invalid",
+    [
+        dict(source="other-venue"),
+        dict(available_ms=2001),
+        dict(source_ms=2001),
+        dict(source_ms=-120000),
+        dict(coverage_complete=False),
+    ],
+)
+def test_invalid_profile_cannot_earn_location_or_path_credit(signal, invalid):
+    s = decision(signal)
+    s.evidence["volume_profile"].update(invalid)
+    assert not location(s, 2000)["profile_ready"]
+    assert not trade_offer(s, 2000)["profile_ready"]
+    unknown = s.model_copy(deep=True)
+    unknown.evidence["volume_profile"] = dict(available=False)
+    assert location(s, 2000)["score"] == location(unknown, 2000)["score"]
+    assert trade_offer(s, 2000)["score"] == trade_offer(unknown, 2000)["score"]
+
+
 def test_liquidation_acceleration_prevents_fade_and_decay_needs_prior_shock():
     row = dict(
         source="binance",

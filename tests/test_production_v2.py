@@ -378,6 +378,24 @@ async def test_scanner_retries_then_alerts_without_ml_champion(
         )
     }
     scanner.candle_cache = {(signal.symbol, "60"): (now, bars)}
+    # The candidate was created before profile warm-up. A complete profile
+    # became observable before confirmation; only new v20 decisions may use it.
+    signal.evidence["volume_profile"] = dict(available=False, reason="profile warm-up")
+    store.signal(signal)
+    scanner.volume_profiles = {
+        signal.symbol: dict(
+            available=True,
+            coverage_complete=True,
+            source=signal.source,
+            symbol=signal.symbol,
+            end_ms=end,
+            available_ms=now,
+            poc=98,
+            val=98,
+            vah=102,
+            hvn=[],
+        )
+    }
     scanner.v8_cache = {}
     scanner.streams = SimpleNamespace(
         connected=True,
@@ -428,6 +446,17 @@ async def test_scanner_retries_then_alerts_without_ml_champion(
     assert saved["evidence"]["confirmation"]["passed"]
     assert saved["model_version"] is None
     assert saved["stop"] == signal.stop and saved["holding_deadline_ms"] == signal.holding_deadline_ms
+    if schema == "candidate-v20":
+        assert saved["evidence"]["v2"]["location"]["profile_ready"]
+        assert saved["evidence"]["v2"]["trade_offer"]["profile_ready"]
+        assert saved["evidence"]["volume_profile"] == scanner.volume_profiles[signal.symbol]
+        scanner.volume_profiles[signal.symbol].update(poc=100, val=99, vah=105)
+        await scanner.evaluate()
+        frozen = store.signals()[0]
+        assert frozen["evidence"]["volume_profile"] == saved["evidence"]["volume_profile"]
+        assert frozen["quality"] == saved["quality"]
+    else:
+        assert saved["evidence"]["volume_profile"] == signal.evidence["volume_profile"]
     scanner.notifier.send_research.assert_awaited_once()
     store.close()
 
