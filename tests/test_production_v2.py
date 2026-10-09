@@ -304,8 +304,9 @@ def test_existing_plan_unchanged_by_new_generation(signal, instrument):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("schema", ["candidate-v10", "candidate-v20"])
+@pytest.mark.parametrize("reset_during_compute", [False, True])
 async def test_scanner_retries_then_alerts_without_ml_champion(
-    settings, signal, instrument, monkeypatch, schema
+    settings, signal, instrument, monkeypatch, schema, reset_during_compute
 ):
     from types import SimpleNamespace
     from unittest.mock import AsyncMock, Mock
@@ -385,6 +386,32 @@ async def test_scanner_retries_then_alerts_without_ml_champion(
         liquidations={signal.symbol: []},
     )
     scanner.notifier = SimpleNamespace(send_research=AsyncMock(return_value="sent"))
+    if reset_during_compute:
+        import asyncio
+
+        from bybit_flow.scanner import footprint
+
+        original_to_thread = asyncio.to_thread
+
+        async def reset_book_after_footprint(callback, *args, **kwargs):
+            result = await original_to_thread(callback, *args, **kwargs)
+            if callback is footprint:
+                book.reset()
+            return result
+
+        with monkeypatch.context() as scope:
+            scope.setattr("bybit_flow.scanner.asyncio.to_thread", reset_book_after_footprint)
+            await scanner.evaluate()
+        unavailable = store.signals()[0]
+        assert unavailable["state"] == "PENDING CONFIRMATION"
+        assert not unavailable["coverage"]["trade_window_complete"]
+        assert "COVERAGE_BOOK_STALE" in unavailable["coverage"]["reason_codes"]
+        assert not unavailable["evidence"].get("score_components")
+        scanner.notifier.send_research.assert_not_awaited()
+        book.valid = True
+        book.bids = {Decimal("99.99"): Decimal(10000)}
+        book.asks = {Decimal("100.01"): Decimal(10000)}
+        book.receipt_ms = book.event_ms = now
     # Fail first on opposing prints; do not freeze the failed decision or extend deadlines.
     original = list(tape.trades)
     tape.trades = [

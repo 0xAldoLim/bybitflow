@@ -1577,6 +1577,20 @@ class Scanner:
                 footprint, trades, c["instrument"].tick, execution_features["atr"], window_book
             )
             bf = book.features(now)
+            if not bf.get("available"):
+                # A stream reset can occur while footprint work yields to its
+                # worker. Missing depth is a coverage gap, not a spread value.
+                from .coverage import record as coverage_record
+
+                s.coverage.update(
+                    book_fresh=False,
+                    trade_window_complete=False,
+                    reasons=["order book unavailable during confirmation"],
+                )
+                coverage_record(self, s, now, ["COVERAGE_BOOK_STALE"], start, end)
+                self.store.signal(s, s.coverage["readiness"])
+                emit(self.store, "coverage_incomplete", now, signal=s, reason="COVERAGE_BOOK_STALE")
+                continue
             from .evidence import flow_response
 
             prior_trades = tape.window(start - window_ms, start)
