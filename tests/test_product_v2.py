@@ -1,6 +1,10 @@
+import hashlib
+import json
 from copy import deepcopy
 from dataclasses import replace
 from decimal import Decimal
+from importlib.resources import files
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -442,3 +446,13 @@ def test_installed_package_can_initialize_outside_a_git_checkout(settings, monke
     assert len(marker["research_manifest_hash"]) == len(marker["research_ledger_hash"]) == 64
     assert marker["candidate_schema"] == SCHEMA
     store.close()
+
+
+def test_packaged_research_identity_matches_portable_committed_documents():
+    root = Path(__file__).resolve().parents[1] / "docs" / "v2"
+    identity = json.loads(files("bybit_flow").joinpath("research_v2.json").read_text(encoding="utf-8"))
+    for key, name in (
+        ("research_manifest_hash", "INSILICO_SOURCE_MANIFEST.md"),
+        ("research_ledger_hash", "INSILICO_RESEARCH_LEDGER.md"),
+    ):
+        assert identity[key] == hashlib.sha256((root / name).read_bytes()).hexdigest()
