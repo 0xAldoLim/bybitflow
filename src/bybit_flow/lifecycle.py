@@ -115,7 +115,14 @@ def advance_trades(signal, tape, now):
         if signal.zone[0] <= price <= signal.zone[1] and trade.event_ms <= (
             signal.trigger_expires_ms or signal.expires_ms
         ):
-            signal.evidence.setdefault("observed_entry_ms", trade.event_ms)
+            if "observed_entry_ms" not in signal.evidence:
+                signal.evidence.update(
+                    observed_entry_ms=trade.event_ms,
+                    observed_entry_price=price,
+                    observed_entry_method="LIVE_EXECUTED_TRADE",
+                    observed_entry_source=trade.exchange,
+                    observed_entry_trade_id=trade.trade_id,
+                )
         stop = price <= signal.stop if signal.direction == "LONG" else price >= signal.stop
         entered = signal.evidence.get("observed_entry_ms") is not None
         tp1 = entered and (price >= signal.tp1 if signal.direction == "LONG" else price <= signal.tp1)

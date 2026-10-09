@@ -42,7 +42,7 @@ def select_compatible(registry, signal, row, now):
         r[0] for r in registry.db.execute("SELECT id FROM ml_models ORDER BY created_ms DESC")
     ]
     skipped = []
-    # A compatible primary artifact always wins; bootstrap is an advisory fallback.
+    # Prefer recorded prints, then current-feature monitored paths, then bootstrap.
     ordered = []
     for ident in dict.fromkeys(ids):
         try:
@@ -57,7 +57,7 @@ def select_compatible(registry, signal, row, now):
                 track = json.loads(payload[0]).get("track", "primary") if payload else "unknown"
             except (ValueError, TypeError):
                 track = "unknown"
-        ordered.append((track == "bootstrap", ident, track))
+        ordered.append(({"primary": 0, "monitored": 1, "bootstrap": 2}.get(track, 3), ident, track))
     for _, ident, track in sorted(ordered, key=lambda pair: pair[0]):
         model = {}
         try:
@@ -71,7 +71,7 @@ def select_compatible(registry, signal, row, now):
         except (ValueError, KeyError, TypeError):
             reasons = ["unreadable or corrupt artifact"]
         if not reasons:
-            return model, ident == champion and model.get("track") != "bootstrap", skipped
+            return model, ident == champion and model.get("track", "primary") == "primary", skipped
         skipped.append(
             dict(
                 model_id=ident,
@@ -100,7 +100,7 @@ def apply(signal, settings, store, at_ms=None):
     # Exactly the frozen feature values that offline training will read.
     row = json.loads(store.db.execute("SELECT payload FROM ml_snapshots WHERE id=?", (ident,)).fetchone()[0])
     signal.data_coverage = row["data_coverage"]
-    bootstrap = False
+    advisory = False
     try:
         model, champion, skipped = select_compatible(registry, signal, row, now)
         store.put(
@@ -128,12 +128,14 @@ def apply(signal, settings, store, at_ms=None):
                 signal.final_tier = "REJECTED"
             return signal
         signal.model_version = model["id"]
-        bootstrap = model.get("track") == "bootstrap"
+        track = model.get("track", "primary")
+        advisory = track in {"bootstrap", "monitored"}
+        bootstrap = track == "bootstrap"
         if bootstrap:
             from .bootstrap_features import project
 
             row = project(row)
-        signal.validation_status = "bootstrap_challenger" if bootstrap else "research_challenger"
+        signal.validation_status = track + "_challenger" if advisory else "research_challenger"
         p = float(predict(model["model"], [row])[0])
         qualifies = accepted(row, p, model["model"]["thresholds"])
         signal.evidence["ml"] = dict(
@@ -143,21 +145,26 @@ def apply(signal, settings, store, at_ms=None):
             research_acceptance=qualifies,
             thresholds=model["model"]["thresholds"],
             note="Meta-label ranking, not a quality-score replacement; attribution is not causation",
-            track="bootstrap" if bootstrap else "primary",
+            track=track,
             label_fidelity=model.get("label_fidelity", "RECORDED_PRINTS"),
-            production_authority="none" if bootstrap else "manual approval required",
+            production_authority="none" if advisory else "manual approval required",
         )
         if bootstrap:
             signal.evidence["ml"].update(
                 score_label="Bootstrap score / 100",
                 note="OHLC-proxy historical challenger; production authority: none",
             )
+        elif track == "monitored":
+            signal.evidence["ml"].update(
+                score_label="Monitored setup score / 100",
+                note="Current-feature setup paths recovered from exchange OHLC; hypothetical fills; production authority: none",
+            )
         with store.db:
             store.db.execute(
                 "INSERT OR IGNORE INTO ml_predictions VALUES(?,?,?,?,?)",
                 (ident, model["id"], now, p, int(qualifies)),
             )
-        if not bootstrap and not qualifies and settings.ml_filter_research:
+        if not advisory and not qualifies and settings.ml_filter_research:
             signal.gates.append("research meta-label acceptance threshold not met")
             signal.final_tier = "REJECTED"
         if champion and qualifies and not signal.gates:
@@ -192,7 +199,7 @@ def apply(signal, settings, store, at_ms=None):
         from .operations import abstain
 
         abstain(store, now, signal.qualification["ml_reason"])
-        if not bootstrap and settings.ml_filter_research:
+        if not advisory and settings.ml_filter_research:
             signal.gates.append("ML inference unavailable")
             signal.final_tier = "REJECTED"
     return signal

@@ -24,6 +24,10 @@ from .validation import (
 
 
 def read_dataset(path, max_rows=10_000, track="primary"):
+    from .monitored import POLICY as MONITORED_POLICY
+
+    if track not in {"primary", "bootstrap", "monitored"}:
+        raise ValueError("Unknown model track")
     file = pq.ParquetFile(path)
     if (
         file.metadata.num_rows > max_rows
@@ -50,7 +54,7 @@ def read_dataset(path, max_rows=10_000, track="primary"):
             or not row["decision_ms"] < label["exit_ms"] <= row["label_available_ms"] <= now_ms()
         ):
             raise ValueError("Unresolved, future, nonfinite or incompatible training label")
-        policy = "ohlc-path-v1" if track == "bootstrap" else "prints-v1"
+        policy = {"bootstrap": "ohlc-path-v1", "monitored": MONITORED_POLICY}.get(track, "prints-v1")
         if label.get("policy", "prints-v1") != policy:
             raise ValueError("Mixed or incompatible label policies")
         if track == "bootstrap" and (
@@ -61,6 +65,18 @@ def read_dataset(path, max_rows=10_000, track="primary"):
             or label.get("costs_verified") is not False
         ):
             raise ValueError("Invalid bootstrap provenance/availability")
+        if track == "monitored" and (
+            label.get("execution_fidelity") != "proxy"
+            or label.get("data_kind") != "original-venue-public-1m-OHLC"
+            or label.get("source") != row["source"]
+            or label.get("costs_verified") is not False
+            or label.get("account_fill_verified") is not False
+            or label.get("production_execution_verified") is not False
+            or label.get("entry_basis") not in {"recorded-live-price-touch", "historical-zone-touch"}
+            or not row["decision_ms"] <= label.get("event_available_ms", -1) <= row["label_available_ms"]
+            or not label.get("materialized_ms", 0) <= row["label_available_ms"]
+        ):
+            raise ValueError("Invalid monitored outcome provenance/availability")
         if any(
             not meta["missing"] and max(meta["available_ms"], meta["source_ms"]) > row["decision_ms"]
             for meta in row["feature_metadata"].values()
@@ -77,7 +93,7 @@ def train(store, path, kinds=("logistic", "lightgbm"), calibration="sigmoid", tr
 
 
 def _train(store, path, kinds, calibration, track):
-    if track not in {"primary", "bootstrap"}:
+    if track not in {"primary", "bootstrap", "monitored"}:
         raise ValueError("Unknown model track")
     rows = read_dataset(path, track=track)
     if len({r.get("candidate_identity", r["id"]) for r in rows}) != len(rows):
@@ -87,7 +103,7 @@ def _train(store, path, kinds, calibration, track):
     if track == "bootstrap" and any(k.startswith("two_stage_") for k in kinds):
         raise ValueError("Bootstrap uses tabular baselines; sequence threshold is not relaxed")
     schema = rows[0]["schema_version"]
-    label_policy = "ohlc-path-v1" if track == "bootstrap" else "prints-v1"
+    label_policy = {"bootstrap": "ohlc-path-v1", "monitored": "monitored-ohlc-v1"}.get(track, "prints-v1")
     scope = "|".join((track, rows[0]["source"], schema, label_policy))
     scopes = (scope, "legacy-primary") if track == "primary" else (scope, scope)
     sequence_excluded = 0
@@ -261,9 +277,11 @@ def _train(store, path, kinds, calibration, track):
         track=track,
         label_policy=label_policy,
         holdout_scope=scope,
-        label_fidelity="OHLC_PROXY" if track == "bootstrap" else "RECORDED_PRINTS",
-        promotion_eligible=False if track == "bootstrap" else None,
-        production_filter_eligible=False if track == "bootstrap" else None,
+        label_fidelity={"bootstrap": "OHLC_PROXY", "monitored": "MONITORED_OHLC_PROXY"}.get(
+            track, "RECORDED_PRINTS"
+        ),
+        promotion_eligible=False if track != "primary" else None,
+        production_filter_eligible=False if track != "primary" else None,
         strategy_versions=sorted({r["signal"]["version"] for r in rows}),
         source=rows[0]["source"],
         stage=rows[0]["stage"],

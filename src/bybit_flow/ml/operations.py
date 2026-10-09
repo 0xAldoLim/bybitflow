@@ -77,11 +77,17 @@ def partition_status(store, primary, bootstrap, prefix="ml_partition_feasibility
     """Expose source/track-specific cached plans without reading feature payloads."""
     from . import SCHEMA_VERSION
 
-    result = {"primary": {}, "bootstrap": {}}
-    for track, sources in (("primary", primary), ("bootstrap", bootstrap)):
-        schema, policy = (
-            (SCHEMA_VERSION, "prints-v1") if track == "primary" else ("bootstrap-core-v1", "ohlc-path-v1")
-        )
+    result = {"primary": {}, "monitored": {}, "bootstrap": {}}
+    for track, sources in (
+        ("primary", primary),
+        ("monitored", store.get("ml_monitored_trainability", {})),
+        ("bootstrap", bootstrap),
+    ):
+        schema, policy = {
+            "primary": (SCHEMA_VERSION, "prints-v1"),
+            "monitored": (SCHEMA_VERSION, "monitored-ohlc-v1"),
+            "bootstrap": ("bootstrap-core-v1", "ohlc-path-v1"),
+        }[track]
         for source, detail in sources.items():
             count = detail.get("baseline_trainable" if track == "primary" else "trainable", 0)
             if source not in {"binance", "bybit", "okx"} or count < 500:
@@ -292,6 +298,9 @@ def status(store, summary, enabled=True):
     bootstrap_id = store.db.execute(
         "SELECT id FROM ml_models WHERE json_extract(manifest,'$.track')='bootstrap' ORDER BY created_ms DESC LIMIT 1"
     ).fetchone()
+    monitored_id = store.db.execute(
+        "SELECT id FROM ml_models WHERE json_extract(manifest,'$.track')='monitored' ORDER BY created_ms DESC LIMIT 1"
+    ).fetchone()
     mode = store.get("ml_training_mode", {})
     readiness = store.get("ml_trainability_cache", {})
     if not readiness:
@@ -322,10 +331,18 @@ def status(store, summary, enabled=True):
         if store.get("ml_champion")
         else "PRIMARY_CHALLENGER"
         if primary_id
+        else "MONITORED_CHALLENGER"
+        if monitored_id
         else "BOOTSTRAP_CHALLENGER"
         if bootstrap_id
         else "NO_MODEL",
         primary_model_id=primary_id[0] if primary_id else None,
+        monitored_model_id=monitored_id[0] if monitored_id else None,
+        monitored_trainability=store.get("ml_monitored_trainability", {}),
+        monitored_backfill={
+            source: store.get("ml_monitored_backfill:" + source + ":monitored-ohlc-v1", {})
+            for source in ("binance", "bybit", "okx")
+        },
         bootstrap_model_id=bootstrap_id[0] if bootstrap_id else None,
         bootstrap_trainability=store.get("ml_bootstrap_trainability", {}),
         bootstrap_backfill={

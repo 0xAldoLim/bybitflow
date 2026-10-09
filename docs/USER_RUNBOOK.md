@@ -52,6 +52,15 @@ cached runtime state; a healthy probe alone does not establish continuity for
 every selected symbol. Check required active feeds, recorder health, heartbeat,
 storage, and observation times.
 
+Laptop downtime does not discard saved setups. After `docker compose --profile ml
+up -d`, lifecycle monitoring checks the missing interval against the original
+exchange's historical candles. The trainer independently records eligible
+`monitored-ohlc-v1` outcomes without requiring continuous local trade recording.
+Check `monitored_backfill` and `monitored_trainability` in ML status. Missing
+history is retried, and ambiguous paths stay excluded. Notifications are sent
+after the application returns; nothing runs or sends alerts while the laptop
+is shut down. See [monitored learning](ML_RESEARCH.md#monitored-setups-and-laptop-downtime).
+
 ```bat
 docker compose exec desk bybit-flow test-market --exchange binance
 docker compose exec desk bybit-flow test-market --exchange bybit

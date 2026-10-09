@@ -28,11 +28,11 @@ def deadline(row):
     return row["decision_ms"] + signal.get("expected_hold_max", 240) * MINUTE
 
 
-def evaluate(row, bars, source, asof_ms, materialized_ms=None):
+def evaluate(row, bars, source, asof_ms, materialized_ms=None, *, observed_entry=None, until_ms=None):
     """Close-time availability; uncertainty never becomes a manufactured loss."""
     if source != row["source"]:
         raise ValueError("OHLC labels require the frozen original venue")
-    s, decision, until = row["signal"], row["decision_ms"], deadline(row)
+    s, decision, until = row["signal"], row["decision_ms"], until_ms or deadline(row)
     result = dict(
         policy=POLICY,
         data_kind="original-venue-public-1m-OHLC",
@@ -88,8 +88,15 @@ def evaluate(row, bars, source, asof_ms, materialized_ms=None):
         method="Frozen planned fee, slippage and funding reserve; not verified costs",
     )
     cutoff = min(until, asof_ms) // MINUTE * MINUTE
-    expected = decision // MINUTE * MINUTE
-    entered, partial_entry, last = False, False, None
+    entry_at = observed_entry["at_ms"] if observed_entry else decision
+    expected = entry_at // MINUTE * MINUTE
+    entered, partial_entry, last = bool(observed_entry), False, None
+    if observed_entry:
+        result.update(
+            entry_available_ms=entry_at,
+            proxy_entry_price=observed_entry["price"],
+            entry_fill_method="Recorded live price touch; hypothetical fill, not an account execution",
+        )
     entry_until = min(until, s.get("trigger_expires_ms") or s["expires_ms"], s["expires_ms"])
     unique = {}
     for bar in bars:
@@ -113,6 +120,13 @@ def evaluate(row, bars, source, asof_ms, materialized_ms=None):
         touch = b.low <= hi and b.high >= lo
         sl = b.low <= stop if sign > 0 else b.high >= stop
         tp = b.high >= target if sign > 0 else b.low <= target
+        if observed_entry and b.start < entry_at:
+            if sl or tp:
+                return finish(
+                    "AMBIGUOUS", b.end, "Exit touched in the partial observed-entry candle; order unknown"
+                )
+            last = b
+            continue
         if b.start < decision:
             partial_entry = touch
             if touch and (sl or tp):
@@ -249,8 +263,9 @@ def plan(store, source, limit=100, asof_ms=None):
 
 
 class CandleCache:
-    def __init__(self, store):
+    def __init__(self, store, policy=POLICY):
         self.store = store
+        self.policy = policy
         self.root = store.root / "ml" / "bootstrap-candles"
         self.root.mkdir(parents=True, exist_ok=True)
 
@@ -263,13 +278,18 @@ class CandleCache:
             used -= path.stat().st_size
             path.unlink()
 
-    async def get(self, market, symbol, start, end, state):
-        key = digest([market.name, symbol, start, end, POLICY])
+    async def get(self, market, symbol, start, end, state, *, require_complete=False):
+        key = digest([market.name, symbol, start, end, self.policy])
         path = self.root / (key + ".parquet")
         meta = self.store.get("ml_bootstrap_cache:" + key, {})
         if path.exists() and hashlib.sha256(path.read_bytes()).hexdigest() == meta.get("sha256"):
-            state["cache_hits"] += 1
-            return [Candle(**r) for r in pq.read_table(path).to_pylist()]
+            bars = [Candle(**r) for r in pq.read_table(path).to_pylist()]
+            complete = len(bars) == (end - start) // MINUTE and all(
+                b.interval == MINUTE and b.start == start + i * MINUTE for i, b in enumerate(bars)
+            )
+            if not require_complete or complete:
+                state["cache_hits"] += 1
+                return bars
         # Small requests and one request per second are independent of live REST.
         result, cursor = {}, start
         while cursor < end:

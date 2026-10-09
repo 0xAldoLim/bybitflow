@@ -140,7 +140,15 @@ class Store:
             if old[0] in {"INVALIDATED", "EXPIRED", "RESOLVED"}:
                 return  # A stale asynchronous evaluator must never resurrect a terminal setup.
             saved = json.loads(old[1])
-            for key in ("observed_entry_ms", "tp1_touch_ms", "tp2_touch_ms"):
+            for key in (
+                "observed_entry_ms",
+                "observed_entry_price",
+                "observed_entry_method",
+                "observed_entry_source",
+                "observed_entry_trade_id",
+                "tp1_touch_ms",
+                "tp2_touch_ms",
+            ):
                 if key in saved.get("evidence", {}):
                     signal.evidence.setdefault(key, saved["evidence"][key])
             for key, value in saved.get("coverage", {}).items():

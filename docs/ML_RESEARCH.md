@@ -52,6 +52,56 @@ fit, another cycle needs 50 new outcomes or seven days. A manual cycle can also
 request a fit. Chronological partitions can still leave too few samples; the
 worker reports that reason instead of weakening the checks.
 
+## Monitored setups and laptop downtime
+
+Continuous local recording is required for the strict `prints-v1` paper-fill
+policy, but is **not required for monitored learning**. The separate
+`monitored-ohlc-v1` track uses the full, immutable current `candidate-v10` decision
+features and recovers the original venue's closed one-minute price history.
+It keeps the original entry zone/window, stop, TP1, holding deadline and cost
+assumptions. Current-schema frozen candidates are included independently of
+Discord delivery; canonical economic identities prevent repeated evaluations
+from becoming independent samples.
+
+For example, a swing enters the zone while the application is running, the
+laptop shuts down, and the stop is reached overnight. On restart, lifecycle
+reconciliation updates the original setup. The trainer recovers that price path
+and records a complete loss when the entry/exit ordering is established. The
+strict print label stays unchanged; both policies coexist. No local trade tape
+is required for the missing hours. Terminal stop/target setups can be labeled
+before the full swing horizon ends.
+
+New live entry-zone touches store their event time, price, source and trade ID.
+Recovery uses that entry evidence when it is within the frozen decision and
+entry window. Older setups without that evidence use a historical zone touch.
+Both are hypothetical fills, not verified account executions. A partial entry
+candle with an exit touch, or a candle touching both stop and TP1, is ambiguous
+and excluded. Missing public history or a still-open path is retried rather
+than permanently labeled incomplete. Unfilled setups are excluded, not losses.
+
+The trainer refreshes monitored recovery and readiness every 15 minutes, subject
+to the existing disk budget and bounded REST/cache limits. Labels retain candle
+event availability separately from materialization time; dataset availability
+cannot precede recovery. The same 500-outcome, chronological partition, class,
+embargo and untouched-holdout checks apply. Source-specific baselines and the
+16-observation two-stage models can learn from complete monitored outcomes.
+Monitored models remain advisory, retain proxy provenance and cannot be promoted
+or filter delivery. Compatible primary models take priority over monitored
+models; monitored models take priority over historical bootstrap models.
+
+From CMD in the repository directory:
+
+```bat
+docker compose --profile ml up -d
+docker compose exec trainer bybit-flow ml status
+docker compose exec trainer bybit-flow ml monitored-labels --source binance --limit 100
+```
+
+The status includes `monitored_trainability`, `monitored_backfill`,
+`monitored_model_id` and the monitored partition/fit plans. Normal operation
+does not require the manual labeling command. `monitored-export` and
+`monitored-train` are available for explicit offline research.
+
 ## Historical bootstrap track
 
 `ohlc-path-v1` evaluates the original venue's public, fully closed one-minute

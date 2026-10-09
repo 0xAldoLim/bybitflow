@@ -128,6 +128,11 @@ def embed(signal, dashboard_url):
                 "ML Research",
                 f"Bootstrap score {ml['research_score']:g}/100\nOHLC-proxy historical challenger\nProduction authority: none",
             )
+        elif ml.get("track") == "monitored":
+            field(
+                "ML Research",
+                f"Monitored setup score {ml['research_score']:g}/100\nRecovered price-path research\nHypothetical fills · advisory only",
+            )
 
         alignment = s.evidence.get("market_alignment", {})
         if alignment.get("alignment") == "IDIOSYNCRATIC_DIVERGENCE":

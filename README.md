@@ -162,7 +162,23 @@ setup. See the [horizon and lifecycle guide](docs/USER_RUNBOOK.md#multi-horizon-
 | Track | Evidence | Authority |
 |---|---|---|
 | Primary | Current `candidate-v10` decisions with complete `prints-v1` outcomes from recorded trades | Preferred compatible model; promotion requires independent admission checks |
+| Monitored | Current `candidate-v10` features with `monitored-ohlc-v1` setup outcomes recovered from original-exchange candles | Advisory model with full current features; hypothetical fills, no production filtering |
 | Bootstrap | `bootstrap-core-v1` features with `ohlc-path-v1` historical one-minute candle outcomes | Advisory OHLC-proxy challenger; promotion and production filtering disabled |
+
+The laptop does **not** need to stay on throughout a position for monitored
+learning. On restart, saved setups retain their original plans and lifecycle
+monitoring catches up from the original exchange's closed one-minute candles.
+The trainer independently reconstructs the price path and records stop, TP1, or
+time-exit outcomes under `monitored-ohlc-v1`, even when the strict print label is
+incomplete. Missing history is retried; ambiguous ordering and unfilled plans
+are excluded. A recorded entry-zone price touch or historical zone intersection
+represents a hypothetical fill, not proof of a trade in an account. Original
+entry deadlines and holding deadlines are preserved.
+
+Restart Docker and run `docker compose --profile ml up -d` when returning to the
+laptop. Recovery and learning resume automatically; new alerts and notifications
+can only be sent while the services are running. Inspect `monitored_trainability`
+and `monitored_backfill` in `docker compose exec trainer bybit-flow ml status`.
 
 Each track needs **500 complete unique outcomes per source**. Millions of exchange
 events, repeated evaluations, incomplete paths, and manual journal entries do not
@@ -187,6 +203,8 @@ cycle, and must still satisfy readiness. Status reports partition/class blockers
 compatibility abstentions, models, and heartbeat. Collection does not guarantee
 immediate fitting or a prediction on every setup. With `FLOW_ML_FILTER_RESEARCH=false`,
 ML abstention does not block otherwise qualified alerts; bootstrap can never filter them.
+Monitored models also remain advisory and cannot filter alerts. A compatible
+primary model takes priority, followed by a monitored model, then bootstrap.
 
 The verified deployment workflow creates an immutable maturity epoch. Keep feature
 definitions, gates, strategy rules, score weights, labels, partition policy, and

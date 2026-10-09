@@ -212,12 +212,23 @@ async function render() {
         latest = ml.models[0];
       const horizons = await api("horizons");
       body = panel(
+        "Learning data",
+        table(["Exchange", "Recorded-print outcomes", "Recovered setup outcomes", "Historical bootstrap"],
+          ["binance", "bybit", "okx"].map(source => [escape(source),
+            ml.ml_trainability?.by_source?.[source]?.baseline_trainable ?? "Awaiting worker",
+            ml.monitored_trainability?.[source]?.trainable ?? "Awaiting worker",
+            ml.bootstrap_trainability?.[source]?.trainable ?? "Awaiting worker"])),
+        "500 complete independent outcomes per exchange and track; chronological checks still apply",
+      ) + panel(
         "Champion and collection",
         json({
           champion: ml.champion || "None — no validated model",
           model_status: ml.model_status,
           primary_model_id: ml.primary_model_id,
           bootstrap_model_id: ml.bootstrap_model_id,
+          monitored_model_id: ml.monitored_model_id,
+          monitored_trainability: ml.monitored_trainability,
+          monitored_backfill: ml.monitored_backfill,
           primary_trainability: ml.ml_trainability,
           bootstrap_trainability: ml.bootstrap_trainability,
           bootstrap_backfill: ml.bootstrap_backfill,

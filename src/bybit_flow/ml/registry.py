@@ -10,6 +10,12 @@ from .store import canonical, digest
 
 def promotion_reasons(m):
     if (
+        m.get("track") == "monitored"
+        or m.get("label_policy") == "monitored-ohlc-v1"
+        or m.get("label_fidelity") == "MONITORED_OHLC_PROXY"
+    ):
+        return ["Monitored OHLC-proxy artifacts cannot be promoted or acquire production authority"]
+    if (
         m.get("track") == "bootstrap"
         or m.get("label_fidelity") == "OHLC_PROXY"
         or m.get("label_policy") == "ohlc-path-v1"

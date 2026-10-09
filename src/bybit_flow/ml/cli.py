@@ -131,7 +131,15 @@ def monitor(settings, store):
         )
         store.put("ml_monitor", result)
         return result
+    from . import monitored
     from .bootstrap import backfill, readiness
+
+    # Restore current-feature outcomes first, independently of raw print gaps.
+    result["monitored"] = {
+        source: asyncio.run(monitored.backfill(store, settings, source, limit=100))
+        for source in monitored.SOURCES
+    }
+    store.put("ml_monitored_trainability", monitored.readiness(store))
 
     result["bootstrap"] = {
         source: asyncio.run(backfill(store, settings, source, limit=100, resume=True))
@@ -176,20 +184,24 @@ def fit_due(previous, count, now, manual=False):
 def train_ready(settings, store, manual=False):
     from ..storage import directory_bytes
     from .bootstrap import train as bootstrap_train
+    from .monitored import train as monitored_train
 
     if directory_bytes(store.root) >= settings.max_storage_gb * 1e9 * 0.95:
         return dict(at_ms=now_ms(), status="STORAGE_BACKPRESSURE")
     results = {}
     primary = store.get("ml_trainability_cache", {}).get("by_source", {})
     bootstrap = store.get("ml_bootstrap_trainability", {})
-    for track, counts in (("primary", primary), ("bootstrap", bootstrap)):
+    monitored = store.get("ml_monitored_trainability", {})
+    for track, counts in (("primary", primary), ("monitored", monitored), ("bootstrap", bootstrap)):
         for source, detail in counts.items():
             count = detail.get("baseline_trainable" if track == "primary" else "trainable", 0)
             from . import SCHEMA_VERSION
 
-            schema, policy = (
-                (SCHEMA_VERSION, "prints-v1") if track == "primary" else ("bootstrap-core-v1", "ohlc-path-v1")
-            )
+            schema, policy = {
+                "primary": (SCHEMA_VERSION, "prints-v1"),
+                "monitored": (SCHEMA_VERSION, "monitored-ohlc-v1"),
+                "bootstrap": ("bootstrap-core-v1", "ohlc-path-v1"),
+            }[track]
             key = f"ml_fit:{track}:{source}:{schema}:{policy}"
             previous = store.get(key, {})
             if not fit_due(previous, count, now_ms(), manual):
@@ -207,6 +219,8 @@ def train_ready(settings, store, manual=False):
                 ident = (
                     cycle(settings, store, source)
                     if track == "primary"
+                    else monitored_train(store, source, settings.ml_two_stage)["id"]
+                    if track == "monitored"
                     else bootstrap_train(store, source)["id"]
                 )
                 result.update(
@@ -317,6 +331,11 @@ def run(arguments, settings, store):
             command.add_argument("--limit", type=int, default=100)
             command.add_argument("--resume", action="store_true")
             command.add_argument("--dry-run", action="store_true")
+    for name in ("monitored-labels", "monitored-export", "monitored-train"):
+        command = sub.add_parser(name)
+        command.add_argument("--source", choices=("binance", "bybit", "okx"), required=True)
+        if name == "monitored-labels":
+            command.add_argument("--limit", type=int, default=100)
     drift = sub.add_parser("drift")
     drift.add_argument("model_id")
     args = parser.parse_args(arguments)
@@ -334,6 +353,20 @@ def run(arguments, settings, store):
         from .maturity import start_epoch
 
         result = start_epoch(store, args.code_commit)
+    elif args.command.startswith("monitored-"):
+        from . import monitored
+
+        if args.command == "monitored-labels":
+            result = asyncio.run(monitored.backfill(store, settings, args.source, args.limit))
+            store.put("ml_monitored_trainability", monitored.readiness(store))
+        elif args.command == "monitored-export":
+            result = str(FeatureStore(store).write_dataset(monitored.dataset(store, args.source)))
+        else:
+            result = {
+                k: v
+                for k, v in monitored.train(store, args.source, settings.ml_two_stage).items()
+                if k != "model"
+            }
     elif args.command.startswith("bootstrap-"):
         from . import bootstrap
 
