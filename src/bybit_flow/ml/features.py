@@ -3,8 +3,6 @@
 import math
 from datetime import UTC, datetime
 
-from . import SCHEMA_VERSION
-
 # (group, path, definition). Missing values are NOT zero-valued observations.
 CATALOG = {
     **{
@@ -364,13 +362,44 @@ def lookup(value, path):
     return value
 
 
+V20_CATALOG = {
+    **CATALOG,
+    **{
+        f"v2_{name}": ("v2", f"evidence.v2.{name}.score", f"v2-score-1 deterministic {name}; not probability")
+        for name in ("location", "mechanism", "trade_offer")
+    },
+    "v2_evidence_confidence": ("v2", "evidence.v2.evidence_confidence", "v2-score-1 evidence confidence cap"),
+    "v2_barrier_count": (
+        "v2",
+        "evidence.v2.trade_offer.barrier_count",
+        "Observed distinct reference barriers from entry to original TP1",
+    ),
+    "v2_cost_risk_fraction": (
+        "v2",
+        "evidence.v2.trade_offer.cost_risk_fraction",
+        "Estimated original offer costs / original stop distance",
+    ),
+    "v2_event_efficiency": (
+        "event_rotation_state",
+        "evidence.event_rotation_state.price_efficiency",
+        "Closed causal activity rotation displacement / price path",
+    ),
+    "v2_size_divergence": (
+        "trade_size_state",
+        "evidence.trade_size_state.large_small_divergence",
+        "Prior-quantile large versus small signed-print divergence",
+    ),
+}
+
+
 def snapshot(signal, decision_ms, stage, membership=None):
     """Receipt-time snapshot. No backdating late market observations to candle timestamps."""
     if decision_ms < signal.created_ms:
         raise ValueError("Candidate cannot be available before its creation")
+    schema = signal.feature_schema_version
     payload = signal.model_dump(mode="json")
     values, metadata = {}, {}
-    for name, (group, path, definition) in CATALOG.items():
+    for name, (group, path, definition) in (V20_CATALOG if schema == "candidate-v20" else CATALOG).items():
         actual_path = path
         if signal.horizon_profile != "LEGACY":
             for old, new in (
@@ -391,6 +420,8 @@ def snapshot(signal, decision_ms, stage, membership=None):
         prefix = actual_path.split(".")[1] if actual_path.startswith("evidence.") else "risk"
         section = signal.evidence.get(prefix, {})
         section = section if isinstance(section, dict) else {}
+        if prefix in {"event_rotation_state", "trade_size_state"} and not section.get("available"):
+            value = None
         if prefix == "context_ev" and section.get("status") != "AVAILABLE":
             value = None
         source = section.get("source", source)
@@ -415,7 +446,7 @@ def snapshot(signal, decision_ms, stage, membership=None):
             source_ms=source_ms,
             available_ms=available_ms,
             definition=definition,
-            version=SCHEMA_VERSION,
+            version=schema,
             timeframe={
                 "context_features": signal.context_timeframe,
                 "setup_features": signal.setup_timeframe,
@@ -445,7 +476,7 @@ def snapshot(signal, decision_ms, stage, membership=None):
             source_ms=decision_ms,
             available_ms=decision_ms,
             definition=key,
-            version=SCHEMA_VERSION,
+            version=schema,
             missing=value is None,
         )
     for key in CONTEXT:
@@ -467,14 +498,14 @@ def snapshot(signal, decision_ms, stage, membership=None):
             source_ms=decision_ms,
             available_ms=decision_ms,
             definition="candidate context: " + key,
-            version=SCHEMA_VERSION,
+            version=schema,
             missing=values[key] is None,
         )
     return dict(
         signal_id=signal.id,
         decision_ms=decision_ms,
         stage=stage,
-        schema_version=SCHEMA_VERSION,
+        schema_version=schema,
         source=signal.source,
         signal=payload,
         values=values,

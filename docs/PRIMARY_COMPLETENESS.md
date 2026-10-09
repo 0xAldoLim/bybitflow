@@ -7,7 +7,8 @@ identified `monitored-ohlc-v1` outcome recovered from exchange candles. Inspect
 that track; primary incompleteness does not mean the setup is unavailable for
 all learning. See [monitored recovery](ML_RESEARCH.md#monitored-setups-and-laptop-downtime).
 
-Use this audit to explain missing `candidate-v10` / `prints-v1` outcomes. It does
+Use this audit to explain missing current `candidate-v20` / `prints-v1` outcomes.
+The v1 implementation audited `candidate-v10`; historical records remain intact. It does
 not change strategy decisions, scores, Discord qualification, frozen plans,
 training minimums, or the maturity epoch. Historical labels remain immutable.
 

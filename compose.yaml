@@ -1,6 +1,9 @@
 services:
   desk:
-    build: .
+    build:
+      context: .
+      args:
+        FLOW_CODE_COMMIT: ${FLOW_CODE_COMMIT:-unknown}
     init: true
     restart: unless-stopped
     ports:
@@ -34,6 +37,8 @@ services:
     build:
       context: .
       target: trainer
+      args:
+        FLOW_CODE_COMMIT: ${FLOW_CODE_COMMIT:-unknown}
     init: true
     restart: unless-stopped
     command: [bybit-flow, ml, worker]

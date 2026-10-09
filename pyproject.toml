@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "bybit-flow"
-version = "0.1.0"
+version = "2.0.0"
 description = "Public-data, alerts-only perpetual futures research workstation"
 requires-python = ">=3.12"
 dependencies = [
@@ -25,7 +25,7 @@ bybit-flow = "bybit_flow.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-bybit_flow = ["static/*"]
+bybit_flow = ["static/*", "research_v2.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

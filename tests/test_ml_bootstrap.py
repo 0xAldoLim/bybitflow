@@ -19,6 +19,7 @@ from bybit_flow.storage import Recorder, Store
 
 def frozen(signal, decision=120_000, source="binance"):
     s = signal.model_copy(deep=True)
+    s.feature_schema_version = "candidate-v10"  # Stored legacy bootstrap compatibility.
     s.source, s.created_ms = source, decision
     s.expires_ms = decision + 180_000
     s.expected_hold_max = 5
@@ -316,6 +317,7 @@ def test_checkpoint_releases_consumed_tape_and_fails_closed(settings, signal):
 
 
 def test_bootstrap_has_no_promotion_rights_and_primary_preferred(settings, signal):
+    signal.feature_schema_version = "candidate-v10"
     store = Store(settings.data_dir)
     registry = Registry(store)
     row = frozen(signal)
@@ -352,6 +354,7 @@ def test_bootstrap_has_no_promotion_rights_and_primary_preferred(settings, signa
 
 
 def test_bootstrap_cannot_filter_change_quality_or_supply_probability(settings, signal, monkeypatch):
+    signal.feature_schema_version = "candidate-v10"
     store = Store(settings.data_dir)
     settings.ml_enabled = settings.ml_filter_research = True
     signal.source = "binance"

@@ -21,9 +21,44 @@ Mandatory structure, liquidity, coverage, freshness, entry, risk, and applicable
 production gates still apply. A rejected setup is not made eligible by its score;
 the scorer marks its raw tier F and final qualification REJECTED.
 
-## Native evidence rubric
+## Version 2 rubric
 
-The seven category weights remain fixed and total 100. Each fraction is clipped
+New `candidate-v20` plans use `bybitflow-v2-evidence-1`:
+
+| Dimension | Weighted contribution | Evidence |
+|---|---:|---|
+| Location | 30% | Original structural reference, family-specific range geometry, covered volume-value location |
+| Mechanism | 45% | Trusted executed aggression and actual price response, or defended absorption for reversal families; explicit independent-venue substitution |
+| Trade offer | 25% | Accepted after-cost RR, costs relative to stop distance, stop/noise geometry, and distinct POC/HVN/AVWAP barriers to original TP1 |
+
+```text
+weighted = .30 × location + .45 × mechanism + .25 × trade_offer
+raw = .80 × weighted + .20 × min(location, mechanism, trade_offer)
+quality = min(raw, evidence_confidence)
+```
+
+Dimensions and confidence are on a 0–100 scale. The weakest dimension limits
+quality; favorable context cannot erase an unsupported mechanism. Confidence
+requires original-venue coverage, valid causal structure, accepted risk, and flow
+confirmation. Optional profile and closed-event readiness can support confidence;
+missing evidence cannot add points or redistribute weights. Size and event
+direction share one modifier because both describe the same prints. Unknown or
+opposing observations receive no favorable modifier.
+
+The existing scanner families, beta/residual context, assessed asset facts,
+funding/OI observations, execution costs, and V7/V8 gates remain in use. Their
+old flat category points are not a second v2 score. Large prints do not identify
+participants, and sampled liquidation acceleration alone never establishes a fade.
+All coefficients are implementation inferences; predictive advantage is unvalidated.
+See the [research ledger](v2/INSILICO_RESEARCH_LEDGER.md).
+
+Pre-cutover active plans retain every original price level, score, tier, deadline,
+and stored rubric through their original lifecycle. Historical scores remain
+comparable only within their stored score profile.
+
+## Historical native evidence rubric
+
+The v1 seven category weights total 100. Each fraction is clipped
 to its category bounds; missing evidence earns no invented points or redistribution.
 
 | Category | Maximum | Implemented evidence |

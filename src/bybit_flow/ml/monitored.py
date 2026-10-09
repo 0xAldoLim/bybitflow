@@ -87,7 +87,7 @@ def pending(store, source, asof_ms, limit=100):
         page = " AND (s.decision_ms,s.id)>(?,?)" if cursor else ""
         rows = store.db.execute(
             "SELECT s.id,s.payload,p.payload,s.decision_ms FROM ml_snapshots s "
-            "JOIN signals p ON p.id=s.signal_id WHERE s.stage='decision' AND s.schema_version=? "
+            "JOIN signals p ON p.id=s.signal_id WHERE s.stage='decision' AND s.schema_version IN ('candidate-v10',?) "
             "AND json_extract(s.payload,'$.source')=? AND s.decision_ms<? "
             "AND ((p.state IN ('INVALIDATED','EXPIRED','RESOLVED') AND "
             "json_extract(p.payload,'$.evidence.primary_outcome') IN ('STOP','TARGET','UNCLEAR')) OR "
@@ -194,9 +194,9 @@ async def _backfill(store, settings, source, limit, market):
     return state
 
 
-def dataset(store, source, asof_ms=None):
+def dataset(store, source, asof_ms=None, *, schema=SCHEMA_VERSION):
     return FeatureStore(store).dataset(
-        asof_ms or now_ms(), policy=POLICY, source=source, schema_version=SCHEMA_VERSION
+        asof_ms or now_ms(), policy=POLICY, source=source, schema_version=schema
     )
 
 

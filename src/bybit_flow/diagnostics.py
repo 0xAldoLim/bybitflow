@@ -115,6 +115,9 @@ def flow_quality_status(store, settings, at_ms):
 
 async def doctor(settings, store, network=True):
     checks = {}
+    from .v2 import status as product_status
+
+    checks["product"] = product_status(store)
     checks["configuration"] = {
         "status": "OK",
         "market_source": settings.market_source,

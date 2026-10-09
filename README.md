@@ -1,4 +1,4 @@
-# BybitFlow
+# BybitFlow 2.0.0
 
 BybitFlow monitors public crypto perpetual-market data and sends confirmed research
 setups to Discord. Cards include LONG or SHORT, quality grade, entry zone, stop
@@ -11,6 +11,13 @@ independent setup monitoring, managed recording retention, and a background ML
 worker. Binance, Bybit, and OKX REST and WebSocket adapters are implemented.
 Automatic source selection uses one working primary venue; ML outcomes remain
 separate by source.
+
+New setups use `candidate-v20` and the `bybitflow-v2-evidence-1` score profile:
+location, confirmed mechanism, after-cost trade offer, and an evidence-confidence
+cap. This is a versioned research rubric, not a measured improvement in returns.
+Existing setups keep their original plans, scores, deadlines, source, and lifecycle.
+Historical learning records and models remain available under their stored schema.
+See the [score guide](docs/SCORING.md) and [v1 comparison](docs/v2/BYBITFLOW_V1_TO_V2_GAP_ANALYSIS.md).
 
 ## Quick navigation
 
@@ -90,6 +97,20 @@ The first build downloads application and training dependencies, including CPU-o
 PyTorch in the trainer image. Open [the dashboard](http://127.0.0.1:8000), sign in
 as `research`, and use your `FLOW_ADMIN_TOKEN` as the password.
 
+For a build with its Git commit recorded in the immutable v2 cutover marker,
+run this before the build in CMD:
+
+```bat
+for /f %i in ('git rev-parse HEAD') do set FLOW_CODE_COMMIT=%i
+docker compose --profile ml up -d --build
+```
+
+Use `%%i` inside a `.bat` file. In PowerShell, use
+`$env:FLOW_CODE_COMMIT = git rev-parse HEAD`; in a POSIX shell, use
+`export FLOW_CODE_COMMIT=$(git rev-parse HEAD)`. A Docker build without this value
+records `unknown` for the commit; version, schema, and research hashes are still
+recorded. Restarting never replaces the original cutover marker.
+
 ## Start, stop, and check status
 
 Run from the repository folder with Docker running:
@@ -99,6 +120,7 @@ Run from the repository folder with Docker running:
 | Start or resume scanner and ML worker | `docker compose --profile ml up -d` |
 | Stop services and preserve data | `docker compose --profile ml stop` |
 | Check containers | `docker compose --profile ml ps` |
+| Check application version and immutable cutover | `docker compose exec desk bybit-flow version` |
 | Check feeds, recorder, and runtime diagnostics | `docker compose exec desk bybit-flow doctor` |
 | Inspect signal admission and delivery counters | `docker compose exec desk bybit-flow signals status` |
 | Inspect ML readiness, models, and heartbeat | `docker compose exec trainer bybit-flow ml status` |
@@ -147,6 +169,10 @@ window does not mean a one-minute holding period. Implemented grade bands are
 Every grade must still pass structure, flow, liquidity, freshness, entry, risk,
 and applicable production gates.
 
+New v2 cards include a compact evidence explanation. Strong aggression without
+price response is not automatically conviction; missing data adds no favorable
+credit. Relative trade-size buckets identify reported print size, never traders.
+
 At a tracking deadline, a reliable original-venue price and observed entry can
 support a paper profit/loss estimate before TP1. Missing evidence leaves the result
 unknown. Late research observations never turn an expired setup into a historical
@@ -161,8 +187,8 @@ setup. See the [horizon and lifecycle guide](docs/USER_RUNBOOK.md#multi-horizon-
 
 | Track | Evidence | Authority |
 |---|---|---|
-| Primary | Current `candidate-v10` decisions with complete `prints-v1` outcomes from recorded trades | Preferred compatible model; promotion requires independent admission checks |
-| Monitored | Current `candidate-v10` features with `monitored-ohlc-v1` setup outcomes recovered from original-exchange candles | Advisory model with full current features; hypothetical fills, no production filtering |
+| Primary | Current `candidate-v20` decisions with complete `prints-v1` outcomes from recorded trades | Preferred compatible model; promotion requires independent admission checks |
+| Monitored | Current `candidate-v20` features with `monitored-ohlc-v1` setup outcomes recovered from original-exchange candles | Advisory model with full current features; hypothetical fills, no production filtering |
 | Bootstrap | `bootstrap-core-v1` features with `ohlc-path-v1` historical one-minute candle outcomes | Advisory OHLC-proxy challenger; promotion and production filtering disabled |
 
 The laptop does **not** need to stay on throughout a position for monitored
@@ -184,6 +210,12 @@ Each track needs **500 complete unique outcomes per source**. Millions of exchan
 events, repeated evaluations, incomplete paths, and manual journal entries do not
 meet that requirement. A positive label means simulated net R above zero after
 assumed costs, not a verified account win.
+
+V10 recovery continues and its snapshots, labels, and models are preserved.
+V10 outcomes do not count toward the v20 minimum, and incompatible v1/bootstrap
+models abstain on new v20 setups. New setups retain deterministic authority while
+their own compatible models mature. Continuous recording remains necessary only
+for the strict print track; monitored recovery keeps its separate fidelity.
 
 The baseline compares Logistic Regression and LightGBM. With
 `FLOW_ML_TWO_STAGE=true`, the primary sequence pipeline can compare LightGBM,
@@ -249,7 +281,7 @@ container does not prove every selected market has fresh evidence.
 |---|---|
 | Clock skew, future events, or timestamp errors | Open Windows **Settings → Time & language → Date & time**, enable automatic time, choose the correct time zone, and select **Sync now**. Run `doctor` again. |
 | Dashboard unavailable | Start Docker Desktop, run `docker compose --profile ml up -d`, and inspect `ps` and logs. Use `http://127.0.0.1:8000`; sign in as `research` with `FLOW_ADMIN_TOKEN`. |
-| Docker engine or socket initialization error | Confirm Linux-container mode. Restart Docker Desktop from its Troubleshoot menu and check `docker info` before starting Compose again. Avoid factory reset or volume deletion as ordinary recovery. |
+| Docker engine or socket initialization error | Confirm Linux-container mode and check `docker info`. For the specific inaccessible `engine.sock` / `dockerInference` error, see the [runtime-socket repair](docs/USER_RUNBOOK.md#docker-engine-unavailable-or-socket-initialization-failure). |
 | Disk full or recording-budget error | Check Windows free space, `docker system df`, and application `storage status`. Preview managed cleanup; preserve the database, models, protected recordings, and volume. |
 | No Discord setups | Check alert settings, `signals status`, feed freshness, warm-up, gate rejections, and webhook results. There is no fixed signal schedule. |
 | Pending confirmation | Required executed-flow/entry checks have not passed. Missing or interrupted flow cannot be replaced by a higher score. |

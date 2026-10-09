@@ -339,19 +339,33 @@ def footprint(trades, tick, atr, book=None):
 
 
 class Tape:
-    def __init__(self, max_trades=200_000):
+    def __init__(self, max_trades=200_000, *, source=None, symbol=None):
         self.trades = deque(maxlen=max_trades)
         self.ids = OrderedDict()
         self.coverage_start = 0
         self.last_event = self.last_receipt = 0
+        self.source, self.symbol = source, symbol
+        self.event_features = None
+        if source and symbol:
+            from .event_features import EventFeatures
+
+            self.event_features = EventFeatures(source, symbol)
 
     def reset(self, at_ms):
         self.trades.clear()
         self.ids.clear()
         self.coverage_start = at_ms
         self.last_event = self.last_receipt = 0
+        if self.event_features:
+            from .event_features import EventFeatures
+
+            self.event_features = EventFeatures(self.source, self.symbol)
 
     def add(self, t: Trade):
+        if not t.price.is_finite() or not t.size.is_finite() or t.price <= 0 or t.size <= 0:
+            raise BookGap("Invalid trade price/quantity; continuity unknown")
+        if self.event_features and (t.symbol != self.symbol or t.exchange != self.source):
+            raise ValueError("Event features require a chronological, symbol-specific tape")
         if t.trade_id in self.ids:
             return False
         if t.event_ms < self.last_event:
@@ -363,6 +377,8 @@ class Tape:
         if len(self.ids) > self.trades.maxlen:
             self.ids.popitem(last=False)
         self.trades.append(t)
+        if self.event_features:
+            self.event_features.add(t)
         self.last_event, self.last_receipt = t.event_ms, t.receipt_ms
         return True
 

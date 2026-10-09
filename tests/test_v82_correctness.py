@@ -244,7 +244,7 @@ def test_production_context_filters_population_before_bounded_limit(tmp_path, si
         assert research["population"] == "historical-research"
         production = context_ev.refresh(store, AT, max_rows=5, source="binance", production=True)
         assert production["primary_outcomes"] == 5
-        assert production["schema_version"] == "candidate-v10"
+        assert production["schema_version"] == signal.feature_schema_version
         assert production["confirmation_policy"] == v8_gating.POLICY
         assert production["status"] == "INSUFFICIENT"
         assert store.get("v8_context_ev:binance") == research

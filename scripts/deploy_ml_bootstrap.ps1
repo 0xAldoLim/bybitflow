@@ -62,6 +62,7 @@ $reportRoot = Join-Path $repoRoot 'data\deployment-audits'
 New-Item -ItemType Directory -Force -Path $reportRoot | Out-Null
 $reportPath = Join-Path $reportRoot ($commit + '.json')
 $before | ConvertTo-Json -Depth 15 | Set-Content -LiteralPath ($reportPath + '.before')
+$env:FLOW_CODE_COMMIT = $commit
 Invoke-Docker -DockerArgs @('compose','--profile','ml','up','-d','--build')
 
 # Keep the collector running; serialize the bounded manual trainer work.

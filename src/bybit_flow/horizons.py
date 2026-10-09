@@ -73,6 +73,11 @@ def assign(signal, name):
     from .ml import SCHEMA_VERSION
 
     signal.feature_schema_version = SCHEMA_VERSION
+    if SCHEMA_VERSION == "candidate-v20":
+        from .v2 import SCORE_PROFILE
+
+        signal.version += ":bybitflow-v2"
+        signal.evidence.setdefault("production_policies", {})["scoring"] = SCORE_PROFILE
     # Only candidates created by this policy receive V8 production confirmation gates.
     signal.evidence["confirmation_policy"] = "v8-production-gating-v1"
     signal.version += ":horizons-v1:" + name + ":hardening-v1:autonomy-v1:flow-quality-v1"

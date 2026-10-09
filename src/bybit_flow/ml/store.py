@@ -68,8 +68,6 @@ class FeatureStore:
         self.store, self.db = store, store.db
 
     def capture(self, signal, at_ms, stage):
-        from . import SCHEMA_VERSION
-
         old = self.db.execute(
             "SELECT id FROM ml_snapshots WHERE signal_id=? AND stage=? ORDER BY decision_ms,id LIMIT 1",
             (signal.id, stage),
@@ -110,7 +108,7 @@ class FeatureStore:
                 (
                     at_ms,
                     at_ms - 7_200_000,
-                    SCHEMA_VERSION,
+                    row["schema_version"],
                     signal.source,
                     signal.symbol,
                     signal.family,
@@ -127,7 +125,7 @@ class FeatureStore:
         with self.db:
             self.db.execute(
                 "INSERT INTO ml_snapshots VALUES(?,?,?,?,?,?)",
-                (ident, signal.id, stage, at_ms, SCHEMA_VERSION, canonical(row)),
+                (ident, signal.id, stage, at_ms, row["schema_version"], canonical(row)),
             )
         return ident
 

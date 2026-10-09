@@ -74,7 +74,7 @@ not mislabeled as backfilled history. Unknown settlement intervals use an explic
 funding reserve assumption; no account-specific leverage brackets are invented.
 
 Historical feature schema v4 introduced trapped-participant and mean-execution-size
-fields; current decisions use `candidate-v10`. Old snapshots and models remain
+fields; current decisions use `candidate-v20`. V10 snapshots retain their original meanings. Old snapshots and models remain
 preserved. Exports separate schema and venue methodology. Current labels
 use assumed costs, exclude gaps/unresolved outcomes and cannot approve validated SSS.
 The earlier full-strategy replay is still Bybit-specific and explicitly refuses Binance/OKX

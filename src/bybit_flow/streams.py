@@ -52,7 +52,7 @@ class Streams:
             added, removed = set(symbols) - set(self.selected), set(self.selected) - set(symbols)
             for s in added:
                 self.books[s] = Book()
-                self.tapes[s] = Tape(self.settings.tape_max_trades)
+                self.tapes[s] = Tape(self.settings.tape_max_trades, source="bybit", symbol=s)
                 self.liquidations[s] = deque(maxlen=10000)
             self.selected = symbols
             for s in removed:
@@ -79,7 +79,7 @@ class Streams:
         await self.stop()
         self.selected = symbols
         self.books = {s: Book() for s in symbols}
-        self.tapes = {s: Tape(self.settings.tape_max_trades) for s in symbols}
+        self.tapes = {s: Tape(self.settings.tape_max_trades, source="bybit", symbol=s) for s in symbols}
         self.liquidations = {s: deque(maxlen=10000) for s in symbols}
         if symbols:
             self.task = asyncio.create_task(self.run())

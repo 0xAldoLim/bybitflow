@@ -22,6 +22,7 @@ def main():
     )
     signals = sub.add_parser("signals", help="Signal pipeline counters and delivery diagnostics")
     signals.add_argument("operation", choices=["status"])
+    sub.add_parser("version", help="Product version, immutable cutover and v20 readiness")
     doctor = sub.add_parser("doctor", help="Public connectivity and local operational diagnostics")
     doctor.add_argument("--json", action="store_true")
     market = sub.add_parser("test-market", help="Genuine public REST and trade WebSocket smoke test")
@@ -71,14 +72,19 @@ def main():
             from .v8_gating import effectiveness
 
             print(json.dumps(effectiveness(store, now_ms()), indent=2))
+        elif args.command == "version":
+            from .v2 import status
+
+            print(json.dumps(status(store), indent=2))
         elif args.command == "signals":
             from .funnel import status
+            from .v2 import status as product_status
             from .v8_gating import status as v8_status
 
             print(
                 json.dumps(
                     status(store, configured=bool(settings.research_webhook.get_secret_value()))
-                    | {"v8_production_gate": v8_status(store, now_ms())},
+                    | {"v8_production_gate": v8_status(store, now_ms()), "product": product_status(store)},
                     indent=2,
                 )
             )

@@ -122,6 +122,19 @@ def embed(signal, dashboard_url):
             summary += f"\nNet reward:risk {s.risk['net_rr']:.2f}R to TP1"
 
         field("Setup", summary)
+        v2 = s.evidence.get("v2", {})
+        if v2.get("score_profile") == "bybitflow-v2-evidence-1":
+            field(
+                "Evidence · v2",
+                "\n".join(
+                    (
+                        f"Location {v2['location']['score']:.0f} · Mechanism {v2['mechanism']['score']:.0f} · Offer {v2['trade_offer']['score']:.0f}",
+                        v2["mechanism"]["explanation"],
+                        v2["trade_offer"]["explanation"],
+                        f"Confidence cap {v2['evidence_confidence']:.0f}/100 · quality is not win probability",
+                    )
+                ),
+            )
         ml = s.evidence.get("ml", {})
         if ml.get("track") == "bootstrap":
             field(

@@ -1,4 +1,6 @@
 FROM python:3.12-slim AS base
+ARG FLOW_CODE_COMMIT=unknown
+ENV FLOW_CODE_COMMIT=$FLOW_CODE_COMMIT
 ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 FLOW_DATA_DIR=/app/data
 WORKDIR /app
 RUN useradd --uid 10001 --create-home researcher
@@ -9,6 +11,7 @@ RUN --mount=type=cache,target=/root/.cache/pip pip install --timeout 60 --retrie
 FROM base AS runtime
 COPY pyproject.toml README.md ./
 COPY src ./src
+COPY docs/v2 ./docs/v2
 RUN pip install --no-cache-dir --no-build-isolation --no-deps .
 USER researcher
 EXPOSE 8000
@@ -23,6 +26,7 @@ COPY requirements-lstm.lock ./
 RUN --mount=type=cache,target=/root/.cache/pip pip install --timeout 60 --retries 5 -r requirements-lstm.lock
 COPY pyproject.toml README.md ./
 COPY src ./src
+COPY docs/v2 ./docs/v2
 RUN pip install --no-cache-dir --no-build-isolation --no-deps .
 USER researcher
 CMD ["bybit-flow", "ml", "worker"]

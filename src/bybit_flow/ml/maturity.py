@@ -8,7 +8,7 @@ from . import SCHEMA_VERSION
 from .validation import PARTITION_POLICY
 
 FROZEN_POLICIES = (
-    "candidate-v10 feature meanings",
+    "stored candidate-v10 and candidate-v20 feature meanings; schema-separated learning",
     "V8 production-gate thresholds",
     "strategy family rules",
     "quality-score weights",
@@ -58,8 +58,9 @@ def progress(store, primary_model_id=None, bootstrap_model_id=None, asof_ms=None
     return dict(
         epoch_started_ms=epoch.get("started_ms"),
         epoch_age_days=max(0, now - epoch["started_ms"]) / 86_400_000 if epoch else None,
-        candidate_v10_decisions=sum(d.get("current_schema_decisions", 0) for d in primary.values()),
-        epoch_candidate_v10_decisions=sum(
+        candidate_schema=SCHEMA_VERSION,
+        current_schema_decisions=sum(d.get("current_schema_decisions", 0) for d in primary.values()),
+        epoch_current_schema_decisions=sum(
             d.get("epoch_current_schema_decisions", 0) for d in primary.values()
         ),
         prints_v1_complete_unique_by_source=complete,

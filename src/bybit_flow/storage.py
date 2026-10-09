@@ -104,6 +104,10 @@ class Store:
             self.put("horizon_counts", counts)
 
     def put(self, key, value):
+        if key == "bybitflow_v2_cutover" and self.get(key) is not None:
+            if self.get(key) != value:
+                raise ValueError("Product cutover epoch is immutable")
+            return
         payload = json.dumps(value)
         for attempt in range(4):
             try:
@@ -130,6 +134,10 @@ class Store:
         old = self.db.execute("SELECT state,payload FROM signals WHERE id=?", (signal.id,)).fetchone()
         if signal.source == "tradingview" and not old:
             raise ValueError("TRADINGVIEW_SUBSYSTEM_RETIRED")
+        if old:
+            from .v2 import preserve
+
+            preserve(signal, json.loads(old[1]), self.get("bybitflow_v2_cutover"))
 
         # Capture before lifecycle overwrites; both accepted and rejected decisions survive.
         features = FeatureStore(self)
@@ -218,6 +226,11 @@ class Store:
 
     def monitor(self, signal):
         """Persist only lightweight lifecycle progress, without scoring/ML jobs."""
+        from .v2 import preserve
+
+        saved = self.db.execute("SELECT payload FROM signals WHERE id=?", (signal.id,)).fetchone()
+        if saved:
+            preserve(signal, json.loads(saved[0]), self.get("bybitflow_v2_cutover"))
         with self.db:
             self.db.execute(
                 "UPDATE signals SET payload=? WHERE id=? AND state=?",

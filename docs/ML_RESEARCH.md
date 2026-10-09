@@ -7,11 +7,20 @@ model count or data readiness; inspect `bybit-flow ml status` for those values.
 
 ## Collection and labels
 
-Current feature schema `candidate-v10` stores immutable generation snapshots and the first
+Current feature schema `candidate-v20` stores immutable generation snapshots and the first
 scored decision for each setup. Source identity, strategy version, event time,
 availability time, missingness, and point-in-time membership accompany the features.
 Exports are source- and schema-specific. Lifecycle states, predictions, and outcomes
 are excluded from the feature allowlist.
+
+Version 2 retains v10's immutable features and adds location, mechanism, trade
+offer, confidence, and causal size/event observations under `candidate-v20`.
+Historical v10 labels/models remain intact; original-venue monitored recovery
+continues for both schemas. Current fitting and sequence histories stay separate
+by schema and source. V1/bootstrap model compatibility is not assumed for v20,
+so new plans use deterministic authority until a compatible model is ready.
+The separate immutable `bybitflow_v2_cutover` records this transition without
+replacing the existing maturity epoch.
 
 The `prints-v1` label policy evaluates frozen candidates, including rejected setups,
 against recorded trades. Paper fills use participation limits, latency, fees,
@@ -56,7 +65,7 @@ worker reports that reason instead of weakening the checks.
 
 Continuous local recording is required for the strict `prints-v1` paper-fill
 policy, but is **not required for monitored learning**. The separate
-`monitored-ohlc-v1` track uses the full, immutable current `candidate-v10` decision
+`monitored-ohlc-v1` track uses the full, immutable current `candidate-v20` decision
 features and recovers the original venue's closed one-minute price history.
 It keeps the original entry zone/window, stop, TP1, holding deadline and cost
 assumptions. Current-schema frozen candidates are included independently of
@@ -315,13 +324,13 @@ label policies, partition policy and V8 gating policy. Creation is atomic;
 restarts, normal worker cycles and later deployments preserve the original epoch.
 This marker describes collection provenance and never participates in trade
 decisions. `ml status` and the ML dashboard show the marker and cached progress.
-Primary progress uses the active venue's complete, unique `candidate-v10` /
+Primary progress uses the active venue's complete, unique `candidate-v20` /
 `prints-v1` outcomes divided by 500. Venues remain separate; percentage progress
 is training eligibility, not confidence or evidence of profitable predictions.
 The view also includes sequence progress, decisions since the epoch, model IDs,
 storage usage and recorder drops.
 
-After this final stabilization pass, keep candidate-v10 feature meanings, V8
+After this final stabilization pass, keep candidate-v20 feature meanings, V8
 production-gate thresholds, strategy family rules, quality-score weights, label
 policies, bootstrap projection, partition policy and ML minimums fixed. Change
 them only to repair a correctness bug, safety issue, broken exchange API or
@@ -347,12 +356,12 @@ retention repair.
 When two-stage mode is enabled but fewer than 500 compatible complete sequences are
 available, the worker attempts the Logistic Regression/LightGBM tabular baseline.
 Chronological partitions and class requirements remain unchanged. Feature schema
-`candidate-v10` includes causal flow-quality, market-alignment and V8 research fields; historical snapshots
+`candidate-v20` includes causal flow-quality, market-alignment and V8 research fields; historical snapshots
 remain immutable and incompatible schemas are not silently pooled for training.
 Advisory inference skips incompatible or degraded artifacts. Models are never
 automatically promoted, and deterministic setup scores are not replaced by ML scores.
 Flow confirmation mode remains signal provenance. Historical v9 snapshots remain
-unchanged; primary training needs enough completed, source-specific `candidate-v10`
+unchanged; primary training needs enough completed, source-specific `candidate-v20`
 outcomes and never rewrites historical decision features. Historical bootstrap labels use the separate
 `ohlc-path-v1` policy. `python -m bybit_flow.ml.ablation --source binance`
 reports insufficient evidence until at least 500 compatible outcomes exist. Holdout
@@ -387,17 +396,17 @@ Implementation references: [PyTorch LSTM](https://docs.pytorch.org/docs/2.14/gen
 [scikit-learn SVC](https://scikit-learn.org/stable/modules/generated/sklearn.svm.SVC.html),
 and [Random Forest probabilities](https://scikit-learn.org/stable/modules/generated/sklearn.ensemble.RandomForestClassifier.html).
 
-V8.1 gate snapshots include readiness separately from the unchanged quality score.
+V8.1 gate snapshots include readiness separately from the quality score.
 Corrected OFI, return versus regime breadth, VAH/VAL acceptance and minute OI
-semantics belong to v10. Sequence history never mixes schemas. Source-specific
-ablation uses v10 outcomes with chronological purging, embargoes and untouched
+semantics were introduced in v10 and remain in v20. Sequence history never mixes schemas. Source-specific
+ablation uses current-schema outcomes with chronological purging, embargoes and untouched
 holdouts. Frozen V8-blocked V7-valid plans enter the existing primary-print labeling
 path, with complete outcomes only; an incomplete or hypothetical path is not
 training evidence. Opportunity priority is excluded from model inputs.
 
 Context EV remains descriptive until 200 effective causal observations support
 mature confidence. Its source-specific cache must be at most 30 minutes old.
-Production context is isolated to `candidate-v10` decisions with confirmation
+Production context is isolated to `candidate-v20` decisions with confirmation
 policy `v8-production-gating-v1`, the same venue and primary `prints-v1` outcomes
 available strictly before the current decision. Historical research uses a separate
 cache and cannot trigger a production veto. The effective-sample heuristic and

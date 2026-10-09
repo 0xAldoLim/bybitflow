@@ -238,7 +238,7 @@ def test_monitored_priority_and_promotion_barrier(settings, signal):
         id="c" * 32,
         created_ms=100_000,
         track="monitored",
-        feature_schema_version="candidate-v10",
+        feature_schema_version=signal.feature_schema_version,
         label_policy=POLICY,
         source="binance",
         stage="decision",

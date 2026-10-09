@@ -99,7 +99,7 @@ Duplicate or related setups remain independently monitored internally.
 
 Grades are absolute: SSS 95+, SS 90+, S 85+, A 75+, B 65+, C 50+, D 35+,
 E 20+, F below 20. Mandatory rejections apply to every grade. The [scoring guide](SCORING.md)
-describes the seven evidence categories. Missing observations earn no invented
+describes v2's location, mechanism and trade-offer rubric and the historical v1 categories. Missing observations earn no invented
 credit; the quality score is separate from opportunity priority and ML ranking.
 
 `FLOW_HORIZON_PROFILES` accepts a JSON list. `FLOW_POST_TERMINAL_ENABLED` enables
@@ -259,6 +259,34 @@ docker info
 docker compose --profile ml up -d
 docker compose --profile ml ps
 ```
+
+For the specific Windows startup error **"remove ... engine.sock/dockerInference:
+The file cannot be accessed by the system"**, inspect the named file in PowerShell.
+A zero-byte file with `ReparsePoint` attributes can be a stuck local Unix socket.
+This has been [reported in Docker's issue tracker](https://github.com/docker/for-win/issues/15064).
+After quitting Docker Desktop, move only the affected runtime directory aside,
+retaining it for diagnosis. For the Secrets Engine error:
+
+```powershell
+docker desktop stop --force --timeout 30
+$socketBackupStamp = Get-Date -Format yyyyMMdd-HHmmss
+Rename-Item -LiteralPath "$env:LOCALAPPDATA\docker-secrets-engine" -NewName "docker-secrets-engine.stale-$socketBackupStamp"
+docker desktop start
+docker info
+```
+
+If startup then reports the same error for `Docker\run\dockerInference`, quit
+Docker again and move that socket's parent directory aside before restarting:
+
+```powershell
+Rename-Item -LiteralPath "$env:LOCALAPPDATA\Docker\run" -NewName "run.stale-$socketBackupStamp"
+```
+
+These paths contain transient runtime sockets. Preserve the backups, and do not
+rename Docker's `wsl`, data-disk directories, or application volumes. Apply this
+only to the diagnosed socket error while Docker is stopped; a generic network or
+permission failure needs a different diagnosis. Confirm `docker info` succeeds,
+then resume `docker compose --profile ml up -d`.
 
 If the engine still fails, gather Docker Desktop diagnostics and consult its
 [troubleshooting guide](https://docs.docker.com/desktop/troubleshoot-and-support/troubleshoot/).

@@ -141,7 +141,9 @@ def test_bootstrap_fit_keeps_holdouts_separate_and_never_promotes(settings, sign
             event_available_ms=row["label_available_ms"],
             production_execution_verified=False,
         )
-        proxy_rows.append(project(row))
+        # Bootstrap retains its supported legacy schema; overlapping field
+        # names do not make the new v20 score compatible with that projection.
+        proxy_rows.append(project(row | dict(schema_version="candidate-v10")))
     bootstrap = train(
         store, FeatureStore(store).write_dataset(proxy_rows), kinds=("logistic",), track="bootstrap"
     )

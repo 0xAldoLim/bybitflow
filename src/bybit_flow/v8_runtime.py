@@ -126,6 +126,11 @@ async def refresh(scanner):
                 baseline=baseline,
                 oi_series=scanner.current_oi_collector.series(source, symbol),
             )
+            from .v2_evidence import liquidation_sequence
+
+            row["liquidation_sequence"] = liquidation_sequence(
+                row["liquidation"], flow, prior.get("liquidation_sequence", {}), asof
+            )
             if events is not None:
                 baseline.append(
                     row["liquidation"].get("long_liquidation_notional_1m", 0)
@@ -234,11 +239,13 @@ async def refresh(scanner):
     )
 
 
-def decorate_signal(scanner, signal, context, decision_ms):
+def decorate_signal(scanner, signal, context, decision_ms, *, rank_opportunities=True):
     """Freeze optional causal observations on a *new* decision, after V7 scoring."""
     source = signal.source
     cache = scanner.v8_cache.get(signal.symbol, {})
-    limits = dict(ofi=30_000, liquidation=120_000, spot_perp=90_000, volatility=3_660_000)
+    limits = dict(
+        ofi=30_000, liquidation=120_000, liquidation_sequence=120_000, spot_perp=90_000, volatility=3_660_000
+    )
     for name, ttl in limits.items():
         value = cache.get(name, {}) if cache.get("source") == source else {}
         if value and 0 <= decision_ms - value.get("available_ms", decision_ms + 1) <= ttl:
@@ -285,6 +292,12 @@ def decorate_signal(scanner, signal, context, decision_ms):
             for k in ("source", "confidence", "effective_samples", "available_ms")
         },
     )
+    if rank_opportunities:
+        rank_signal(scanner, signal, decision_ms)
+
+
+def rank_signal(scanner, signal, decision_ms):
+    source = signal.source
     active = [
         row
         for row in scanner.store.active_signals()

@@ -35,10 +35,13 @@ signal for an alt's own price-action and order-flow confirmation.
 
 ## Interpretation and validation
 
-One visible quality score retains the original categories: regime, structure,
-order flow, derivatives, execution, sourced fundamentals and cross-market context.
-Horizon-aware evidence refines those categories without replacing the score with
-model probability. Missing measurements are not zero-risk observations.
+Version 2's visible quality score combines location, mechanism and trade offer,
+with a weakest-dimension penalty and evidence-confidence cap. Original regime,
+flow, derivatives, execution, sourced asset facts and cross-market observations
+remain in the single scanner and its gates; old plans retain their original category
+scores. The [archive ledger](v2/INSILICO_RESEARCH_LEDGER.md) distinguishes inspected
+source claims from implementation inferences. Missing measurements are not
+zero-risk observations, and the score is not a model probability.
 
 Primary paper outcomes, operational signal history and late directional evidence
 are separate records. An expired setup that later reaches a target remains

@@ -255,7 +255,7 @@ async def test_derivative_ttl_feature_cache_and_rest_bound(bars):
 def test_v8_snapshot_future_observation_is_missing(signal):
     signal.evidence["volatility"] = dict(source="bybit", source_ms=1500, available_ms=2500, rv_ratio=2)
     frozen = snapshot(signal, 2000, "decision")
-    assert frozen["schema_version"] == "candidate-v10"
+    assert frozen["schema_version"] == signal.feature_schema_version
     assert frozen["values"]["rv_ratio"] is None
     assert frozen["feature_metadata"]["rv_ratio"]["missing"]
 

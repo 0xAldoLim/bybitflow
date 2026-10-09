@@ -137,7 +137,7 @@ class NativeStreams:
             self.frames[s] = deque(maxlen=720)
             self.books[s], self.tapes[s], self.liquidations[s] = (
                 Book(),
-                Tape(self.settings.tape_max_trades),
+                Tape(self.settings.tape_max_trades, source=self.api.name, symbol=s),
                 deque(maxlen=1000),
             )
             self.tasks[s] = asyncio.create_task(self.run_symbol(s))

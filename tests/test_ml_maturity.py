@@ -1,4 +1,4 @@
-from bybit_flow.ml import cli
+from bybit_flow.ml import SCHEMA_VERSION, cli
 from bybit_flow.ml.maturity import progress, start_epoch
 from bybit_flow.ml.operations import trainability
 from bybit_flow.ml.registry import Registry
@@ -11,7 +11,7 @@ def test_verified_deployment_creates_epoch_and_restart_cycle_preserve_it(setting
     cli.run(["maturity-start", "--code-commit", "a" * 40], settings, store)
     original = store.get("ml_maturity_epoch")
     assert original["code_commit"] == "a" * 40
-    assert original["candidate_schema"] == "candidate-v10"
+    assert original["candidate_schema"] == SCHEMA_VERSION
     assert original["primary_label_policy"] == "prints-v1"
     assert original["partition_policy"] == "adaptive-causal-v2"
     store.close()
@@ -53,7 +53,8 @@ def test_maturity_progress_is_source_specific_and_uses_cached_diagnostics(settin
     store.put("recorder_health", dict(events_dropped=0))
     report = progress(store, "primary-test", "bootstrap-test", epoch["started_ms"] + 86_400_000)
     assert report["epoch_age_days"] == 1
-    assert report["candidate_v10_decisions"] == 1100 and report["epoch_candidate_v10_decisions"] == 7
+    assert report["candidate_schema"] == SCHEMA_VERSION
+    assert report["current_schema_decisions"] == 1100 and report["epoch_current_schema_decisions"] == 7
     assert report["primary_progress_pct"] == 60  # 300 per source cannot be pooled into 600.
     assert report["sequence_progress_pct"] == 4
     assert report["storage_state"] == "HEALTHY" and report["recorder_drop_count"] == 0

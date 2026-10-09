@@ -303,7 +303,10 @@ def test_existing_plan_unchanged_by_new_generation(signal, instrument):
 
 
 @pytest.mark.asyncio
-async def test_scanner_retries_then_alerts_without_ml_champion(settings, signal, instrument, monkeypatch):
+@pytest.mark.parametrize("schema", ["candidate-v10", "candidate-v20"])
+async def test_scanner_retries_then_alerts_without_ml_champion(
+    settings, signal, instrument, monkeypatch, schema
+):
     from types import SimpleNamespace
     from unittest.mock import AsyncMock, Mock
 
@@ -318,6 +321,7 @@ async def test_scanner_retries_then_alerts_without_ml_champion(settings, signal,
     monkeypatch.setattr("bybit_flow.scanner.now_ms", lambda: now)
     monkeypatch.setattr("bybit_flow.scanner.SpreadHistory.assess", lambda *args: dict(reasons=[]))
     signal.family = "range_rejection"
+    signal.feature_schema_version = schema
     signal.horizon_profile = "CORE_INTRADAY"
     signal.version += ":production-v2:hardening-v1"
     signal.created_ms = end
@@ -329,7 +333,7 @@ async def test_scanner_retries_then_alerts_without_ml_champion(settings, signal,
         trigger_bar_end=end,
         execution_window_ms=60000,
         execution_window_end_ms=end,
-        structural_trigger=dict(valid=True, level=99),
+        structural_trigger=dict(valid=True, level=99, available_ms=end),
         context_features=candle_features(bars, end),
         setup_features=candle_features(bars, end),
     )
@@ -373,6 +377,7 @@ async def test_scanner_retries_then_alerts_without_ml_champion(settings, signal,
         )
     }
     scanner.candle_cache = {(signal.symbol, "60"): (now, bars)}
+    scanner.v8_cache = {}
     scanner.streams = SimpleNamespace(
         connected=True,
         books={signal.symbol: book},

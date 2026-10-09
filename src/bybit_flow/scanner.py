@@ -31,6 +31,9 @@ TERMINAL = {"INVALIDATED", "EXPIRED", "RESOLVED"}
 class Scanner:
     def __init__(self, settings, store, recorder):
         self.settings, self.store, self.recorder = settings, store, recorder
+        from .v2 import initialize
+
+        self.v2_cutover = initialize(store, now_ms())
         name = settings.market_source if settings.market_source not in {"auto", "multi"} else "bybit"
         self.api = VenueAPI(name, settings, recorder)
         self.streams = (
@@ -410,6 +413,10 @@ class Scanner:
         )
         for signal in plans:
             assign(signal, "CORE_INTRADAY")
+            from .v2 import overlaps_legacy
+
+            if overlaps_legacy(signal, self.store.active_signals(), self.store.get("bybitflow_v2_cutover")):
+                continue
             old = self.store.db.execute("SELECT 1 FROM signals WHERE id=?", (signal.id,)).fetchone()
             if not old and signal.expires_ms > evaluated:
                 self.store.signal(signal)
@@ -442,6 +449,12 @@ class Scanner:
             )
             for signal in plans:
                 assign(signal, name)
+                from .v2 import overlaps_legacy
+
+                if overlaps_legacy(
+                    signal, self.store.active_signals(), self.store.get("bybitflow_v2_cutover")
+                ):
+                    continue
                 signal.expires_ms = bars[1][-1].end + DURATIONS[profile.setup]
                 signal.trigger_expires_ms = now + 120_000
                 if not self.store.db.execute("SELECT 1 FROM signals WHERE id=?", (signal.id,)).fetchone():
@@ -1343,6 +1356,26 @@ class Scanner:
                 continue
             if s.state == "ALERTED":
                 continue
+            from .v2 import is_legacy
+
+            if is_legacy(s, self.store.get("bybitflow_v2_cutover")):
+                # Original-source lifecycle/health loops remain responsible. Only
+                # a previously confirmed frozen decision may finish deferred delivery.
+                if s.state == "CONFIRMED" and not s.gates:
+                    from .macro import state as macro_state
+
+                    book = self.streams.books.get(s.symbol) if s.source == self.exchange else None
+                    if (
+                        book
+                        and book.fresh(now, self.settings.book_stale_ms)
+                        and self.recorder.healthy
+                        and self.entry_ready(s, book, now)
+                        and not macro_state(self.store, self.settings, now)["macro_pause_active"]
+                    ):
+                        if await self.notifier.send_research(s) == "sent":
+                            s.state = "ALERTED"
+                            self.store.signal(s, "Original confirmed decision delivered after cutover")
+                continue
             c = self.context.get(s.symbol)
             book, tape = self.streams.books.get(s.symbol), self.streams.tapes.get(s.symbol)
             connected = (
@@ -1803,12 +1836,23 @@ class Scanner:
                     reject(self.store, s, gate, now)
                 self.store.signal(s, "Awaiting valid evidence within the original entry window")
                 continue
-            score(s, flow_ok, rate is not None, preserve_original=":hardening-v1" not in s.version)
+            new_v2 = s.feature_schema_version == "candidate-v20"
+            if not new_v2:
+                score(s, flow_ok, rate is not None, preserve_original=":hardening-v1" not in s.version)
             try:
                 from .v8_runtime import decorate_signal
 
                 if not s.gates:
-                    decorate_signal(self, s, c, now)
+                    decorate_signal(self, s, c, now, rank_opportunities=not new_v2)
+                    if new_v2:
+                        from .v2_evidence import score as score_v2
+                        from .v8_runtime import rank_signal
+
+                        if tape.event_features:
+                            size, rotation = tape.event_features.snapshot(start, end, now, healthy)
+                            s.evidence.update(trade_size_state=size, event_rotation_state=rotation)
+                        score_v2(s, flow_ok, now)
+                        rank_signal(self, s, now)
                     if s.evidence.get("confirmation_policy") == "v8-production-gating-v1":
                         from .v8_gating import apply_new_candidate
 
@@ -1824,6 +1868,9 @@ class Scanner:
                         apply_new_candidate(self, s, now, portfolio=portfolio)
             except Exception as exc:
                 s.evidence["v8_research_error"] = type(exc).__name__
+                if new_v2:
+                    # Never send an unscored/malformed product-v2 decision.
+                    s.gates.append("V2_EVIDENCE_UNAVAILABLE")
             if self.settings.sss_research and s.quality >= 95 and not s.gates and s.risk.get("accepted"):
                 s.final_tier = "SSS RESEARCH · UNCALIBRATED"
             from .ml.inference import apply as apply_ml
