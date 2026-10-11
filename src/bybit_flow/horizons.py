@@ -78,6 +78,11 @@ def assign(signal, name):
 
         signal.version += ":bybitflow-v2"
         signal.evidence.setdefault("production_policies", {})["scoring"] = SCORE_PROFILE
+        from .quality_v21 import SCORE_PROFILE as QUALITY_SCORE_PROFILE
+        from .quality_v21 import enabled
+
+        if enabled(signal):
+            signal.evidence["production_policies"]["scoring"] = QUALITY_SCORE_PROFILE
     # Only candidates created by this policy receive V8 production confirmation gates.
     signal.evidence["confirmation_policy"] = "v8-production-gating-v1"
     signal.version += ":horizons-v1:" + name + ":hardening-v1:autonomy-v1:flow-quality-v1"

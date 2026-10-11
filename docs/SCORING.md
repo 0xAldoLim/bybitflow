@@ -23,7 +23,11 @@ the scorer marks its raw tier F and final qualification REJECTED.
 
 ## Version 2 rubric
 
-New `candidate-v20` plans use `bybitflow-v2-evidence-1`:
+Existing v2 `candidate-v20` plans use `bybitflow-v2-evidence-1`. New v2.1
+plans use `bybitflow-v21-evidence-1` with the same weights, weakest-dimension
+penalty and confidence cap. The versioned path component uses observed volume
+concentration and obstacle strength instead of counting barrier references.
+See [v2.1 definitions and audit limits](V21_RESEARCH_AUDIT.md).
 
 | Dimension | Weighted contribution | Evidence |
 |---|---:|---|

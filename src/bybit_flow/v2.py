@@ -8,7 +8,7 @@ from copy import deepcopy
 from pathlib import Path
 from time import time_ns
 
-VERSION = "2.0.0"
+VERSION = "2.1.0"
 SCHEMA = "candidate-v20"
 SCORE_PROFILE = "bybitflow-v2-evidence-1"
 CUTOVER_KEY = "bybitflow_v2_cutover"
@@ -191,6 +191,8 @@ def overlaps_legacy(signal, rows, epoch):
 def status(store):
     from collections import Counter
 
+    from .quality_v21 import SCORE_PROFILE as QUALITY_SCORE_PROFILE
+
     rows = store.db.execute(
         "SELECT payload FROM ml_snapshots WHERE stage='decision' AND schema_version=? ORDER BY decision_ms DESC LIMIT 500",
         (SCHEMA,),
@@ -200,7 +202,7 @@ def status(store):
     return dict(
         version=VERSION,
         candidate_schema=SCHEMA,
-        score_profile=SCORE_PROFILE,
+        score_profile=QUALITY_SCORE_PROFILE,
         cutover=store.get(CUTOVER_KEY),
         new_v20_count=store.db.execute(
             "SELECT count(*) FROM ml_snapshots WHERE stage='generation' AND schema_version=?", (SCHEMA,)

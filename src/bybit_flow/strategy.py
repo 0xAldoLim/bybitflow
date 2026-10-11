@@ -20,6 +20,7 @@ def candidates(
     structural_targets=False,
     volume_profile=None,
     horizon=None,
+    quality_policy=False,
 ):
     context_bars, setup_bars, execution_bars = [
         [b for b in bars if b.end <= asof] for bars in (context_bars, setup_bars, execution_bars)
@@ -29,6 +30,10 @@ def candidates(
     ]
     if context_features["regime"] in {"high-volatility disorder", "uncertain"}:
         return []
+    if quality_policy and len(context_bars) > 60:
+        context_features["previous_regime"] = candle_features(context_bars[:-1], context_bars[-1].start)[
+            "regime"
+        ]
     last, prior = setup_bars[-1], setup_bars[-2]
     atr = setup_features["atr"]
     plans = []
@@ -65,8 +70,24 @@ def candidates(
                 and last.close < min(c.low for c in setup_bars[-22:-2])
             ),
         }
+        base_level = level
         for family in families:
-            if not rules[family]:
+            level = base_level
+            structure = None
+            if quality_policy:
+                from .quality_v21 import structural
+
+                structure = structural(setup_bars, family, direction, context_features, setup_features, asof)
+                level = structure["frozen_reference"]
+            repaired_breakout = bool(
+                structure
+                and family == "breakout_retest"
+                and (supportive or context_features["regime"] == "range")
+                and structure["accepted"]
+                and structure["retest_held"]
+            )
+            repaired_reclaim = bool(structure and family == "range_rejection" and not structure["reasons"])
+            if not rules[family] and not repaired_breakout and not repaired_reclaim:
                 continue
             sign = 1 if long else -1
             entry = execution_bars[-1].close
@@ -121,6 +142,9 @@ def candidates(
                 else f"rules-0.3.0-flow-{execution_window_ms // 1000}s"
             )
             slot = execution_bars[-1].end if execution_window_ms == 900_000 else asof // 60_000 * 60_000
+            if quality_policy:
+                version += ":trade-validity-v21"
+                slot = last.end
             ident = hashlib.sha256(
                 f"{instrument.symbol}|{direction}|{family}|{last.end}|{slot}|{version}".encode()
             ).hexdigest()[:20]
@@ -144,6 +168,7 @@ def candidates(
                     invalidation=f"Price breaches {rounded(stop)}; data gap or regime loss also invalidates",
                     reason=f"{family}: causal 1H rule in {context_features['regime']}; executed-flow confirmation required",
                     evidence={
+                        **({"frozen_structure": structure} if structure else {}),
                         "production_policies": dict(
                             confirmation="intraday-confirmation-v2"
                             if horizon in {"SHORT_INTRADAY", "CORE_INTRADAY"}
@@ -183,6 +208,11 @@ def candidates(
                 )
             )
     for signal in plans:
+        if quality_policy:
+            from .quality_v21 import POLICY, counterfactual
+
+            signal.evidence["production_policies"]["trade_quality"] = POLICY
+            counterfactual(signal, signal.evidence["frozen_structure"]["reasons"], asof)
         if horizon:
             signal.version += ":production-v2:flow-score-v2:lifecycle-v62:cross-venue-flow-substitution-v1"
             signal.id = hashlib.sha256(

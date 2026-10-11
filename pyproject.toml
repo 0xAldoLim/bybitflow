@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "bybit-flow"
-version = "2.0.0"
+version = "2.1.0"
 description = "Public-data, alerts-only perpetual futures research workstation"
 requires-python = ">=3.12"
 dependencies = [

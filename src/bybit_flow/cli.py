@@ -48,6 +48,11 @@ def main():
     replay.add_argument("paths", nargs="+", type=Path)
     research = sub.add_parser("research")
     research.add_argument("candles", type=Path)
+    research.add_argument("--days", type=int, default=30)
+    research.add_argument("--source", choices=["binance", "bybit", "okx"])
+    research.add_argument("--horizon", choices=["SHORT_INTRADAY", "CORE_INTRADAY", "SWING", "EXTENDED_SWING"])
+    research.add_argument("--family")
+    research.add_argument("--json", action="store_true")
     backup = sub.add_parser("backup")
     backup.add_argument("target", type=Path)
     sub.add_parser("retention-plan")
@@ -68,7 +73,26 @@ def main():
         return
     store = Store(settings.data_dir)
     try:
-        if args.command == "v8-effectiveness":
+        if args.command == "research" and str(args.candles) == "trade-quality":
+            from .trade_quality import audit
+
+            if not 1 <= args.days <= 365:
+                parser.error("--days must be between 1 and 365")
+            result = audit(
+                store, now_ms(), days=args.days, source=args.source, horizon=args.horizon, family=args.family
+            )
+            if args.json:
+                print(json.dumps(result, indent=2))
+            else:
+                for title, key in (
+                    ("OVERALL", "overall"),
+                    ("COHORTS BY HORIZON / FAMILY / REGIME / SCORE / EVIDENCE / FAILURE", "cohorts"),
+                    ("FILTER COUNTERFACTUALS", "filter_counterfactuals"),
+                    ("DATA QUALITY", "data_quality"),
+                ):
+                    print(title)
+                    print(json.dumps(result[key], indent=2))
+        elif args.command == "v8-effectiveness":
             from .v8_gating import effectiveness
 
             print(json.dumps(effectiveness(store, now_ms()), indent=2))
@@ -84,7 +108,11 @@ def main():
             print(
                 json.dumps(
                     status(store, configured=bool(settings.research_webhook.get_secret_value()))
-                    | {"v8_production_gate": v8_status(store, now_ms()), "product": product_status(store)},
+                    | {
+                        "v8_production_gate": v8_status(store, now_ms()),
+                        "product": product_status(store),
+                        "trade_quality": store.get("trade_quality_summary", {}),
+                    },
                     indent=2,
                 )
             )

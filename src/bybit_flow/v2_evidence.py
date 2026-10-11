@@ -184,6 +184,12 @@ def trade_offer(signal, now):
         {float(p) for _, p in levels if isinstance(p, (int, float)) and math.isfinite(p) and low < p < high}
     )
     path = 1 / (1 + len(barriers)) if ready else 0
+    from .quality_v21 import enabled, path_quality
+
+    path_evidence = path_quality(signal, profile, barriers) if enabled(signal) and ready else {}
+    if path_evidence:
+        difficulty = path_evidence["path_difficulty_score"]
+        path = 1 - difficulty / 100 if difficulty is not None else 0
     distance = abs(signal.entry - signal.stop)
     cost = risk.get("cost_per_base")
     cost_fraction = cost / distance if isinstance(cost, (int, float)) and distance else None
@@ -200,8 +206,20 @@ def trade_offer(signal, now):
         if len(barriers) <= 2
         else "HEAVY_FRICTION"
     )
+    if path_evidence:
+        difficulty = path_evidence["path_difficulty_score"]
+        state = (
+            "UNKNOWN_PATH"
+            if difficulty is None
+            else "OPEN_PATH"
+            if difficulty == 0
+            else "MODERATE_FRICTION"
+            if difficulty <= 50
+            else "HEAVY_FRICTION"
+        )
     return dict(
         score=score,
+        **path_evidence,
         path_state=state,
         barriers=barriers[:32],
         barrier_count=len(barriers),
@@ -286,6 +304,10 @@ def combine(location_score, mechanism_score, offer_score, confidence):
 
 
 def score(signal, flow_confirmed, now):
+    from .quality_v21 import SCORE_PROFILE as QUALITY_SCORE_PROFILE
+    from .quality_v21 import enabled
+
+    score_profile = QUALITY_SCORE_PROFILE if enabled(signal) else SCORE_PROFILE
     where, process, offer = (
         location(signal, now),
         mechanism(signal, flow_confirmed, now),
@@ -321,7 +343,7 @@ def score(signal, flow_confirmed, now):
     signal.raw_tier = "F" if signal.gates else tier(signal.quality)
     signal.final_tier = "REJECTED" if signal.gates else "RESEARCH"
     e["v2"] = dict(
-        score_profile=SCORE_PROFILE,
+        score_profile=score_profile,
         formula="v2-score-1",
         source=signal.source,
         source_ms=e.get("flow_quality", {}).get("window_end_ms", now),
@@ -340,7 +362,7 @@ def score(signal, flow_confirmed, now):
         quality_score=signal.quality,
         component_note="Shared v1 evidence retained; new versioned interpretation, not a win probability",
     )
-    e["score_profile"] = SCORE_PROFILE
+    e["score_profile"] = score_profile
     e["score_components"] = {
         k: dict(weight=w, earned=w * value / 100, score=value)
         for k, w, value in (

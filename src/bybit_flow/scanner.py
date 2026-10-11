@@ -303,6 +303,24 @@ class Scanner:
                     book_features = (
                         book.features(now) if book and book.fresh(now, self.settings.book_stale_ms) else {}
                     )
+                    if book_features.get("available"):
+                        from .horizons import session_context
+                        from .quality_v21 import liquidity_update
+
+                        depths = book_features["depth"]["10"]
+                        impacts = [
+                            book.impact(side, self.settings.hypothetical_notional)
+                            for side in ("LONG", "SHORT")
+                        ]
+                        sample = dict(
+                            spread=book_features["spread_bps"],
+                            depth=min(depths["bid"], depths["ask"]),
+                            impact=max(x["impact_bps"] for x in impacts) if all(impacts) else None,
+                            epoch=book.ofi_epoch,
+                            session=session_context(now)["primary"],
+                        )
+                        key = f"liquidity-v21:{self.exchange}:{symbol}"
+                        self.store.put(key, liquidity_update(self.store.get(key, {}), sample, now))
                     atr = self.cached_features(symbol, "60", context["h1"], now)["atr"]
                     result = await asyncio.to_thread(
                         build,
@@ -410,15 +428,23 @@ class Scanner:
             structural_targets=True,
             volume_profile=self.generation_profile(instrument, setup_bars, evaluated),
             horizon="CORE_INTRADAY",
+            quality_policy=True,
         )
         for signal in plans:
             assign(signal, "CORE_INTRADAY")
+            from .quality_v21 import overlaps_existing
+
+            if overlaps_existing(signal, self.store.active_signals()):
+                continue
             from .v2 import overlaps_legacy
 
             if overlaps_legacy(signal, self.store.active_signals(), self.store.get("bybitflow_v2_cutover")):
                 continue
             old = self.store.db.execute("SELECT 1 FROM signals WHERE id=?", (signal.id,)).fetchone()
             if not old and signal.expires_ms > evaluated:
+                from .quality_v21 import remember_attempt
+
+                remember_attempt(self.store, signal)
                 self.store.signal(signal)
                 for reason in signal.gates:
                     from .funnel import reject
@@ -446,9 +472,14 @@ class Scanner:
                 structural_targets=True,
                 volume_profile=self.generation_profile(instrument, bars[1], now),
                 horizon=name,
+                quality_policy=True,
             )
             for signal in plans:
                 assign(signal, name)
+                from .quality_v21 import overlaps_existing
+
+                if overlaps_existing(signal, self.store.active_signals()):
+                    continue
                 from .v2 import overlaps_legacy
 
                 if overlaps_legacy(
@@ -458,6 +489,9 @@ class Scanner:
                 signal.expires_ms = bars[1][-1].end + DURATIONS[profile.setup]
                 signal.trigger_expires_ms = now + 120_000
                 if not self.store.db.execute("SELECT 1 FROM signals WHERE id=?", (signal.id,)).fetchone():
+                    from .quality_v21 import remember_attempt
+
+                    remember_attempt(self.store, signal)
                     self.store.signal(signal)
                     for reason in signal.gates:
                         from .funnel import reject
@@ -495,6 +529,12 @@ class Scanner:
         if not book.fresh(now, self.settings.book_stale_ms):
             return False
         price = float(min(book.asks) if signal.direction == "LONG" else max(book.bids))
+        from .quality_v21 import enabled, entry_quality
+
+        if enabled(signal):
+            quality = entry_quality(signal, price, now, self.settings.min_net_rr)
+            signal.coverage["entry_quality_now"] = quality
+            return quality["entry_not_chased"]
         signal.coverage["entry_position"] = entry_position(
             signal, price, book.features(now).get("spread_bps", 0)
         )
@@ -1894,6 +1934,16 @@ class Scanner:
                     s.gates.append("V2_EVIDENCE_UNAVAILABLE")
             if self.settings.sss_research and s.quality >= 95 and not s.gates and s.risk.get("accepted"):
                 s.final_tier = "SSS RESEARCH · UNCALIBRATED"
+            from .quality_v21 import apply as apply_quality
+            from .quality_v21 import enabled
+
+            if enabled(s):
+                key = f"liquidity-v21:{s.source}:{s.symbol}"
+                liquidity = self.store.get(key, {})
+                if not 0 <= now - liquidity.get("at_ms", 0) <= 120000:
+                    liquidity = {}
+                price = float(min(book.asks) if s.direction == "LONG" else max(book.bids))
+                apply_quality(s, price, now, liquidity, self.settings.min_net_rr)
             from .ml.inference import apply as apply_ml
 
             if production_v2:
@@ -2089,6 +2139,9 @@ class Scanner:
                 from .v8_gating import effectiveness
 
                 store.put("v8_gate_effectiveness", effectiveness(store, at))
+                from .trade_quality import audit
+
+                audit(store, at)
                 return result
             finally:
                 store.close()

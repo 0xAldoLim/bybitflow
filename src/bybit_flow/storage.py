@@ -142,7 +142,9 @@ class Store:
         # Capture before lifecycle overwrites; both accepted and rejected decisions survive.
         features = FeatureStore(self)
         features.capture(signal, max(now_ms(), signal.created_ms), "generation")
-        if signal.evidence.get("score_components"):
+        if signal.evidence.get("score_components") or (
+            signal.evidence.get("v21_counterfactual") and "cost_per_base" in signal.risk
+        ):
             features.capture(signal, max(now_ms(), signal.created_ms), "decision")
         if old:
             if old[0] in {"INVALIDATED", "EXPIRED", "RESOLVED"}:

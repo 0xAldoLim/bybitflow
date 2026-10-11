@@ -1,0 +1,175 @@
+# v2.1 research and implementation audit
+
+Baseline: `c8a480eefb40fb056286306cb033b034d65b6ffc`, inspected 11 October 2026.
+The operator supplied the synthesis directly. Its source-page references are
+reported provenance, not a claim this repair reread the underlying library.
+Illustrative 24H/6H ranges and optimized trading parameters are not adopted.
+
+## Baseline evidence
+
+The read-only runtime export contained 237 candidate-v20 decisions, 44 sent
+initial cards and 188 technical duplicate exclusions. Exactly one prints-v1
+outcome was complete: a loss of -1.293R. There were 36 complete monitored OHLC
+outcomes across all decisions, of which 35 belonged to delivered cards with a
+message ID. The latter had 11 positive and 24 negative returns, mean -0.466R,
+median -0.565R and profit factor 0.284 (sum positive net R / absolute sum negative
+net R). There were 15 stops, 20 time exits and no targets in that delivered
+cohort. Costs averaged 24.55% of original risk; the largest losing streak was
+eight. These are hypothetical public-data outcomes with assumed costs, not
+the operator's account fills. Only two calendar days are represented.
+
+SHORT_INTRADAY, CORE_INTRADAY, SWING and EXTENDED_SWING are reported separately
+by the audit command, including empty horizons. Swing had three delivered
+decisions and no complete monitored outcomes; extended swing had none.
+No horizon has adequate independent evidence to establish an edge.
+MFE/MAE are unavailable in historical monitored labels and remain null; the
+single complete prints outcome had MFE 0.237R and MAE -1.132R.
+
+## Research-to-code matrix before repair
+
+| Recommendation | Baseline status | Existing implementation / gap |
+|---|---|---|
+| Market condition before family | PARTIALLY_IMPLEMENTED | `features.candle_features` regimes and `strategy.candidates`; no explicit discovery/normalization classifier; MA touch and one-close breakout definitions are weak |
+| Costs relative to stop | FULLY_IMPLEMENTED | `risk.evaluate_risk`, `v2_evidence.trade_offer`; fees, funding, slippage, net RR and impact already exist; cost dominance is scored but not explicitly rejected |
+| Frozen pre-trigger levels | PARTIALLY_IMPLEMENTED | Causal pivot availability and fixed plan levels exist; range context can roll independently; breakout trigger records the generic pivot rather than the qualifying range boundary |
+| Aggression with price response | IMPLEMENTED_BUT_NOT_AUTHORITATIVE | `v2_evidence.mechanism` penalizes opposite displacement; `production.flow_support` can still qualify supportive delta/CVD using a stack/run |
+| Executable liquidity | PARTIALLY_IMPLEMENTED | `Book.impact`, fixed-bps depth and spread history work; combined same-symbol percentile state and recovery hysteresis missing |
+| Horizon matches signal life | PARTIALLY_IMPLEMENTED | Horizon stops, holding deadlines and long-horizon thesis-health protection exist; general entry-quality explanation and setup validity are incomplete |
+| Correlated exposure budget | PARTIALLY_IMPLEMENTED | Manual portfolio risk cap and V8 exposure context exist; no account connection; notification deduplication does not prove portfolio exposure |
+| Simple rules before complexity | PARTIALLY_IMPLEMENTED | Causal partitions, unchanged ML sample gates and immutable decisions exist; unified bounded trade-quality audit and v2.1 filter counterfactuals missing |
+
+## Causal losing-trade diagnostics
+
+The frozen evidence flags weak location, aggression without favorable response,
+opposing absorption, costs large versus stop and target friction in subsets of
+losers. Several losers remain UNKNOWN. These associations do not establish
+causation. Score ordering is not monotonic in this small sample: C-grade proxy
+outcomes outperform B-grade outcomes. No score-weight search is justified.
+The audit reports feature readiness and adverse V8 states for each losing
+decision, without treating unavailable optional features as adverse.
+
+## Predeclared repair scope
+
+Reuse the existing scanner, four families, live feed, profiles, risk model,
+labels and ML partitions. Add versioned structural validity and entry-quality
+evidence for new opportunities. Keep candidate-v20 and original score weights.
+Use completed setup-timeframe bars for fixed boundaries, two-close acceptance
+and a retest, measurable reclaim and trend persistence. Measure later pullback
+attempts rather than banning them. Liquidity uses prior same-symbol samples and
+hysteresis; no outcome-selected cutoff. Cost sensitivity at 0.5/0.75/1.0R is
+diagnostic; the hard logical dominance boundary is costs >= original risk.
+Skipped new-filter decisions retain frozen hypothetical plans for the existing
+outcome workers, with no Discord production card.
+
+Pairs, options, millisecond market making, parameter fitting, automatic model
+promotion and historical relabeling are outside this repair. Forward samples
+must measure both avoided losers and missed winners. Operational observation
+after deployment cannot establish improved trading performance.
+
+## Delivered monitored outcomes by cohort
+
+These are the pre-change observations. Prints outcomes are reported separately
+above. The small, overlapping sample is INSUFFICIENT in every cohort.
+
+| Horizon | Delivered | Complete | Positive / negative | Mean net R | Profit factor |
+|---|---:|---:|---:|---:|---:|
+| SHORT_INTRADAY | 4 | 3 | 2 / 1 | -0.085 | 0.805 |
+| CORE_INTRADAY | 37 | 32 | 9 / 23 | -0.501 | 0.253 |
+| SWING | 3 | 0 | 0 / 0 | unknown | unknown |
+| EXTENDED_SWING | 0 | 0 | 0 / 0 | unknown | unknown |
+
+| Family | Complete | Positive / negative | Mean net R | Profit factor |
+|---|---:|---:|---:|---:|
+| Liquidity sweep | 23 | 6 / 17 | -0.535 | 0.214 |
+| Range rejection | 8 | 3 / 5 | -0.366 | 0.505 |
+| Trend pullback | 4 | 2 / 2 | -0.268 | 0.115 |
+| Breakout retest | 0 | 0 / 0 | unknown | unknown |
+
+Range: 11 complete, mean -0.431R, PF 0.427. Downtrend: 23 complete,
+mean -0.446R, PF 0.223. Uptrend: one complete, -1.309R. All 35 observations
+come from Binance; there is no comparison cohort for Bybit or OKX.
+Score bins 0–20 / 20–40 / 40–60 / 60–80 respectively have 1 / 10 / 13 / 11
+complete outcomes and mean -0.067 / -0.918 / +0.023 / -0.668R. There is no
+monotonic evidence that the old deterministic score predicts realized returns.
+The component-interaction audit separates horizon, family and regime rather
+than treating these pooled bins as a calibration target.
+
+## Retained components
+
+| Component | Audit result and action |
+|---|---|
+| Net RR, impact, fees and horizon funding | FULLY_IMPLEMENTED; reuse `evaluate_risk`; new entry check uses its frozen cost allowance instead of another hardcoded fee estimate |
+| Stop/noise and horizon stops | FULLY_IMPLEMENTED; retain existing structural/noise policies, no automatic widening |
+| Flow trust, absorption, response | PARTIALLY_IMPLEMENTED; retain measurement, add a veto only for trusted aggression with opposite displacement or opposing absorption |
+| OFI and liquidation sequence | FULLY_IMPLEMENTED within stated source-readiness limits; no second measurement engine or universal veto |
+| Native profile refresh | FULLY_IMPLEMENTED; retain the c8a480e refresh before first candidate-v20 scoring |
+| Auction/profile context | PARTIALLY_IMPLEMENTED; retain measurements, add frozen setup references and volume-weighted path diagnostics |
+| BTC/ETH factors and spot/perp | PARTIALLY_IMPLEMENTED; existing horizon-aware alignment retained; one-minute optional context is not promoted to a swing veto |
+| Correlated risk | PARTIALLY_IMPLEMENTED; manual account snapshot remains necessary; no inferred positions from Discord messages |
+| Location/mechanism/trade offer | PARTIALLY_IMPLEMENTED; retain weights, bottleneck and confidence cap; version only the path component interpretation |
+| Candidate-v20, causal partitions and model gates | FULLY_IMPLEMENTED; retained; no reduced sample requirements or automatic model promotion |
+| Original lifecycle and visibility | FULLY_IMPLEMENTED; old plan policy tag never added, original deadline/levels preserved; exact initial-delivery rule retained |
+
+## New-policy definitions
+
+`trade-validity-v21` is attached only during new candidate generation. Original
+plans do not acquire this tag. Structural event identity no longer changes each
+scan minute for this policy, and a policy upgrade cannot recreate the same active
+source/symbol/side/family/horizon/trigger event.
+
+References use the existing horizon's 20 completed setup bars. Breakouts freeze
+the window before two acceptance closes and the retest. Reclaims require an
+actual excursion through the frozen boundary and a close back inside; a mere
+nearby candle is insufficient. Breakout qualification and persisted trigger now
+use the same boundary. Trend pullbacks require persistent context under the
+existing HH/HL, slope and efficiency classifier. Separated MA touches in a
+bounded 20-bar segment and the last 20 distinct attempts are recorded, not banned.
+The attempt index is **not** claimed to identify the first pullback in an
+unbounded trend history.
+
+Entry quality uses executable bid/ask, original zone, frozen cost assumptions,
+configured minimum net RR, original expiry and horizon ATR. It never moves the
+stop or target to accommodate chasing. Strong trusted aggression against the
+observed price response cannot be rescued by a high aggregate score. Weak or
+zero displacement remains a score limitation; it is not automatically a veto.
+The explicit cost-dominance boundary is cost/original-risk >= 1.0. Audit
+sensitivity bins at 0.5/0.75/1.0 are descriptive and never choose that boundary.
+
+Liquidity sampling reuses the existing profile worker and book: one sample per
+minute, at most 360 samples, same source/symbol/session, no added REST calls.
+After 20 past samples, jointly >=95th-percentile spread and <=10th-percentile
+10-bps depth constitutes a thin observation. Three consecutive thin minutes
+establish stress; two non-thin minutes clear it. The baseline is frozen during
+the episode. A coverage gap resets persistence; stale evidence cannot veto a
+new entry. Impact percentile and book reset delta are diagnostics, while the
+existing absolute impact/depth gates remain mandatory. Percentiles are
+predeclared research settings, not validated performance improvements.
+
+The path score uses the fraction of native executed volume between entry and
+TP1 plus the strongest observed obstacle. Three tiny nodes do not automatically
+outweigh one large node. Missing volume remains unknown and receives no path
+credit. Visible opposing depth is transient diagnostic context, not a target
+probability or an additional fitted weight.
+
+## Deferred rules and honest limits
+
+- No new options/pairs engine, strategy-weight search, universal BTC veto or
+  one-minute spot/perp veto for swing. Adequate comparative evidence is missing.
+- No stop-width optimization: historical monitored labels lack MFE/MAE and one
+  complete prints outcome cannot establish a better stop.
+- Compression/discovery/normalization are descriptive states within the existing
+  families, not a newly validated compression strategy.
+- Long-horizon thesis health already distinguishes entry timing from persistent
+  structural failure. Existing swing protection against one-minute noise stays.
+- New filters have zero completed forward counterfactuals before deployment:
+  avoided losers 0, missed winners 0, sample 0. This means unknown effectiveness,
+  not zero opportunity cost. Every rejected candidate with an observable costed
+  decision uses the existing prints/monitored label workers. Historical decisions
+  are not retroactively rewritten as if the new filters had been deployed.
+- Models retain existing compatibility and evidence requirements. A changed score
+  profile is not evidence that an old model is calibrated for new decisions.
+
+The audit command reads at most 5,000 decisions or 32 MiB of snapshot payloads,
+reports truncation, and separates label policies. Routine status reads a cached
+summary refreshed by the existing 15-minute background worker. It never replays
+raw tape in the dashboard request path.

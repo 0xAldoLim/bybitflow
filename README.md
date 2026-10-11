@@ -1,4 +1,4 @@
-# BybitFlow 2.0.0
+# BybitFlow 2.1.0
 
 BybitFlow monitors public crypto perpetual-market data and sends confirmed research
 setups to Discord. Cards include LONG or SHORT, quality grade, entry zone, stop
@@ -12,12 +12,33 @@ worker. Binance, Bybit, and OKX REST and WebSocket adapters are implemented.
 Automatic source selection uses one working primary venue; ML outcomes remain
 separate by source.
 
-New setups use `candidate-v20` and the `bybitflow-v2-evidence-1` score profile:
+New setups use `candidate-v20` and the `bybitflow-v21-evidence-1` score profile:
 location, confirmed mechanism, after-cost trade offer, and an evidence-confidence
 cap. This is a versioned research rubric, not a measured improvement in returns.
 Existing setups keep their original plans, scores, deadlines, source, and lifecycle.
 Historical learning records and models remain available under their stored schema.
 See the [score guide](docs/SCORING.md) and [v1 comparison](docs/v2/BYBITFLOW_V1_TO_V2_GAP_ANALYSIS.md).
+
+Version 2.1 adds frozen pre-trigger references, two-close breakout acceptance,
+range reclaim checks, persistent context for pullbacks, executable entry-quality
+checks and relative liquidity stress with recovery hysteresis. Target-path
+friction uses observed volume concentration instead of simply counting levels.
+The score weights remain 30% location, 45% mechanism and 25% trade offer.
+Existing v2 plans retain their original `bybitflow-v2-evidence-1` interpretation.
+Rejected new-policy candidates remain in research storage for hypothetical
+outcome comparisons; they do not produce Discord setup cards.
+
+Inspect delivered outcomes and filter counterfactuals with:
+
+```bat
+docker compose exec desk bybit-flow research trade-quality --days 30
+docker compose exec desk bybit-flow research trade-quality --days 30 --source binance --horizon CORE_INTRADAY --json
+```
+
+The bounded audit separates prints and monitored OHLC outcomes, reports missing
+measurements as unknown, and does not treat candle touches as verified account
+fills. [The v2.1 audit](docs/V21_RESEARCH_AUDIT.md) describes evidence, limits,
+policy definitions and changes. These rules have no demonstrated post-change edge.
 
 ## Quick navigation
 

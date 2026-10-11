@@ -295,6 +295,7 @@ def create_app(settings=None):
                 },
             ),
             scanner_performance=store.get("scanner_performance", {}),
+            trade_quality=store.get("trade_quality_summary", {}),
             at_ms=now_ms(),
         )
 
