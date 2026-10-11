@@ -173,3 +173,29 @@ The audit command reads at most 5,000 decisions or 32 MiB of snapshot payloads,
 reports truncation, and separates label policies. Routine status reads a cached
 summary refreshed by the existing 15-minute background worker. It never replays
 raw tape in the dashboard request path.
+
+## Operational verification findings
+
+The baseline recorder was stalled at the 30 GB limit and its service was
+unhealthy. A SQLite WAL checkpoint recovered journal space without deleting
+records; restarting the existing deployment restored healthy recording and
+fresh streams for active setups. This is a temporary recovery, not a claim
+that unlimited permanent history fits within a fixed budget.
+
+Recovery logs also exposed an independent ML-worker crash: `directory_bytes`
+could raise `FileNotFoundError` when concurrent retention removed a listed
+manifest before `stat`. The traversal now tolerates only vanished paths;
+permission and other I/O errors remain visible. Regression tests exercise both.
+
+An isolated 120-bar candidate-generation benchmark measured median 3.35 ms for
+the old policy and 9.01 ms for v2.1 (50 runs each). This is not a live scanner
+throughput benchmark. New checks add no REST requests or stream subscriptions.
+The baseline live scan took 300 seconds while source/spread history rewarmed;
+compare warm runtime observations rather than attributing cold REST latency to
+the small local validity calculations.
+
+Local full verification: 558 passed, four optional skips. Offline research
+passed. The isolated 20-second recorder soak wrote all 8,225 offered events with
+zero drops (391 events/second achieved against 500 requested on this host).
+The subsequent retention-race fix receives targeted tests and complete
+Python 3.12/3.13 verification in exact-commit CI before deployment.

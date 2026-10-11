@@ -217,6 +217,7 @@ def counterfactual(signal, reasons, now):
         hypothetical=True,
     )
     signal.gates = sorted(set(signal.gates + reasons))
+    signal.final_tier = "REJECTED"
 
 
 def apply(signal, price, now, liquidity=None, minimum_rr=1.5):

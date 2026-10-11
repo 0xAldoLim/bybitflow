@@ -26,12 +26,20 @@ def directory_bytes(root):
     total = 0
     pending = [root]
     while pending:
-        with os.scandir(pending.pop()) as entries:
-            for entry in entries:
-                if entry.is_dir(follow_symlinks=False):
-                    pending.append(entry.path)
-                elif entry.is_file(follow_symlinks=False):
-                    total += entry.stat(follow_symlinks=False).st_size
+        try:
+            with os.scandir(pending.pop()) as entries:
+                for entry in entries:
+                    try:
+                        if entry.is_dir(follow_symlinks=False):
+                            pending.append(entry.path)
+                        elif entry.is_file(follow_symlinks=False):
+                            total += entry.stat(follow_symlinks=False).st_size
+                    except FileNotFoundError:
+                        # Retention/compaction may remove a listed file before stat.
+                        continue
+        except FileNotFoundError:
+            # A queued directory may also disappear during the traversal.
+            continue
     return total
 
 

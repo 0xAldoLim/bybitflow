@@ -9,7 +9,32 @@ from bybit_flow.ml.recordings import worker_rows
 from bybit_flow.ml.store import FeatureStore
 from bybit_flow.packing import compact
 from bybit_flow.retention import prune_recordings, storage_status
-from bybit_flow.storage import Recorder, Store
+from bybit_flow.storage import Recorder, Store, directory_bytes
+
+
+def test_storage_measurement_survives_concurrent_retention(tmp_path, monkeypatch):
+    from contextlib import nullcontext
+
+    gone = SimpleNamespace(path=str(tmp_path / "gone"), is_dir=lambda **k: False, is_file=lambda **k: True)
+
+    def missing(**kwargs):
+        raise FileNotFoundError("removed by retention")
+
+    gone.stat = missing
+    remaining = SimpleNamespace(
+        is_dir=lambda **k: False, is_file=lambda **k: True, stat=lambda **k: SimpleNamespace(st_size=42)
+    )
+    monkeypatch.setattr("bybit_flow.storage.os.scandir", lambda _: nullcontext(iter([gone, remaining])))
+    assert directory_bytes(tmp_path) == 42
+
+
+def test_storage_measurement_does_not_hide_permission_errors(tmp_path, monkeypatch):
+    def denied(_):
+        raise PermissionError("unreadable evidence")
+
+    monkeypatch.setattr("bybit_flow.storage.os.scandir", denied)
+    with pytest.raises(PermissionError):
+        directory_bytes(tmp_path)
 
 
 def test_retention_preserves_learning_and_active_history(settings, signal):

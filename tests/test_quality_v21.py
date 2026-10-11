@@ -102,6 +102,7 @@ def test_flow_contradiction_and_cost_gate_retain_plan(signal):
     levels = (signal.entry, signal.zone, signal.stop, signal.tp1, signal.tp2)
     apply(signal, 100, 1200)
     assert "MECHANISM_CONTRADICTED" in signal.gates
+    assert signal.final_tier == "REJECTED"
     assert levels == (signal.entry, signal.zone, signal.stop, signal.tp1, signal.tp2)
     signal.gates = []
     signal.evidence["flow"]["price_change"] = 0.2
