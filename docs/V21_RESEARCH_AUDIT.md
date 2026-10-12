@@ -199,3 +199,9 @@ passed. The isolated 20-second recorder soak wrote all 8,225 offered events with
 zero drops (391 events/second achieved against 500 requested on this host).
 The subsequent retention-race fix receives targeted tests and complete
 Python 3.12/3.13 verification in exact-commit CI before deployment.
+
+Live verification found large footprint arrays consumed the audit's byte bound
+before all local decisions were included. The read query now projects out unused
+footprint/profile arrays and ML vectors while retaining causal diagnostic fields.
+Original stored snapshots remain byte-for-byte unchanged. Truncation is still
+reported if the compact decision bound is reached.

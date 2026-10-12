@@ -233,3 +233,29 @@ def test_audit_separates_policy_visibility_and_unknown_cost(signal):
     assert metrics([row], "monitored-ohlc-v1")["mean_cost_pct_original_risk"] is None
     row["receipt"] = ["sent", None]
     assert summarize([row], 99999999)["delivered"] == 0
+
+
+def test_audit_projection_keeps_decision_evidence_and_original_snapshot(settings, signal):
+    import time
+
+    from bybit_flow.ml.store import FeatureStore
+
+    tagged(signal)
+    signal.evidence["flow"] = dict(profile=[dict(price=100, buy=20, sell=10)], delta_pct=30)
+    signal.evidence["v2"] = dict(mechanism=dict(state="INEFFICIENT_AGGRESSION", score=0))
+    store = Store(settings.data_dir)
+    try:
+        now = time.time_ns() // 1000000
+        ident = FeatureStore(store).capture(signal, now, "decision")
+        original = store.db.execute("SELECT payload FROM ml_snapshots WHERE id=?", (ident,)).fetchone()[0]
+        rows, truncated = load_rows(store.db, now + 1)
+        assert not truncated and len(rows) == 1
+        evidence = rows[0]["snapshot"]["signal"]["evidence"]
+        assert evidence["flow"]["delta_pct"] == 30 and "profile" not in evidence["flow"]
+        assert evidence["v2"]["mechanism"]["score"] == 0
+        assert (
+            original
+            == store.db.execute("SELECT payload FROM ml_snapshots WHERE id=?", (ident,)).fetchone()[0]
+        )
+    finally:
+        store.close()

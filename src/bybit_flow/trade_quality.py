@@ -103,8 +103,12 @@ def load_rows(db, now, days=30, source=None, horizon=None, family=None, limit=50
     payload_bytes = 0
     truncated = False
     for ident, raw, current, status, message in db.execute(
-        "SELECT m.id,m.payload,s.payload,o.status,o.message_id FROM ml_snapshots m "
-        "LEFT JOIN signals s ON s.id=m.signal_id LEFT JOIN outbox o "
+        "SELECT m.id,json_remove(m.payload,'$.values','$.sequence',"
+        "'$.signal.evidence.flow.profile','$.signal.evidence.flow.cvd_path',"
+        "'$.signal.evidence.volume_profile.raw_volume_profile',"
+        "'$.signal.evidence.volume_profile.effective_volume_profile',"
+        "'$.signal.evidence.flow.quality.effective_volume_profile'),NULL,o.status,o.message_id FROM ml_snapshots m "
+        "LEFT JOIN outbox o "
         "ON o.key='research:'||m.signal_id||':initial' WHERE "
         + " AND ".join(conditions)
         + " ORDER BY m.decision_ms DESC,m.id LIMIT ?",
