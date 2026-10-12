@@ -502,3 +502,28 @@ async def test_same_event_delivered_once(settings, signal, notification_clock):
         == 1
     )
     store.close()
+
+
+@pytest.mark.parametrize("policy,checked_ms", [(POLICY, 2000), ("trade-validity-v21", 1100)])
+def test_execution_check_after_async_book_update_preserves_old_policy(
+    signal, settings, monkeypatch, policy, checked_ms
+):
+    from bybit_flow.scanner import Scanner
+
+    tagged(signal).evidence["production_policies"]["trade_quality"] = policy
+    book = Book()
+    book.valid = True
+    book.bids = {Decimal("99.99"): Decimal("1000")}
+    book.asks = {Decimal("100"): Decimal("1000")}
+    book.receipt_ms = book.event_ms = 2000
+    scanner = SimpleNamespace(settings=settings, store=SimpleNamespace(get=lambda *args: {}))
+    monkeypatch.setattr("bybit_flow.scanner.now_ms", lambda: 2000)
+    assert not book.fresh(1100, settings.book_stale_ms)
+    Scanner.apply_trade_quality(scanner, signal, book, 1100)
+    q = signal.evidence["entry_quality"]
+    assert q["available_ms"] == checked_ms
+    assert "EXECUTION_QUOTE_STALE" not in signal.gates
+    if policy == POLICY:
+        assert q["quote_state"] == "QUOTE_FRESH" and q["quote_age_ms"] == 0 and q["acceptable"]
+    else:
+        assert "quote_state" not in q and q["entry_not_chased"]

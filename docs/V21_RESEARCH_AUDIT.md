@@ -82,7 +82,7 @@ All changes are predeclared experiments; there are no completed v21.1 forward
 outcomes before deployment and no claimed improvement in profitability. See
 [H1–H8](V211_HYPOTHESES.md). Operational observation demonstrates health only.
 
-Local final verification: `scripts/verify.py` exited 0 with 606 tests passed and
+Initial implementation verification: `scripts/verify.py` exited 0 with 606 tests passed and
 four optional skips, plus lint, format, JavaScript syntax and diff checks. The
 first full run exposed a legacy candidate-history guard regression; it was
 restricted to v21.1 and the targeted legacy/new-policy tests passed before the
@@ -90,6 +90,17 @@ successful complete recheck. The final focused integration group passed 115
 tests; the later legacy/new-policy group passed 46. A 50-run, 120-bar isolated
 benchmark measured median 9.14 ms for v21 and 28.68 ms for v21.1. This bounded
 local computation adds no REST calls; it is not a live throughput or edge claim.
+
+Live observation then exposed a current-quote timestamp mismatch: book receipts
+arriving during asynchronous flow work could be later than its original check
+time and incorrectly appear stale. V21.1 now measures executable quote freshness
+at the current execution-check time, separately from the frozen completed flow
+window. The existing freshness limit is unchanged. A regression covers a receipt
+after the worker's original timestamp and confirms old v21 dispatch keeps its
+stored semantics. This follow-up repair receives fresh full verification and
+exact-commit CI before deployment; historical decisions are not relabeled.
+The follow-up's local full verification exited 0: 608 passed, four optional skips;
+72 targeted execution-clock, legacy-policy and scanner-recovery checks passed.
 
 Baseline: `c8a480eefb40fb056286306cb033b034d65b6ffc`, inspected 11 October 2026.
 The operator supplied the synthesis directly. Its source-page references are

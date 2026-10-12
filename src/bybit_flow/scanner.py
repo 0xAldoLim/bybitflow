@@ -607,6 +607,21 @@ class Scanner:
         )
         return signal.coverage["entry_position"]["state"] in {"IDEAL_ENTRY", "ACCEPTABLE_ENTRY"}
 
+    def apply_trade_quality(self, signal, book, original_now):
+        from .quality import apply
+        from .quality_v211 import enabled
+
+        # Live books advance while flow workers yield. Execution is observed
+        # now, independently of the original completed flow-window timestamp.
+        checked_ms = now_ms() if enabled(signal) else original_now
+        liquidity = self.store.get(f"liquidity-v21:{signal.source}:{signal.symbol}", {})
+        if not 0 <= checked_ms - liquidity.get("at_ms", 0) <= 120000:
+            liquidity = {}
+        price = float(min(book.asks) if signal.direction == "LONG" else max(book.bids))
+        apply(
+            signal, price, checked_ms, liquidity, self.settings.min_net_rr, book=book, settings=self.settings
+        )
+
     def record_membership(self, evaluated_ms, symbol, eligible, payload):
         available = now_ms()
         payload = payload | {
@@ -1963,15 +1978,7 @@ class Scanner:
                     s.evidence["publication_policy"] = "shadow research until horizon-specific validation"
             if production_v2 and s.gates:
                 if new_quality(s):
-                    from .quality_v211 import apply as apply_quality
-
-                    price = float(min(book.asks) if s.direction == "LONG" else max(book.bids))
-                    liquidity = self.store.get(f"liquidity-v21:{s.source}:{s.symbol}", {})
-                    if not 0 <= now - liquidity.get("at_ms", 0) <= 120000:
-                        liquidity = {}
-                    apply_quality(
-                        s, price, now, liquidity, self.settings.min_net_rr, book=book, settings=self.settings
-                    )
+                    self.apply_trade_quality(s, book, now)
                 for gate in s.gates:
                     reject(self.store, s, gate, now)
                 self.store.signal(s, "Awaiting valid evidence within the original entry window")
@@ -1997,7 +2004,7 @@ class Scanner:
                         from .v8_gating import apply_new_candidate
 
                         s.evidence["flow_confirmed"] = flow_ok
-                        acceptable = self.entry_ready(s, book, now)
+                        acceptable = self.entry_ready(s, book, now_ms() if new_quality(s) else now)
                         s.evidence["entry_quality_acceptable"] = acceptable
                         s.evidence["entry_not_chased"] = (
                             s.coverage["entry_quality_now"]["entry_not_chased"]
@@ -2019,18 +2026,10 @@ class Scanner:
                     s.gates.append("V2_EVIDENCE_UNAVAILABLE")
             if self.settings.sss_research and s.quality >= 95 and not s.gates and s.risk.get("accepted"):
                 s.final_tier = "SSS RESEARCH · UNCALIBRATED"
-            from .quality import apply as apply_quality
             from .quality import enabled
 
             if enabled(s):
-                key = f"liquidity-v21:{s.source}:{s.symbol}"
-                liquidity = self.store.get(key, {})
-                if not 0 <= now - liquidity.get("at_ms", 0) <= 120000:
-                    liquidity = {}
-                price = float(min(book.asks) if s.direction == "LONG" else max(book.bids))
-                apply_quality(
-                    s, price, now, liquidity, self.settings.min_net_rr, book=book, settings=self.settings
-                )
+                self.apply_trade_quality(s, book, now)
             from .ml.inference import apply as apply_ml
 
             if production_v2:
