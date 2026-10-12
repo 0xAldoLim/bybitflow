@@ -218,8 +218,8 @@ def trade_offer(signal, now):
             else "HEAVY_FRICTION"
         )
     return dict(
+        path_evidence,
         score=score,
-        **path_evidence,
         path_state=state,
         barriers=barriers[:32],
         barrier_count=len(barriers),

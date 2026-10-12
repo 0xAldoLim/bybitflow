@@ -214,6 +214,39 @@ def test_balanced_center_is_weak_reversal_location_not_a_blanket_trend_penalty(s
     assert location(s, 2000)["score"] > center
 
 
+@pytest.mark.parametrize("policy", ["trade-validity-v21", "trade-validity-v21.1"])
+def test_quality_path_evidence_integrates_with_product_scoring(signal, policy):
+    s = decision(signal)
+    s.evidence["production_policies"] = {"trade_quality": policy}
+    s.evidence["volume_profile"]["raw_volume_profile"] = [
+        {"price": s.entry, "buy": 100, "sell": 50},
+        {"price": s.tp1, "buy": 50, "sell": 100},
+    ]
+    plan_fields = ("entry", "zone", "stop", "tp1", "tp2", "expires_ms", "trigger_expires_ms", "risk")
+    frozen = {k: deepcopy(getattr(s, k)) for k in plan_fields}
+
+    offer = trade_offer(s, 2000)
+    assert offer["profile_ready"]
+    assert offer["path_difficulty_score"] is not None
+    assert offer["limitation"] == (
+        "Observed reference friction only; no fill or target probability; original plan unchanged"
+    )
+    assert offer["net_rr"] == s.risk["net_rr"]
+
+    score(s, True, 2000)
+    components = s.evidence["v2"]
+    assert s.quality > 0
+    assert s.quality == combine(
+        components["location"]["score"],
+        components["mechanism"]["score"],
+        components["trade_offer"]["score"],
+        components["evidence_confidence"],
+    )
+    assert not s.gates
+    for key, value in frozen.items():
+        assert getattr(s, key) == value
+
+
 def test_path_barriers_deduplicate_and_do_not_change_original_plan(signal):
     s = decision(signal)
     original = (s.entry, s.stop, s.tp1, s.tp2)
