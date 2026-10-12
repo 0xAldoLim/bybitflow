@@ -32,6 +32,43 @@ FAILURES = (
     "DATA_QUALITY_FAILURE",
     "UNKNOWN",
 )
+ENTRY_FAILURES = (
+    "ENTRY_PRICE_CHASED",
+    "ENTRY_ZONE_BROKEN_ADVERSE",
+    "ENTRY_TRIGGER_EXPIRED",
+    "ENTRY_PLAN_EXPIRED",
+    "RR_DEGRADED",
+    "EXECUTION_COST_UNKNOWN",
+    "EXECUTION_COST_INVALID",
+    "INVALID_EXECUTION_GEOMETRY",
+    "STOP_ALREADY_BREACHED",
+    "TARGET_ALREADY_PASSED",
+    "EXECUTION_QUOTE_STALE",
+)
+TAXONOMY = {
+    code: dict(
+        status="actively detectable",
+        meaning="Causal decision diagnostic; association is not a proven cause of loss",
+    )
+    for code in (*FAILURES, *ENTRY_FAILURES, "RANGE_ACCEPTANCE_OUTSIDE", "RETEST_FAILED", "RETEST_EXPIRED")
+}
+for _code in (
+    "FALSE_BREAKOUT",
+    "FAILED_RECLAIM",
+    "LATE_ENTRY",
+    "EXHAUSTED_MOVE",
+    "LIQUIDITY_STRESS",
+    "OVERWIDE_STOP_POOR_OFFER",
+    "CORRELATED_DUPLICATE_EXPOSURE",
+    "HORIZON_SIGNAL_LIFE_MISMATCH",
+):
+    TAXONOMY[_code]["status"] = "not yet implemented"  # No retrospective loss-cause detector.
+for _code in ("FAILED_RECLAIM", "LIQUIDITY_STRESS"):
+    TAXONOMY[_code]["status"] = "actively detectable"
+TAXONOMY["CHASED_ENTRY"] = dict(
+    status="obsolete for v21.1", meaning="Legacy v21 overall entry check; not proof of chasing"
+)
+TAXONOMY["REPEATED_FAILED_ATTEMPT"]["status"] = "research-only"
 
 
 def number(value):
@@ -76,13 +113,19 @@ def failure_classes(s):
         if gate.get("feature_states", {}).get(name, {}).get("state") == "ADVERSE":
             flags.append(code)
     q = e.get("entry_quality", {})
-    if q.get("entry_not_chased") is False:
+    if q.get("schema") == "entry-quality-v2":
+        flags.extend(q.get("reasons", []))
+    elif q.get("entry_not_chased") is False:
         flags.append("CHASED_ENTRY")
+    structure = e.get("frozen_structure", {})
+    flags.extend(code for code in structure.get("reasons", []) if code in TAXONOMY)
+    if e.get("liquidity_stress", {}).get("state") == "LIQUIDITY_STRESSED":
+        flags.append("LIQUIDITY_STRESS")
     if e.get("attempt_memory", {}).get("prior_failed_attempts", 0):
         flags.append("REPEATED_FAILED_ATTEMPT")
     if not s.get("coverage", {}).get("trade_window_complete"):
         flags.append("DATA_QUALITY_FAILURE")
-    return flags or ["UNKNOWN"]
+    return sorted(set(flags)) or ["UNKNOWN"]
 
 
 def load_rows(db, now, days=30, source=None, horizon=None, family=None, limit=5000):
@@ -102,12 +145,13 @@ def load_rows(db, now, days=30, source=None, horizon=None, family=None, limit=50
     result = []
     payload_bytes = 0
     truncated = False
-    for ident, raw, current, status, message in db.execute(
+    for ident, raw, current, status, message, identity in db.execute(
         "SELECT m.id,json_remove(m.payload,'$.values','$.sequence','$.feature_metadata',"
         "'$.signal.evidence.flow.profile','$.signal.evidence.flow.cvd_path',"
         "'$.signal.evidence.volume_profile.raw_volume_profile',"
         "'$.signal.evidence.volume_profile.effective_volume_profile',"
-        "'$.signal.evidence.flow.quality.effective_volume_profile'),NULL,o.status,o.message_id FROM ml_snapshots m "
+        "'$.signal.evidence.flow.quality.effective_volume_profile'),NULL,o.status,o.message_id,coalesce(c.candidate_identity,m.signal_id) FROM ml_snapshots m "
+        "LEFT JOIN candidate_identities c ON c.signal_id=m.signal_id "
         "LEFT JOIN outbox o "
         "ON o.key='research:'||m.signal_id||':initial' WHERE "
         + " AND ".join(conditions)
@@ -128,6 +172,7 @@ def load_rows(db, now, days=30, source=None, horizon=None, family=None, limit=50
         result.append(
             dict(
                 snapshot_id=ident,
+                candidate_identity=identity,
                 snapshot=json.loads(raw),
                 current=json.loads(current) if current else {},
                 receipt=[status, message] if status else None,
@@ -152,9 +197,13 @@ def metrics(rows, policy):
         for _, label_row in complete
     )
     streak = largest = 0
+    cumulative = peak = drawdown = 0
     for x, label_row in sorted(complete, key=lambda p: (p[1].get("exit_ms", 0), p[0]["snapshot_id"])):
         streak = streak + 1 if label_row["net_r"] < 0 else 0
         largest = max(largest, streak)
+        cumulative += label_row["net_r"]
+        peak = max(peak, cumulative)
+        drawdown = max(drawdown, peak - cumulative)
 
     def observed(key, outcome=None):
         vals = [
@@ -188,6 +237,21 @@ def metrics(rows, policy):
         and number(x["snapshot"]["signal"].get("risk", {}).get("cost_per_base"))
     ]
     days = len({x["snapshot"]["decision_ms"] // 86400000 for x, _ in complete})
+    markouts = {}
+    for basis in ("decision", "entry"):
+        for checkpoint in ("execution_1", "execution_3", "setup_1"):
+            observed_values = [
+                label_row.get("research_path", {})
+                .get("markouts", {})
+                .get(basis, {})
+                .get(checkpoint, {})
+                .get("original_r")
+                for _, label_row in complete
+            ]
+            valid = [value for value in observed_values if number(value)]
+            markouts[basis + ":" + checkpoint] = dict(
+                samples=len(valid), mean_original_r=mean(valid) if valid else None
+            )
     return dict(
         signals=len(rows),
         entered_signals=entered,
@@ -206,15 +270,142 @@ def metrics(rows, policy):
         mae=observed("mae_r"),
         mfe_before_stop=observed("mfe_r", "STOP"),
         mae_before_target=observed("mae_r", "TARGET"),
+        hypothetical_candle_markouts=markouts,
         time_to_tp1=duration("TARGET"),
         time_to_stop=duration("STOP"),
         mean_cost_pct_original_risk=mean(costs) if costs else None,
         cost_samples=len(costs),
         largest_losing_streak=largest,
+        largest_loss_r=min(losses) if losses else None,
+        cumulative_r_drawdown=drawdown if values else None,
+        drawdown_basis="Chronological additive original R, not account equity or exposure-adjusted drawdown",
         independent_days_represented=days,
         symbols_represented=len({x["snapshot"]["signal"]["symbol"] for x, _ in complete}),
         evidence="INSUFFICIENT" if len(values) < 30 or days < 10 else "EXPLORATORY",
         limitation="Hypothetical outcomes, assumed costs; calendar days are not guaranteed independent",
+    )
+
+
+def counterfactual_attribution(rows, policy):
+    """One canonical opportunity; overlapping reason groups never sum to benefit."""
+    unique = {}
+    for row in sorted(rows, key=lambda x: (x["snapshot"]["decision_ms"], x["snapshot_id"])):
+        reasons = (
+            row["snapshot"]["signal"].get("evidence", {}).get("v21_counterfactual", {}).get("reasons", [])
+        )
+        if reasons:
+            unique.setdefault(row.get("candidate_identity", row["snapshot"]["signal"]["id"]), row)
+    groups, combinations = defaultdict(list), defaultdict(list)
+    for row in unique.values():
+        reasons = sorted(set(row["snapshot"]["signal"]["evidence"]["v21_counterfactual"]["reasons"]))
+        combinations[" + ".join(reasons)].append(row)
+        for reason in reasons:
+            groups[reason].append(row)
+    by_reason, ablations = {}, {}
+    for reason, containing in sorted(groups.items()):
+        sole = [
+            x
+            for x in containing
+            if len(set(x["snapshot"]["signal"]["evidence"]["v21_counterfactual"]["reasons"])) == 1
+        ]
+        shared = [x for x in containing if x not in sole]
+        sole_stats, shared_stats = metrics(sole, policy), metrics(shared, policy)
+        by_reason[reason] = dict(
+            containing=metrics(containing, policy),
+            sole=sole_stats,
+            shared=shared_stats,
+            sole_reason_avoided_losers=sole_stats["losses"],
+            sole_reason_missed_winners=sole_stats["wins"],
+            shared_avoided_losers=shared_stats["losses"],
+            shared_missed_winners=shared_stats["wins"],
+        )
+        ablations[reason] = dict(
+            uniquely_changed_decisions=len(sole),
+            hypothetical_outcomes=sole_stats,
+            still_rejected_by_other_reasons=len(shared),
+        )
+    return dict(
+        unique=metrics(list(unique.values()), policy),
+        by_reason=by_reason,
+        reason_combinations={k: metrics(v, policy) for k, v in sorted(combinations.items())},
+        leave_one_filter_out=ablations,
+        limitation="Shared groups overlap and must not be summed. Removing a sole recorded reason changes only the recorded decision, not verified execution; unknown/unobserved gates remain unknown.",
+    )
+
+
+def research_selectors():
+    selectors = {
+        "validity_policy": lambda s: (
+            s.get("evidence", {}).get("production_policies", {}).get("trade_quality", "LEGACY")
+        )
+    }
+    for key in ("zone_relation", "time_state", "rr_state", "cost_state", "geometry_state", "acceptable"):
+        selectors["entry_" + key] = lambda s, k=key: str(
+            s.get("evidence", {}).get("entry_quality", {}).get(k, "UNKNOWN")
+        )
+    for key in (
+        "reclaim_subtype",
+        "reclaim_delay_bars",
+        "accepted",
+        "breakout_state",
+        "retest_delay_bars",
+        "research_state",
+        "pullback_attempt_index_since_qualification",
+        "compression_state",
+        "expansion_state",
+    ):
+        selectors[key] = lambda s, k=key: str(
+            s.get("evidence", {}).get("frozen_structure", {}).get(k, "UNKNOWN")
+        )
+    selectors["reference_efficiency_bucket"] = lambda s: (
+        bucket(100 * s["evidence"]["frozen_structure"]["reference_efficiency_ratio"])
+        if number(s.get("evidence", {}).get("frozen_structure", {}).get("reference_efficiency_ratio"))
+        else "UNKNOWN"
+    )
+    selectors["reference_width_atr_bucket"] = lambda s: (
+        str(int(s["evidence"]["frozen_structure"]["reference_width_atr"] // 2) * 2)
+        + "–"
+        + str(int(s["evidence"]["frozen_structure"]["reference_width_atr"] // 2) * 2 + 2)
+        if number(s.get("evidence", {}).get("frozen_structure", {}).get("reference_width_atr"))
+        else "UNKNOWN"
+    )
+    selectors["liquidity_subtype"] = lambda s: (
+        s.get("evidence", {}).get("liquidity_stress", {}).get("subtype", "UNKNOWN")
+    )
+    for variant in ("joint", "spread_only", "depth_only", "either"):
+        selectors["liquidity_variant_" + variant] = lambda s, k=variant: str(
+            s.get("evidence", {}).get("liquidity_stress", {}).get("variants", {}).get(k, "UNKNOWN")
+        )
+    return selectors
+
+
+def execution_stress(rows, policy):
+    variants = {}
+    for multiplier in (1, 1.5, 2):
+        values = []
+        for row in rows:
+            label = next((item["payload"] for item in row["labels"] if item["policy"] == policy), {})
+            s = row["snapshot"]["signal"]
+            cost = s.get("risk", {}).get("cost_per_base")
+            risk = abs(s["entry"] - s["stop"])
+            if (
+                label.get("complete")
+                and number(label.get("net_r"))
+                and number(cost)
+                and cost >= 0
+                and risk > 0
+            ):
+                values.append(label["net_r"] - (multiplier - 1) * cost / risk)
+        variants[str(multiplier)] = dict(
+            samples=len(values),
+            mean_net_r=mean(values) if values else None,
+            wins=sum(v > 0 for v in values),
+            losses=sum(v < 0 for v in values),
+        )
+    return dict(
+        cost_multipliers=variants,
+        delayed_execution="UNKNOWN",
+        basis="Net R minus (multiplier−1)×frozen fees/slippage/funding reserve/original risk; no added spread. Sensitivity, not a rerun of fills or actual account costs.",
     )
 
 
@@ -223,11 +414,14 @@ def summarize(rows, now, truncated=False):
     delivered_ids = {x["snapshot_id"] for x in delivered}
     result = dict(
         at_ms=now,
-        policy="trade-quality-audit-v1",
+        policy="trade-quality-audit-v211",
         decisions=len(rows),
         delivered=len(delivered),
         overall={},
         cohorts={},
+        research_cohorts={},
+        execution_stress={},
+        failure_taxonomy=TAXONOMY,
         filter_counterfactuals={},
         losing_trade_diagnostics=[],
         data_quality=dict(
@@ -285,11 +479,8 @@ def summarize(rows, now, truncated=False):
         # Keep horizon interactions separate; a pooled score bucket is not universal evidence.
         joint = defaultdict(list)
         failures = defaultdict(list)
-        filters = defaultdict(list)
         for x in rows:
             s = x["snapshot"]["signal"]
-            for reason in s.get("evidence", {}).get("v21_counterfactual", {}).get("reasons", []):
-                filters[reason].append(x)
             if x["snapshot_id"] not in delivered_ids:
                 continue
             joint[f"{s['horizon_profile']}|{s['family']}|{s['regime']}|{bucket(s.get('quality'))}"].append(x)
@@ -337,14 +528,16 @@ def summarize(rows, now, truncated=False):
             str(k): metrics(sensitivity[str(k)], policy) for k in (0.5, 0.75, 1.0)
         }
         result["cohorts"][policy]["failure_class"] = {k: metrics(failures[k], policy) for k in FAILURES}
-        result["filter_counterfactuals"][policy] = {
-            k: dict(
-                metrics(v, policy),
-                avoided_losers=metrics(v, policy)["losses"],
-                missed_winners=metrics(v, policy)["wins"],
-            )
-            for k, v in filters.items()
-        }
+        result["filter_counterfactuals"][policy] = counterfactual_attribution(rows, policy)
+        result["research_cohorts"][policy] = {}
+        for name, selector in research_selectors().items():
+            groups = defaultdict(list)
+            for x in rows:
+                groups[str(selector(x["snapshot"]["signal"]))].append(x)
+            result["research_cohorts"][policy][name] = {
+                k: metrics(v, policy) for k, v in sorted(groups.items())
+            }
+        result["execution_stress"][policy] = execution_stress(rows, policy)
     return result
 
 

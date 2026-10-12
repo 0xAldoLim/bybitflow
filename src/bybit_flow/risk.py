@@ -2,6 +2,32 @@ import math
 from decimal import ROUND_FLOOR, Decimal
 
 
+def execution_cost(entry, stop, target, fee_bps, slippage_bps, funding_bps, residual_entry_impact=None):
+    """Same round-trip reserve as evaluate_risk; spread is embedded in executable prices.
+
+    Only impact beyond the best quote can increase the entry slippage reserve.
+    The configured exit reserve stays fixed; no exit book is fabricated.
+    """
+    cost = fee_bps / 10000 * (entry + max(stop, target)) + entry * (2 * slippage_bps + funding_bps) / 10000
+    extra = (
+        max(0, residual_entry_impact - entry * slippage_bps / 10000)
+        if residual_entry_impact is not None
+        else 0
+    )
+    return dict(
+        cost_per_base=cost + extra,
+        fee_per_base=fee_bps / 10000 * (entry + max(stop, target)),
+        slippage_per_base=entry * 2 * slippage_bps / 10000 + extra,
+        funding_per_base=entry * funding_bps / 10000,
+        spread_added_per_base=0.0,
+        residual_entry_impact_per_base=residual_entry_impact,
+        additional_impact_per_base=extra,
+        policy="round-trip-reserve-v1",
+        spread_treatment="Embedded in executable entry bid/ask; no separate spread charge",
+        impact_treatment="Residual VWAP beyond best quote replaces entry reserve only if larger",
+    )
+
+
 def evaluate_risk(signal, instrument, settings, book, portfolio=None, funding_rate=None):
     reasons = []
     sign = 1 if signal.direction == "LONG" else -1
@@ -87,4 +113,12 @@ def evaluate_risk(signal, instrument, settings, book, portfolio=None, funding_ra
     elif impact["impact_bps"] > settings.slippage_bps + settings.max_spread_bps / 2:
         reasons.append("estimated entry impact exceeds cost allowance")
     result.update(impact=impact, accepted=not reasons, reasons=reasons)
+    if signal.evidence.get("production_policies", {}).get("trade_quality") == "trade-validity-v21.1":
+        result["cost_components"] = execution_cost(
+            entry, stop, signal.tp1, settings.taker_fee_bps, settings.slippage_bps, funding_bps
+        )
+        result["cost_components"].update(
+            entry_price_basis="Frozen planned candle-close price; not a verified executable fill",
+            spread_treatment="No separate spread charge. Current entry estimate uses executable bid/ask; frozen proxy costs remain assumed",
+        )
     return result

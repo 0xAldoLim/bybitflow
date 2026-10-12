@@ -1,4 +1,95 @@
-# v2.1 research and implementation audit
+# v2.1 / v2.1.1 research and implementation audit
+
+## v2.1.1 maintenance policy (12 October 2026)
+
+Starting HEAD: `817744efb5022a2188797b4774ff7c50ecc890c0`. The remaining
+v2.1 observations below are historical baseline evidence, not v2.1.1 results.
+New opportunities use `trade-validity-v21.1` and `entry-quality-v2`; old v21
+semantics live unchanged in `quality_v21.py`. Candidate-v20, score weights,
+source-specific model requirements, causal partitions/embargo, lifecycle and
+initial Discord visibility rules are retained. The deployment must preserve
+original plans and snapshot bytes, rather than migrate them into the new policy.
+
+Production qualification now separates directional zone relation, trigger/plan
+expiry, original/executable geometry, known/unknown/invalid costs, net RR and
+existing quote freshness. Tick comparisons use Decimal instrument ticks with
+ROUND_HALF_UP; no ATR entry tolerance is introduced. Missing optional quote
+metadata is not a new veto. Stop/target crossings are geometry failures and do
+not become chase failures. Frozen costs and current execution estimates remain
+separate. See [cost accounting](SCORING.md#separate-scores-and-model-authority).
+
+Range references use 20 completed horizon setup bars before the first excursion.
+A reclaim can complete on that bar or within three following completed setup
+bars. Two consecutive outside closes before reclaim produce
+`RANGE_ACCEPTANCE_OUTSIDE`, separately from `FAILED_RECLAIM`. Breakouts freeze
+the reference before the first acceptance close, require two outside closes and
+a held retest within four subsequent completed setup bars. The first held/failed
+retest ends that event; later retests cannot create another candidate from it.
+The structural ID is based on event start and frozen reference, not scan minute
+or policy name. The existing active-event guard also protects upgrades from
+duplicate cards.
+
+`ACCEPTED_NO_RETEST` at expiry is stored as a rejected research plan, never an
+automatic chasing entry. Its outcome measures the hypothetical offer at research
+decision time, not a retrospectively invented entry at first acceptance. Other
+production gates still apply. Trend qualification uses the existing classifier
+on at most 20 causal context prefixes, requiring two consecutive trend readings;
+touches are counted in at most 60 setup bars after that current continuous
+qualification. A left-censored trend is explicitly bounded, not an unbounded
+first-pullback claim. Later pullbacks are not banned. The previous-bar completed
+break is diagnostic only.
+
+ID_NR4 requires both an inside completed setup bar and the smallest range among
+four; INSIDE_ONLY and NR4_ONLY remain distinct, with expansion recorded separately.
+Relative volume uses only available past same-UTC-slot setup bars (at most 80,
+minimum three). It is unknown without comparable history. CORE_INTRADAY alone
+records the optional previous-24-hour, next-six-hour frozen-range interpretation
+from already cached 1H bars. This adds metadata, not another scanner or card.
+
+The joint liquidity production rule and its three-bad/two-good persistence are
+unchanged. Spread-only, depth-only, joint and either variants are descriptive
+labels on the same observation/outcome, with unknown maturation and gap-reset
+metadata. Existing flow quality supplies aggression magnitude, signed notional,
+displacement, absorption and efficiency; there is no second flow engine.
+
+Audit output includes `research_cohorts`, `filter_counterfactuals`,
+`failure_taxonomy` and `execution_stress`, separately for prints and monitored
+OHLC labels. Entry dimensions, policy, reclaim/retest delay, no-retest state,
+pullback ordinal, compression, reference efficiency/width and liquidity variants
+are grouped across accepted/rejected decisions. Canonical rejected opportunities
+are counted once in `unique`; reason groups separately report containing, sole
+and shared outcomes. Shared avoided losers/missed winners overlap and must not
+be summed. Leave-one-filter-out counts only sole recorded reasons as uniquely
+changing a decision. It is not verified alternate execution.
+
+Each failure category is identified as actively detectable, research-only,
+obsolete for v21.1, or not yet implemented. Coarse legacy CHASED_ENTRY does not
+prove chasing. Unimplemented retrospective causes are explicitly labeled rather
+than interpreted as zero failures. Cumulative original-R drawdown is additive
+research P&L, not equity drawdown.
+
+New-policy monitored workers reuse their already-fetched candles for +1 and +3
+execution-bar and +1 setup-bar planned/entry markouts. Values are candle-close
+proxies, not future midprices, executable fills or account fills. Missing
+checkpoints remain unknown. Enclosed post-entry full bars provide observed
+MFE/MAE lower bounds; entry/exit-bar ordering is unknown, so full OHLC extrema
+remain null. Prints retain their observed MFE/MAE in original planned R.
+Cost stress is `net R − (multiplier − 1) × frozen cost / original risk` for
+1.0/1.5/2.0, with no added spread or optimistic delayed-fill reconstruction.
+Delayed execution is UNKNOWN. Historical labels are not rewritten.
+
+All changes are predeclared experiments; there are no completed v21.1 forward
+outcomes before deployment and no claimed improvement in profitability. See
+[H1–H8](V211_HYPOTHESES.md). Operational observation demonstrates health only.
+
+Local final verification: `scripts/verify.py` exited 0 with 606 tests passed and
+four optional skips, plus lint, format, JavaScript syntax and diff checks. The
+first full run exposed a legacy candidate-history guard regression; it was
+restricted to v21.1 and the targeted legacy/new-policy tests passed before the
+successful complete recheck. The final focused integration group passed 115
+tests; the later legacy/new-policy group passed 46. A 50-run, 120-bar isolated
+benchmark measured median 9.14 ms for v21 and 28.68 ms for v21.1. This bounded
+local computation adds no REST calls; it is not a live throughput or edge claim.
 
 Baseline: `c8a480eefb40fb056286306cb033b034d65b6ffc`, inspected 11 October 2026.
 The operator supplied the synthesis directly. Its source-page references are

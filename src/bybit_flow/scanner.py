@@ -305,7 +305,7 @@ class Scanner:
                     )
                     if book_features.get("available"):
                         from .horizons import session_context
-                        from .quality_v21 import liquidity_update
+                        from .quality import liquidity_update
 
                         depths = book_features["depth"]["10"]
                         impacts = [
@@ -418,6 +418,7 @@ class Scanner:
             return []
         if not self.flow_ready(instrument.symbol, evaluated):
             return []
+        observations = []
         plans = candidates(
             instrument,
             context_bars,
@@ -428,11 +429,13 @@ class Scanner:
             structural_targets=True,
             volume_profile=self.generation_profile(instrument, setup_bars, evaluated),
             horizon="CORE_INTRADAY",
-            quality_policy=True,
+            quality_policy="trade-validity-v21.1",
+            structural_observations=observations,
         )
+        self.remember_structures(instrument, "CORE_INTRADAY", observations, evaluated)
         for signal in plans:
             assign(signal, "CORE_INTRADAY")
-            from .quality_v21 import overlaps_existing
+            from .quality import overlaps_existing
 
             if overlaps_existing(signal, self.store.active_signals()):
                 continue
@@ -442,7 +445,7 @@ class Scanner:
                 continue
             old = self.store.db.execute("SELECT 1 FROM signals WHERE id=?", (signal.id,)).fetchone()
             if not old and signal.expires_ms > evaluated:
-                from .quality_v21 import remember_attempt
+                from .quality import remember_attempt
 
                 remember_attempt(self.store, signal)
                 self.store.signal(signal)
@@ -464,6 +467,7 @@ class Scanner:
                 await self.cached_candles(instrument.symbol, tf, now, 120)
                 for tf in (profile.context, profile.setup, profile.execution)
             ]
+            observations = []
             plans = candidates(
                 instrument,
                 *bars,
@@ -472,11 +476,13 @@ class Scanner:
                 structural_targets=True,
                 volume_profile=self.generation_profile(instrument, bars[1], now),
                 horizon=name,
-                quality_policy=True,
+                quality_policy="trade-validity-v21.1",
+                structural_observations=observations,
             )
+            self.remember_structures(instrument, name, observations, now)
             for signal in plans:
                 assign(signal, name)
-                from .quality_v21 import overlaps_existing
+                from .quality import overlaps_existing
 
                 if overlaps_existing(signal, self.store.active_signals()):
                     continue
@@ -489,7 +495,7 @@ class Scanner:
                 signal.expires_ms = bars[1][-1].end + DURATIONS[profile.setup]
                 signal.trigger_expires_ms = now + 120_000
                 if not self.store.db.execute("SELECT 1 FROM signals WHERE id=?", (signal.id,)).fetchone():
-                    from .quality_v21 import remember_attempt
+                    from .quality import remember_attempt
 
                     remember_attempt(self.store, signal)
                     self.store.signal(signal)
@@ -497,6 +503,49 @@ class Scanner:
                         from .funnel import reject
 
                         reject(self.store, signal, reason, signal.created_ms)
+
+    def remember_structures(self, instrument, horizon, observations, now):
+        """Compact bounded event observations, including pending states; no new feed."""
+        rows = self.store.get("structural-observations-v211", [])
+        keys = (
+            "structure_event_id",
+            "event_start_ms",
+            "reference_high",
+            "reference_low",
+            "range_state",
+            "breakout_state",
+            "accepted",
+            "reclaimed",
+            "reclaim_delay_bars",
+            "retest_delay_bars",
+            "retest_held",
+            "research_state",
+            "candidate_event",
+            "reasons",
+        )
+        for observation in observations:
+            value = {k: observation.get(k) for k in keys}
+            value.update(
+                source=instrument.exchange,
+                symbol=instrument.symbol,
+                horizon=horizon,
+                family=observation["family"],
+                direction=observation["direction"],
+                at_ms=now,
+            )
+            identity = (value["source"], value["symbol"], horizon, value["structure_event_id"])
+            previous = next(
+                (
+                    x
+                    for x in reversed(rows)
+                    if (x["source"], x["symbol"], x["horizon"], x["structure_event_id"]) == identity
+                ),
+                None,
+            )
+            if previous is None or any(previous.get(k) != value.get(k) for k in keys):
+                rows.append(value)
+        if observations:
+            self.store.put("structural-observations-v211", rows[-400:])
 
     def flow_ready(self, symbol, now):
         tape = self.streams.tapes.get(symbol)
@@ -522,14 +571,32 @@ class Scanner:
         return ready
 
     def entry_ready(self, signal, book, now):
+        from . import quality_v211
         from .production import entry_position
+
+        if quality_v211.enabled(signal):
+            price = (
+                float(min(book.asks) if signal.direction == "LONG" else max(book.bids))
+                if book.asks and book.bids
+                else None
+            )
+            quality = quality_v211.entry_quality(
+                signal,
+                price,
+                now,
+                self.settings.min_net_rr,
+                quote=quality_v211.quote_evidence(signal, book, now, self.settings),
+                current=quality_v211.current_cost(signal, price, book),
+            )
+            signal.coverage["entry_quality_now"] = quality
+            return quality["acceptable"]
 
         if now >= min(signal.expires_ms, signal.trigger_expires_ms or signal.expires_ms):
             return False
         if not book.fresh(now, self.settings.book_stale_ms):
             return False
         price = float(min(book.asks) if signal.direction == "LONG" else max(book.bids))
-        from .quality_v21 import enabled, entry_quality
+        from .quality import enabled, entry_quality
 
         if enabled(signal):
             quality = entry_quality(signal, price, now, self.settings.min_net_rr)
@@ -1683,11 +1750,13 @@ class Scanner:
             s.gates.extend(normal_spread["reasons"])
             if not flow_ok and not production_v2:
                 s.gates.append("executed order flow did not confirm family trigger")
-            if now - end > 900_000:
+            from .quality_v211 import enabled as new_quality
+
+            if now - end > 900_000 and not new_quality(s):
                 s.gates.append("execution trigger expired")
             if end < s.evidence["trigger_bar_end"]:
                 s.gates.append("execution confirmation predates setup")
-            if mid is None or not s.zone[0] <= mid <= s.zone[1]:
+            if (mid is None or not s.zone[0] <= mid <= s.zone[1]) and not new_quality(s):
                 s.gates.append("current price outside planned entry zone")
             if bf["spread_bps"] > self.settings.max_spread_bps:
                 s.gates.append("current spread exceeds gate")
@@ -1893,6 +1962,16 @@ class Scanner:
                 if s.horizon_profile == "EXTENDED_SWING":
                     s.evidence["publication_policy"] = "shadow research until horizon-specific validation"
             if production_v2 and s.gates:
+                if new_quality(s):
+                    from .quality_v211 import apply as apply_quality
+
+                    price = float(min(book.asks) if s.direction == "LONG" else max(book.bids))
+                    liquidity = self.store.get(f"liquidity-v21:{s.source}:{s.symbol}", {})
+                    if not 0 <= now - liquidity.get("at_ms", 0) <= 120000:
+                        liquidity = {}
+                    apply_quality(
+                        s, price, now, liquidity, self.settings.min_net_rr, book=book, settings=self.settings
+                    )
                 for gate in s.gates:
                     reject(self.store, s, gate, now)
                 self.store.signal(s, "Awaiting valid evidence within the original entry window")
@@ -1918,7 +1997,13 @@ class Scanner:
                         from .v8_gating import apply_new_candidate
 
                         s.evidence["flow_confirmed"] = flow_ok
-                        s.evidence["entry_not_chased"] = self.entry_ready(s, book, now)
+                        acceptable = self.entry_ready(s, book, now)
+                        s.evidence["entry_quality_acceptable"] = acceptable
+                        s.evidence["entry_not_chased"] = (
+                            s.coverage["entry_quality_now"]["entry_not_chased"]
+                            if new_quality(s)
+                            else acceptable
+                        )
                         from .production import structure_response
 
                         s.evidence["v8_structure_response"] = dict(
@@ -1934,8 +2019,8 @@ class Scanner:
                     s.gates.append("V2_EVIDENCE_UNAVAILABLE")
             if self.settings.sss_research and s.quality >= 95 and not s.gates and s.risk.get("accepted"):
                 s.final_tier = "SSS RESEARCH · UNCALIBRATED"
-            from .quality_v21 import apply as apply_quality
-            from .quality_v21 import enabled
+            from .quality import apply as apply_quality
+            from .quality import enabled
 
             if enabled(s):
                 key = f"liquidity-v21:{s.source}:{s.symbol}"
@@ -1943,7 +2028,9 @@ class Scanner:
                 if not 0 <= now - liquidity.get("at_ms", 0) <= 120000:
                     liquidity = {}
                 price = float(min(book.asks) if s.direction == "LONG" else max(book.bids))
-                apply_quality(s, price, now, liquidity, self.settings.min_net_rr)
+                apply_quality(
+                    s, price, now, liquidity, self.settings.min_net_rr, book=book, settings=self.settings
+                )
             from .ml.inference import apply as apply_ml
 
             if production_v2:

@@ -88,6 +88,9 @@ def main():
                     ("OVERALL", "overall"),
                     ("COHORTS BY HORIZON / FAMILY / REGIME / SCORE / EVIDENCE / FAILURE", "cohorts"),
                     ("FILTER COUNTERFACTUALS", "filter_counterfactuals"),
+                    ("ENTRY / STRUCTURE / POLICY RESEARCH COHORTS", "research_cohorts"),
+                    ("FAILURE TAXONOMY STATUS", "failure_taxonomy"),
+                    ("MODELED EXECUTION STRESS", "execution_stress"),
                     ("DATA QUALITY", "data_quality"),
                 ):
                     print(title)

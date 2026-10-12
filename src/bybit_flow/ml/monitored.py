@@ -59,6 +59,11 @@ def evaluate(row, current, bars, source, asof_ms, materialized_ms=None):
         observed_entry=entry,
         until_ms=deadline(row),
     )
+    if (
+        row["signal"].get("evidence", {}).get("production_policies", {}).get("trade_quality")
+        == "trade-validity-v21.1"
+    ):
+        result["research_path"] = research_path(row, result, bars, asof_ms)
     return result | dict(
         policy=POLICY,
         feature_schema_version=row["schema_version"],
@@ -69,6 +74,66 @@ def evaluate(row, current, bars, source, asof_ms, materialized_ms=None):
         account_fill_verified=False,
         label_fidelity="MONITORED_OHLC_PROXY",
         local_continuous_recording_required=False,
+    )
+
+
+def research_path(row, outcome, bars, asof):
+    """Reuse fetched candles; no new requests and no assumed intrabar ordering."""
+    s = row["signal"]
+    sign = 1 if s["direction"] == "LONG" else -1
+    risk = abs(s["entry"] - s["stop"])
+    price = outcome.get("proxy_entry_price")
+    entered = outcome.get("entry_available_ms")
+    closed = {b.end: b for b in bars if b.end <= asof}
+
+    def interval(tf):
+        return 86400000 if tf == "D" else int(tf) * MINUTE if str(tf).isdigit() else None
+
+    execution, setup = interval(s.get("execution_timeframe")), interval(s.get("setup_timeframe"))
+    checkpoints = {
+        "execution_1": execution,
+        "execution_3": 3 * execution if execution else None,
+        "setup_1": setup,
+    }
+    markouts = {}
+    for basis, at, entry_price in (("decision", row["decision_ms"], s["entry"]), ("entry", entered, price)):
+        markouts[basis] = {}
+        for name, delay in checkpoints.items():
+            end = ((at + delay + MINUTE - 1) // MINUTE * MINUTE) if at is not None and delay else None
+            b = closed.get(end)
+            valid = b is not None and isinstance(entry_price, (int, float)) and risk > 0
+            markouts[basis][name] = dict(
+                at_ms=end,
+                available_ms=b.end if b else None,
+                price_difference=sign * (b.close - entry_price) if valid else None,
+                original_r=sign * (b.close - entry_price) / risk if valid else None,
+                state="OBSERVED_PROXY" if valid else "UNKNOWN",
+            )
+    # Entry/terminal bar extrema may precede entry or follow exit. Only enclosed
+    # full bars give causal observed excursion bounds, not complete extrema.
+    exit_at = outcome.get("exit_ms") or asof
+    enclosed = [b for b in closed.values() if entered is not None and b.start >= entered and b.end < exit_at]
+    favorable = (
+        [sign * ((b.high if sign > 0 else b.low) - price) / risk for b in enclosed]
+        if enclosed and price is not None and risk
+        else []
+    )
+    adverse = (
+        [-sign * ((b.low if sign > 0 else b.high) - price) / risk for b in enclosed]
+        if enclosed and price is not None and risk
+        else []
+    )
+    return dict(
+        policy="fixed-candle-markouts-v211",
+        markouts=markouts,
+        observed_mfe_lower_bound_r=max(0, max(favorable)) if favorable else None,
+        observed_mae_lower_bound_r=max(0, max(adverse)) if adverse else None,
+        full_mfe_r=None,
+        full_mae_r=None,
+        enclosed_bars=len(enclosed),
+        original_risk=risk,
+        delayed_execution="UNKNOWN",
+        limitation="Hypothetical planned/price-touch entry to candle-close proxy; not future mid, executable fill or account execution. Exact extrema/order within entry and exit bars unknown; prints labels retain observed MFE/MAE.",
     )
 
 

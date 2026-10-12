@@ -21,10 +21,19 @@ def candidates(
     volume_profile=None,
     horizon=None,
     quality_policy=False,
+    structural_observations=None,
 ):
     context_bars, setup_bars, execution_bars = [
         [b for b in bars if b.end <= asof] for bars in (context_bars, setup_bars, execution_bars)
     ]
+    if (
+        quality_policy == "trade-validity-v21.1"
+        and min(map(len, (context_bars, setup_bars, execution_bars))) < 60
+    ):
+        return []
+    from . import quality_v21, quality_v211
+
+    quality_module = quality_v211 if quality_policy == quality_v211.POLICY else quality_v21
     context_features, setup_features, execution_features = [
         candle_features(b, asof) for b in (context_bars, setup_bars, execution_bars)
     ]
@@ -34,6 +43,8 @@ def candidates(
         context_features["previous_regime"] = candle_features(context_bars[:-1], context_bars[-1].start)[
             "regime"
         ]
+    if quality_policy == quality_v211.POLICY:
+        context_features["trend_qualification"] = quality_v211.trend_qualification(context_bars, asof)
     last, prior = setup_bars[-1], setup_bars[-2]
     atr = setup_features["atr"]
     plans = []
@@ -75,10 +86,24 @@ def candidates(
             level = base_level
             structure = None
             if quality_policy:
-                from .quality_v21 import structural
-
-                structure = structural(setup_bars, family, direction, context_features, setup_features, asof)
+                structure = quality_module.structural(
+                    setup_bars,
+                    family,
+                    direction,
+                    context_features,
+                    setup_features,
+                    asof,
+                    **(
+                        {"core_bars": setup_bars}
+                        if quality_policy == quality_v211.POLICY and horizon == "CORE_INTRADAY"
+                        else {}
+                    ),
+                )
                 level = structure["frozen_reference"]
+                if quality_policy == quality_v211.POLICY and structural_observations is not None:
+                    structural_observations.append(dict(family=family, direction=direction, **structure))
+                if quality_policy == quality_v211.POLICY and not structure["candidate_event"]:
+                    continue
             repaired_breakout = bool(
                 structure
                 and family == "breakout_retest"
@@ -87,11 +112,24 @@ def candidates(
                 and structure["retest_held"]
             )
             repaired_reclaim = bool(structure and family == "range_rejection" and not structure["reasons"])
-            if not rules[family] and not repaired_breakout and not repaired_reclaim:
+            research_no_retest = bool(structure and structure.get("research_state") == "ACCEPTED_NO_RETEST")
+            if (
+                not rules[family]
+                and not repaired_breakout
+                and not repaired_reclaim
+                and not research_no_retest
+            ):
                 continue
             sign = 1 if long else -1
             entry = execution_bars[-1].close
-            stop = min(last.low, level) - 0.15 * atr if long else max(last.high, level) + 0.15 * atr
+            extreme = (
+                structure["event_extreme"]
+                if quality_policy == quality_v211.POLICY
+                else last.low
+                if long
+                else last.high
+            )
+            stop = min(extreme, level) - 0.15 * atr if long else max(extreme, level) + 0.15 * atr
             stop_plan = None
             if horizon in {"SHORT_INTRADAY", "CORE_INTRADAY"}:
                 from .production import intraday_stop
@@ -99,7 +137,7 @@ def candidates(
                 stop_plan = intraday_stop(
                     entry,
                     direction,
-                    min(last.low, level) if long else max(last.high, level),
+                    min(extreme, level) if long else max(extreme, level),
                     setup_bars,
                     execution_bars,
                     atr,
@@ -143,10 +181,10 @@ def candidates(
             )
             slot = execution_bars[-1].end if execution_window_ms == 900_000 else asof // 60_000 * 60_000
             if quality_policy:
-                version += ":trade-validity-v21"
-                slot = last.end
+                version += ":" + quality_module.POLICY
+                slot = structure.get("event_start_ms", last.end)
             ident = hashlib.sha256(
-                f"{instrument.symbol}|{direction}|{family}|{last.end}|{slot}|{version}".encode()
+                f"{instrument.symbol}|{direction}|{family}|{slot if quality_policy == quality_v211.POLICY else last.end}|{slot}|{version}".encode()
             ).hexdigest()[:20]
             plans.append(
                 Signal(
@@ -191,7 +229,7 @@ def candidates(
                             valid=True,
                             family=family,
                             level=level,
-                            extreme=last.low if long else last.high,
+                            extreme=extreme,
                             available_ms=last.end,
                         ),
                         "h4": context_features,
@@ -209,10 +247,8 @@ def candidates(
             )
     for signal in plans:
         if quality_policy:
-            from .quality_v21 import POLICY, counterfactual
-
-            signal.evidence["production_policies"]["trade_quality"] = POLICY
-            counterfactual(signal, signal.evidence["frozen_structure"]["reasons"], asof)
+            signal.evidence["production_policies"]["trade_quality"] = quality_module.POLICY
+            quality_module.counterfactual(signal, signal.evidence["frozen_structure"]["reasons"], asof)
         if horizon:
             signal.version += ":production-v2:flow-score-v2:lifecycle-v62:cross-venue-flow-substitution-v1"
             signal.id = hashlib.sha256(

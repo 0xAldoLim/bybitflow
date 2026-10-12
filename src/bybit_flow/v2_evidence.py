@@ -184,7 +184,7 @@ def trade_offer(signal, now):
         {float(p) for _, p in levels if isinstance(p, (int, float)) and math.isfinite(p) and low < p < high}
     )
     path = 1 / (1 + len(barriers)) if ready else 0
-    from .quality_v21 import enabled, path_quality
+    from .quality import enabled, path_quality
 
     path_evidence = path_quality(signal, profile, barriers) if enabled(signal) and ready else {}
     if path_evidence:
@@ -304,8 +304,8 @@ def combine(location_score, mechanism_score, offer_score, confidence):
 
 
 def score(signal, flow_confirmed, now):
+    from .quality import enabled
     from .quality_v21 import SCORE_PROFILE as QUALITY_SCORE_PROFILE
-    from .quality_v21 import enabled
 
     score_profile = QUALITY_SCORE_PROFILE if enabled(signal) else SCORE_PROFILE
     where, process, offer = (

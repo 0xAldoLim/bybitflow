@@ -78,8 +78,8 @@ def assign(signal, name):
 
         signal.version += ":bybitflow-v2"
         signal.evidence.setdefault("production_policies", {})["scoring"] = SCORE_PROFILE
+        from .quality import enabled
         from .quality_v21 import SCORE_PROFILE as QUALITY_SCORE_PROFILE
-        from .quality_v21 import enabled
 
         if enabled(signal):
             signal.evidence["production_policies"]["scoring"] = QUALITY_SCORE_PROFILE

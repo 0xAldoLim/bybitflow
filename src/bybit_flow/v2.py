@@ -8,7 +8,7 @@ from copy import deepcopy
 from pathlib import Path
 from time import time_ns
 
-VERSION = "2.1.0"
+VERSION = "2.1.1"
 SCHEMA = "candidate-v20"
 SCORE_PROFILE = "bybitflow-v2-evidence-1"
 CUTOVER_KEY = "bybitflow_v2_cutover"

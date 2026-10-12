@@ -1,4 +1,4 @@
-# BybitFlow 2.1.0
+# BybitFlow 2.1.1
 
 BybitFlow monitors public crypto perpetual-market data and sends confirmed research
 setups to Discord. Cards include LONG or SHORT, quality grade, entry zone, stop
@@ -19,7 +19,7 @@ Existing setups keep their original plans, scores, deadlines, source, and lifecy
 Historical learning records and models remain available under their stored schema.
 See the [score guide](docs/SCORING.md) and [v1 comparison](docs/v2/BYBITFLOW_V1_TO_V2_GAP_ANALYSIS.md).
 
-Version 2.1 adds frozen pre-trigger references, two-close breakout acceptance,
+Version 2.1 introduced frozen pre-trigger references, two-close breakout acceptance,
 range reclaim checks, persistent context for pullbacks, executable entry-quality
 checks and relative liquidity stress with recovery hysteresis. Target-path
 friction uses observed volume concentration instead of simply counting levels.
@@ -27,6 +27,23 @@ The score weights remain 30% location, 45% mechanism and 25% trade offer.
 Existing v2 plans retain their original `bybitflow-v2-evidence-1` interpretation.
 Rejected new-policy candidates remain in research storage for hypothetical
 outcome comparisons; they do not produce Discord setup cards.
+
+Version 2.1.1 assigns `trade-validity-v21.1` only to new opportunities. Entry
+checks distinguish chasing, adverse zone breaks, crossed stops/targets, expired
+windows, stale quotes, unknown/invalid costs and deteriorated net reward:risk.
+References freeze before the event; range reclaims may complete within three
+setup bars, and accepted breakouts may retest within four. These are predeclared
+research hypotheses whose forward effectiveness is unknown. Existing v21 plans
+keep their original validity semantics and lifecycle.
+
+Pullback ordinal, completed-bar trigger, ID/NR4 compression, comparable-session
+volume and spread/depth stress variants are diagnostics, not additional score
+weights. The joint liquidity production rule remains unchanged. Rejected
+opportunities are counted uniquely in the audit, with separate sole/shared reason
+groups and leave-one-filter-out diagnostics. Shared groups must not be added as
+independent avoided losses. Cost stress and candle-close markouts are hypothetical
+research measurements; unsupported execution or extrema remain unknown. See the
+[hypothesis ledger](docs/V211_HYPOTHESES.md).
 
 Inspect delivered outcomes and filter counterfactuals with:
 

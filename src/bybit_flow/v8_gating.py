@@ -277,7 +277,13 @@ def evaluate(signal, asof_ms, settings, *, disabled=None, active=(), portfolio=N
                     and execution.get("stop_noise_ratio", 0) >= 0.5
                     and evidence.get("flow_confirmed")
                     and flow.get("available")
-                    and evidence.get("entry_not_chased") is True
+                    and evidence.get(
+                        "entry_quality_acceptable"
+                        if evidence.get("production_policies", {}).get("trade_quality")
+                        == "trade-validity-v21.1"
+                        else "entry_not_chased"
+                    )
+                    is True
                 )
                 if not safe_reversal:
                     set_state(name, "ADVERSE", "JUMP_SHOCK_EXECUTION_UNSTABLE", True)

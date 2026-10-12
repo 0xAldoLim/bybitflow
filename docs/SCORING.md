@@ -122,6 +122,31 @@ plans and historical scores are not rewritten.
 
 ## Separate scores and model authority
 
+Version 2.1.1 retains the v21 score profile, weights, bottleneck, confidence cap,
+and grade boundaries. `trade-validity-v21.1` versions execution/structure
+qualification separately from scoring. `entry-quality-v2` records zone, time,
+geometry, cost, current gross/net RR and quote provenance independently.
+`entry_not_chased` now means only that price is not on the directional chase side;
+`acceptable` is the overall execution result. Production and V8 entry checks use
+the latter for new policies. Old v21 plans retain their original interpretation.
+
+Current executable entry uses best ask for LONG and best bid for SHORT. The
+round-trip reserve is:
+`fee_bps/10000 × (entry + max(stop, TP1)) + entry × (2 × slippage_bps + funding_bps)/10000`.
+Funding reserves cover the horizon's possible settlements. No spread term is
+subtracted: the executable quote already embeds it. When known notional and
+current depth support a VWAP estimate, only impact beyond the best quote can
+replace the entry slippage reserve if larger. The exit reserve remains modeled;
+unknown size/depth means unknown impact. Frozen original costs remain separate
+from current execution estimates. Candle-proxy outcomes subtract the frozen
+reserve once; prints outcomes use their existing simulated fills/fees/funding.
+Neither constitutes verified account costs.
+
+No reclaim-delay, pullback-ordinal, compression, relative-volume, markout or
+liquidity-subtype score points are added. The
+[v2.1.1 ledger](V211_HYPOTHESES.md) identifies production rules and research
+variants. There is no automated strategy retuning or promotion.
+
 Opportunity priority ranks discovery candidates and is separate from quality.
 V8 production-gate readiness/rejections are also separate from the quality score;
 a supportive feature cannot override a mandatory rejection.
