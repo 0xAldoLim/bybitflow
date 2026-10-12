@@ -620,6 +620,33 @@ def replacement(store, path, retained, health, leases):
 
 
 def execute(store, settings, plan, dry_run=False):
+    """Serialize cleanup owners; exact range leases still protect evidence readers."""
+    if dry_run:
+        return _execute(store, settings, plan, dry_run=True)
+    owner = uuid.uuid4().hex
+    key = "cleanup_run_claim_v212"
+    now = now_ms()
+    store.db.execute("BEGIN IMMEDIATE")
+    try:
+        row = store.db.execute("SELECT payload FROM kv WHERE key=?", (key,)).fetchone()
+        previous = json.loads(row[0]) if row else {}
+        if previous.get("expires_ms", 0) > now:
+            store.db.rollback()
+            return dict(status="cleanup already running", run_id=previous.get("run_id"), freed_bytes=0)
+        claim = dict(owner=owner, run_id=plan["run_id"], at_ms=now, expires_ms=now + 600000)
+        store.db.execute("INSERT OR REPLACE INTO kv VALUES(?,?)", (key, json.dumps(claim)))
+        store.db.commit()
+    except BaseException:
+        store.db.rollback()
+        raise
+    try:
+        return _execute(store, settings, plan, owner=owner)
+    finally:
+        with store.db:
+            store.db.execute("DELETE FROM kv WHERE key=? AND json_extract(payload,'$.owner')=?", (key, owner))
+
+
+def _execute(store, settings, plan, dry_run=False, owner=None):
     from .leases import RangeLease
     from .retention import protection_ranges
 
@@ -678,6 +705,15 @@ def execute(store, settings, plan, dry_run=False):
     rows_before = row_digest()
 
     def done():
+        # An expired/replaced claim never authorizes another destructive step.
+        checked = now_ms()
+        with store.db:
+            renewed = store.db.execute(
+                "UPDATE kv SET payload=json_set(payload,'$.expires_ms',?) WHERE key='cleanup_run_claim_v212' AND json_extract(payload,'$.owner')=? AND json_extract(payload,'$.expires_ms')>?",
+                (checked + 600000, owner, checked),
+            )
+            if renewed.rowcount != 1:
+                raise RuntimeError("Cleanup ownership expired/lost; stopped")
         if rows_before != row_digest():
             raise RuntimeError("Cleanup durable ML row identities changed; stopped")
         maximum = plan.get("max_reclaim_bytes")
@@ -943,6 +979,9 @@ def execute(store, settings, plan, dry_run=False):
             pruned_incomplete_outcomes=old.get("pruned_incomplete_outcomes", 0),
         )
         store.put("recording_retention", old | state)
+        (directory / (plan["run_id"].replace(":", "-") + "-result.json")).write_text(
+            json.dumps(old | state, sort_keys=True)
+        )
         store.put(
             "recording_retention_errors",
             dict(

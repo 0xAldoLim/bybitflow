@@ -48,6 +48,7 @@ def packed(store, settings):
         (json.JSONDecodeError("invalid", "x", 0), "JSON_DECODE_ERROR"),
         (PermissionError("denied"), "PERMISSION_ERROR"),
         (TypeError("internal mistake"), "UNKNOWN_EXCEPTION"),
+        (ValueError("Need at least 60 closed candles"), "CANDLE_HISTORY_INSUFFICIENT"),
     ],
 )
 def test_failure_causes_are_durable(settings, exc, code):
@@ -217,6 +218,31 @@ def test_corrupt_pack_recovers_protected_member_from_healthy_original(settings, 
     for p in paths:
         p.unlink()  # Verify the replacement, not the redundant original.
     assert hashlib.sha256(raw_bytes(ms[0]["raw"])).hexdigest() == ms[0]["sha256"]
+    store.close()
+
+
+def test_scheduled_and_manual_cleanup_cannot_overlap(settings, monkeypatch):
+    from bybit_flow import recording_maintenance as maintenance
+
+    store = Store(settings.data_dir)
+    ms, path = packed(store, settings)
+    plan = planning(store, settings, 8 * 3600000, force=True)
+    inventory = maintenance.ml_inventory
+    observed = []
+
+    def concurrent(*args, **kwargs):
+        if not observed:
+            observed.append(execute(store, settings, plan))
+            assert path.exists() and not store.get("pruned_segment:" + ms[0]["id"])
+        return inventory(*args, **kwargs)
+
+    monkeypatch.setattr(maintenance, "ml_inventory", concurrent)
+    result = execute(store, settings, plan)
+    assert observed[0]["status"] == "cleanup already running"
+    assert observed[0]["freed_bytes"] == 0
+    assert result["freed_bytes"] > 0 and not path.exists()
+    assert not store.get("cleanup_run_claim_v212")
+    assert (store.root / "ml" / "maintenance" / (plan["run_id"].replace(":", "-") + "-result.json")).exists()
     store.close()
 
 

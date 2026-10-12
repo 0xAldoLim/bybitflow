@@ -40,6 +40,14 @@ atomically remap retained members and write tombstones/deletion intent, then
 remove the old archive. A crash on either side of the mapping commit preserves
 a readable version. Logical `through_ms` is unchanged by non-prefix pruning.
 
+A renewable ten-minute run claim serializes scheduled and manual destructive
+cleanup before eligibility capture. Expired or replaced ownership stops further
+deletion. Each run persists its own result report alongside pre/post inventory,
+so concurrent triggers cannot split freed-byte counters or verification state.
+Live broad selection identified three listings with fewer than the existing
+60 completed candles required by horizon features. They remain rejected with
+`CANDLE_HISTORY_INSUFFICIENT`; the history requirement is unchanged.
+
 Cleanup validates canonical per-source trainability and sequence readiness,
 eligible identity digests, registered model hashes and existing dataset/model
 file hashes. A mismatch stops further deletion and persists a failed check.

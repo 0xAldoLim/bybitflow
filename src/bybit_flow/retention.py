@@ -233,6 +233,9 @@ def prune_recordings(store, settings, at_ms=None, dry_run=False, force=False, ma
 
     if not settings.recording_retention_enabled:
         return {"status": "disabled"}
+    claim = store.get("cleanup_run_claim_v212", {})
+    if not dry_run and claim.get("expires_ms", 0) > now_ms():
+        return dict(status="cleanup already running", run_id=claim.get("run_id"), freed_bytes=0)
     usage = directory_bytes(store.root)
     if not force and usage < settings.max_storage_gb * 1e9 * 0.85:
         return dict(

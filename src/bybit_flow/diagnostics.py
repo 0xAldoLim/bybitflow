@@ -321,6 +321,8 @@ def cause_code(exc):
         return "FILE_MISSING"
     if isinstance(exc, json.JSONDecodeError):
         return "JSON_DECODE_ERROR"
+    if isinstance(exc, ValueError) and "closed candles" in text:
+        return "CANDLE_HISTORY_INSUFFICIENT"
     if isinstance(exc, (EOFError,)) or "gzip" in text or "end-of-stream" in text:
         return "RAW_GZIP_TRUNCATED"
     if isinstance(exc, KeyError) and ("archive" in text or "directory" in text):
