@@ -32,6 +32,11 @@ def main():
     storage = sub.add_parser("storage", help="Managed evidence budget")
     storage.add_argument("operation", choices=["status", "cleanup", "compact"])
     storage.add_argument("--dry-run", action="store_true")
+    storage.add_argument(
+        "--force",
+        action="store_true",
+        help="Plan/release eligible raw even below the pressure threshold; all protections still apply",
+    )
     candles = sub.add_parser("download-candles")
     candles.add_argument("symbol")
     candles.add_argument("--exchange", choices=["binance", "bybit", "okx"], default="binance")
@@ -132,7 +137,7 @@ def main():
                 if args.operation == "status"
                 else compact(store, dry_run=args.dry_run)
                 if args.operation == "compact"
-                else prune_recordings(store, settings, dry_run=args.dry_run)
+                else prune_recordings(store, settings, dry_run=args.dry_run, force=args.force)
             )
             print(json.dumps(result, indent=2))
         elif args.command in {"doctor", "test-market", "test-discord"}:

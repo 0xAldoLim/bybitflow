@@ -44,6 +44,24 @@ def ready_candidate(settings, signal, source="bybit"):
     return store, recorder, ident
 
 
+def test_audit_software_fault_is_durable_and_never_a_trade_gap(settings, signal, monkeypatch):
+    from bybit_flow.ml.completeness import EvidenceReader
+
+    store, _, _ = ready_candidate(settings, signal)
+    monkeypatch.setattr(
+        "bybit_flow.ml.completeness.gzip.open",
+        lambda *a, **kw: (_ for _ in ()).throw(TypeError("decoder fault")),
+    )
+    report = audit_completeness(store, settings, asof_ms=20_000_000)
+    assert report["recent_candidates"][0]["audit_class"] == "AUDIT_SOFTWARE_FAULT"
+    assert report["forensic_causes"]["without_durable_causes"] == 0
+    assert store.get("failure_causes_v212")[-1]["cause_code"] == "UNKNOWN_EXCEPTION"
+    reader = EvidenceReader(store, {("bybit", signal.symbol)})
+    reader.read(json.loads(store.db.execute("SELECT payload FROM segments LIMIT 1").fetchone()[0]), None)
+    assert store.db.execute("SELECT count(*) FROM ml_labels").fetchone()[0] == 0
+    store.close()
+
+
 def test_healthy_complete_and_chained_250ms_rotation(settings, signal):
     store, recorder, ident = ready_candidate(settings, signal)
     recorder.flush([trade(1500)])

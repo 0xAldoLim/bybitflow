@@ -1,4 +1,4 @@
-"""Bounded, read-only prints-v1 forensics. No label or plan writes occur here."""
+"""Bounded prints-v1 forensics. Only diagnostic metadata is written, never labels/plans."""
 
 import gzip
 import hashlib
@@ -11,6 +11,7 @@ from decimal import Decimal
 from pathlib import Path
 
 from ..backtest import PaperPosition
+from ..diagnostics import failure_summary, record_failure
 from ..models import Signal, Trade
 from ..packing import manifest_for
 from ..storage import now_ms
@@ -35,6 +36,7 @@ ROOT_CLASSES = (
     "SOURCE_MISMATCH",
     "HORIZON_NOT_MATURE",
     "UNKNOWN_INCOMPLETE",
+    "AUDIT_SOFTWARE_FAULT",
 )
 HORIZONS = ("SHORT_INTRADAY", "CORE_INTRADAY", "SWING", "EXTENDED_SWING", "LEGACY")
 SOURCES = ("binance", "bybit", "okx")
@@ -121,7 +123,7 @@ def select_candidates(store, source, limit, days, horizon, asof):
 
 
 class EvidenceReader:
-    """Shared compact segment cache with hard I/O/row budgets; no SQLite writes."""
+    """Shared bounded segment cache; failures persist diagnostic metadata only."""
 
     def __init__(self, store, markets, max_segments=1500, max_rows=3_000_000, max_bytes=384_000_000):
         self.store, self.markets = store, markets
@@ -131,6 +133,10 @@ class EvidenceReader:
         self.cache = OrderedDict()
         self.packs = dict(store.db.execute("SELECT segment_id,archive FROM segment_packs").fetchall())
         self.exhausted = False
+        import uuid
+
+        self.scan_id = "forensic:" + uuid.uuid4().hex
+        self.cause_context = {}
         # Prior worker exclusions remain useful even when safe cleanup removed raw files.
         self.exclusions = {}
         directory = store.root / "ml" / "recording-audits"
@@ -158,6 +164,31 @@ class EvidenceReader:
         return [(json.loads(r[0]), json.loads(r[1]) if r[1] else None) for r in rows[:20000]], len(
             rows
         ) > 20000
+
+    def failure(self, manifest, exc, operation="raw verification"):
+        return record_failure(
+            self.store,
+            exc,
+            scan_id=self.scan_id,
+            phase="forensic",
+            operation=operation,
+            segment_id=manifest["id"],
+            archive=self.packs.get(manifest["id"]),
+            range_start_ms=manifest["min_receipt_ms"],
+            range_end_ms=manifest["max_receipt_ms"],
+            **self.cause_context,
+        )
+
+    def finish(self, manifest, value):
+        if value.get("reason") and not value.get("tombstone") and not value.get("cause_recorded"):
+            reason = value["reason"]
+            exc = FileNotFoundError(reason) if "missing" in reason else ValueError(reason)
+            self.failure(manifest, exc)
+            value["cause_recorded"] = True
+        self.cache[manifest["id"]] = value
+        while len(self.cache) > 128:
+            self.cache.popitem(last=False)
+        return value
 
     def read(self, manifest, tombstone):
         ident = manifest["id"]
@@ -190,7 +221,7 @@ class EvidenceReader:
                 if path.exists() and path.stat().st_size > self.max_bytes - self.bytes:
                     self.exhausted = True
                     value["reason"] = "forensic compressed-byte budget reached"
-                    return value
+                    return self.finish(manifest, value)
                 if path.exists():
                     data = path.read_bytes()
                     sidecar = manifest_for(path)
@@ -199,7 +230,7 @@ class EvidenceReader:
                         if archive.getinfo(path.name).file_size > self.max_bytes - self.bytes:
                             self.exhausted = True
                             value["reason"] = "forensic compressed-byte budget reached"
-                            return value
+                            return self.finish(manifest, value)
                         data = archive.read(path.name)
                         sidecar = json.loads(archive.read(ident + ".manifest.json"))
                 self.segments += 1
@@ -208,10 +239,28 @@ class EvidenceReader:
                 if self.bytes > self.max_bytes:
                     self.exhausted = True
                     value["reason"] = "forensic compressed-byte budget reached"
-                    return value
+                    return self.finish(manifest, value)
                 if hashlib.sha256(data).hexdigest() != manifest["sha256"] or sidecar != manifest:
-                    value["reason"] = "raw hash or manifest integrity mismatch"
-                    return value
+                    exc = ValueError(
+                        "Raw hash mismatch"
+                        if hashlib.sha256(data).hexdigest() != manifest["sha256"]
+                        else "Manifest mismatch"
+                    )
+                    record_failure(
+                        self.store,
+                        exc,
+                        scan_id=self.scan_id,
+                        phase="forensic",
+                        operation="raw/manifest verification",
+                        segment_id=ident,
+                        archive=self.packs.get(ident),
+                        range_start_ms=manifest["min_receipt_ms"],
+                        range_end_ms=manifest["max_receipt_ms"],
+                        **self.cause_context,
+                    )
+                    value["reason"] = str(exc)
+                    value["cause_recorded"] = True
+                    return self.finish(manifest, value)
                 count, previous, low, high = 0, -1, None, None
                 with gzip.open(io.BytesIO(data), "rt") as stream:
                     for line in stream:
@@ -242,14 +291,33 @@ class EvidenceReader:
                     manifest["max_receipt_ms"],
                     manifest["rows"],
                 ):
-                    value["reason"] = "raw bounds or row-count integrity mismatch"
+                    value["reason"] = (
+                        "raw bounds mismatch"
+                        if (low, high) != (manifest["min_receipt_ms"], manifest["max_receipt_ms"])
+                        else "raw row-count mismatch"
+                    )
                 value["valid"] = value["reason"] is None
-            except (OSError, ValueError, KeyError, EOFError, zipfile.BadZipFile) as exc:
-                value["reason"] = "unreadable raw: " + type(exc).__name__
-        self.cache[ident] = value
-        while len(self.cache) > 128:
-            self.cache.popitem(last=False)
-        return value
+            except Exception as exc:
+                cause = record_failure(
+                    self.store,
+                    exc,
+                    scan_id=self.scan_id,
+                    phase="forensic",
+                    operation="raw decode",
+                    segment_id=ident,
+                    archive=self.packs.get(ident),
+                    range_start_ms=manifest["min_receipt_ms"],
+                    range_end_ms=manifest["max_receipt_ms"],
+                    **self.cause_context,
+                )
+                value["reason"] = (
+                    "software fault: " + type(exc).__name__
+                    if cause["cause_code"] == "UNKNOWN_EXCEPTION"
+                    else "unreadable raw: " + type(exc).__name__
+                )
+                value["software_fault"] = cause["cause_code"] == "UNKNOWN_EXCEPTION"
+                value["cause_recorded"] = True
+        return self.finish(manifest, value)
 
 
 def audit_candidate(store, settings, snapshot, reader, asof):
@@ -376,12 +444,17 @@ def audit_candidate(store, settings, snapshot, reader, asof):
                 raw_valid = False
                 subscription = healthy_start = None
             if not chained:
+                reader.failure(
+                    manifest, ValueError("Segment chain id/hash mismatch"), "segment chain verification"
+                )
                 row["segment_chain_valid"] = False
                 gap("RECORDER_CHAIN_GAP", previous["max_receipt_ms"], a, "previous segment id/hash mismatch")
                 raw_valid = False
                 subscription = healthy_start = None
         previous = manifest
         value = reader.read(manifest, tombstone)
+        if value.get("software_fault"):
+            row["software_fault"] = True
         row["raw_evidence_present"] |= value["present"]
         if not value["valid"]:
             raw_valid = False
@@ -585,6 +658,11 @@ def audit_candidate(store, settings, snapshot, reader, asof):
                 audit_reason="Recorded trade interval ends before the required observation cutoff",
             )
             gap("REAL_TRADE_FEED_GAP", last_trade, end, row["audit_reason"])
+    if row.get("software_fault") and row["audit_class"] != "COMPLETE":
+        row.update(
+            audit_class="AUDIT_SOFTWARE_FAULT",
+            audit_reason="Internal audit error; see durable forensic causes. No market gap inferred.",
+        )
     if failures:
         row.update(
             gap_count=len(failures),
@@ -682,7 +760,26 @@ def audit_completeness(
     reader = EvidenceReader(store, {(s["source"], s["signal"]["symbol"]) for s in snapshots}, **budgets)
     rows = []
     for index, snapshot in enumerate(snapshots):
-        rows.append(audit_candidate(store, settings, snapshot, reader, asof))
+        reader.cause_context = {k: snapshot.get(k) for k in ("source", "candidate_identity")}
+        reader.cause_context.update(
+            candidate_id=snapshot["id"],
+            symbol=snapshot["signal"]["symbol"],
+            horizon=snapshot["signal"].get("horizon_profile"),
+            family=snapshot["signal"]["family"],
+        )
+        try:
+            rows.append(audit_candidate(store, settings, snapshot, reader, asof))
+        except Exception as exc:
+            record_failure(
+                store,
+                exc,
+                scan_id=reader.scan_id,
+                phase="forensic",
+                operation="candidate completeness analysis",
+                **reader.cause_context,
+            )
+            raise  # Internal software faults are never reclassified as trade-feed gaps.
+
         if progress:
             progress(index + 1, len(snapshots))
     report = summarize(rows, duplicates, asof, store.get("ml_maturity_epoch", {}).get("started_ms"))
@@ -699,6 +796,7 @@ def audit_completeness(
         continuity_rules=continuity_rules(settings),
         recent_candidates=rows,
         duplicate_snapshots=duplicates,
+        forensic_causes=failure_summary(store, reader.scan_id),
         forensic_budget=dict(
             decoded_segments=reader.segments,
             decoded_rows=reader.rows,

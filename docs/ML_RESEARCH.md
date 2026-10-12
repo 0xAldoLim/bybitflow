@@ -421,3 +421,28 @@ multi-day horizon cannot repair that missing evidence. Their exclusion and
 frozen snapshots remain; safe cleanup may release the raw data once no active
 setup or replay lease needs it. Clean pending positions remain protected.
 This ML exclusion does not close or modify an operational setup.
+
+## Raw recording release and ML preservation (v2.1.2)
+
+Primary training reads durable causal candidate snapshots joined to compatible
+complete `prints-v1` labels and candidate identities. It does not reread old raw
+gzip or Parquet files once an outcome has been materialized. Final incomplete
+labels stay excluded; deleting their unused raw tape never invents a complete
+outcome. Operational setup monitoring and monitored candle outcomes retain
+their separate lifecycle and fidelity rules.
+
+Raw files are protected while an active lifecycle cursor, unresolved primary
+outcome or replay/maintenance lease needs them. Beyond the recent floor,
+complete/final-incomplete tape and no-consumer intervals may be released.
+Unknown reachability or an unverified software/permission error fails closed.
+Confirmed corrupt bytes remain protected until all required consumers have a
+durable disposition. Archive health and tombstones permanently record provenance.
+
+Every cleanup captures canonical per-source `trainable_current_schema`,
+`sequence_ready_16`, unique eligible identities/digests and immutable model and
+dataset hashes. It rechecks them after deletion at the same causal cutoff; a
+mismatch stops cleanup. Artifacts are under `ml/maintenance`. `storage status`
+exposes cached canonical counts separately from physical recording counts.
+Informational totals across venues cannot satisfy a source-specific 500-outcome
+minimum. A model's immutable manifest separately identifies the training,
+calibration, validation and holdout periods actually used.

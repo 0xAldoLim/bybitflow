@@ -1,4 +1,4 @@
-# BybitFlow 2.1.1
+# BybitFlow 2.1.2
 
 BybitFlow monitors public crypto perpetual-market data and sends confirmed research
 setups to Discord. Cards include LONG or SHORT, quality grade, entry zone, stop
@@ -35,6 +35,36 @@ References freeze before the event; range reclaims may complete within three
 setup bars, and accepted breakouts may retest within four. These are predeclared
 research hypotheses whose forward effectiveness is unknown. Existing v21 plans
 keep their original validity semantics and lifecycle.
+
+Version 2.1.2 adds prospective research measurements: the first fresh executable
+ask for a LONG or bid for a SHORT is frozen once, then compared with later
+execution estimates under the existing cost model. Relative volume compares
+completed bars with previous comparable UTC sessions, including 15-minute
+setups. A bounded journal observes duplicate and potentially distinct later
+structural events without generating another plan or Discord card. Scores,
+strategy thresholds and `trade-validity-v21.1` production rules remain unchanged.
+These measurements are **UNPROVEN / FORWARD TESTING**.
+
+Recording cleanup now verifies archive health, protects actual active/unresolved
+consumers and leases, and can replace mixed packs with verified retained members.
+Permanent snapshots, labels, exported datasets, models and Discord receipts are
+preserved. Canonical per-source training counts, sequence counts and eligible
+identity digests are checked before and after cleanup. Safely releasing raw tape
+after a final label does not remove the derived training candidate.
+
+Inspect or plan cleanup from the repository directory:
+
+```bat
+docker compose exec desk bybit-flow storage status
+docker compose exec desk bybit-flow storage cleanup --dry-run --force
+```
+
+`storage cleanup --force` executes that eligibility policy even below the usual
+85% pressure trigger; it never overrides active, unresolved, leased or unknown
+protection. Automatic cleanup retains the existing recent-data floor and targets
+65% usage when sufficient eligible raw data exists. Permanent records may keep
+usage above that target. Archive health and compact tombstones explain deletions;
+`ml/maintenance` contains pre/post eligibility and artifact verification reports.
 
 Pullback ordinal, completed-bar trigger, ID/NR4 compression, comparable-session
 volume and spread/depth stress variants are diagnostics, not additional score

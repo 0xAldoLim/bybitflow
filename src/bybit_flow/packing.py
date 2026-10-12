@@ -115,10 +115,22 @@ def compact(store, limit=300, dry_run=False):
 
 
 def _pack(store, selected, leases):
-    root = (store.root / "segments").resolve()
+    from .storage import now_ms
+
     directory = store.root / "packs"
     directory.mkdir(exist_ok=True)
     target = directory / (uuid.uuid4().hex + ".zip")
+    batch = "writer_batch_v212:packing:" + target.stem
+    store.put(batch, dict(paths=[str(target)], at_ms=now_ms()))
+    try:
+        return _pack_verified(store, selected, leases, target)
+    finally:
+        with store.db:
+            store.db.execute("DELETE FROM kv WHERE key=?", (batch,))
+
+
+def _pack_verified(store, selected, leases, target):
+    root = (store.root / "segments").resolve()
     files = []
     before = 0
     with zipfile.ZipFile(target, "x", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as archive:

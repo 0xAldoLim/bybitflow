@@ -413,7 +413,90 @@ class Scanner:
                 )
             await asyncio.sleep(30)
 
-    def save_candidates(self, instrument, context_bars, setup_bars, execution_bars, evaluated):
+    async def volume_research(self, instrument, timeframe, bars, asof):
+        from .research_v212 import DAY, remember_volume
+
+        interval = DURATIONS[timeframe]
+        remember_volume(self.store, instrument.exchange, instrument.symbol, interval, bars, asof)
+        attempts = getattr(self, "volume_research_attempts", {})
+        key = (instrument.exchange, instrument.symbol, timeframe)
+        if asof - attempts.get(key, 0) < 6 * 3_600_000:
+            return
+        attempts[key] = asof
+        self.volume_research_attempts = dict(list(attempts.items())[-128:])
+        try:
+            # Reuse available candles; optional longer history must not replace
+            # the production cache or change the bars used by strategy/lifecycle.
+            limit = min(1000, 10 * DAY // interval + 1)
+            cached = self.candle_cache.get((instrument.symbol, timeframe))
+            if cached and cached[0] == asof // interval and len(cached[1]) >= limit:
+                history = cached[1]
+            else:
+                history = await self.bounded_rest(
+                    self.api.candles(instrument.symbol, timeframe, asof, limit=limit)
+                )
+                validate_bars(history, asof)
+            remember_volume(self.store, instrument.exchange, instrument.symbol, interval, history, asof)
+        except Exception as exc:
+            from .diagnostics import record_failure
+
+            record_failure(
+                self.store,
+                exc,
+                scan_id=f"volume:{asof}",
+                phase="research",
+                operation="comparable-session warmup",
+                source=instrument.exchange,
+                symbol=instrument.symbol,
+                range_start_ms=asof - 10 * DAY,
+                range_end_ms=asof,
+            )
+
+    def observe_generation(self, signal, instrument, bars, now, initial_book=None):
+        from .research_v212 import capture_initial, relative_volume, remember_volume
+
+        checked = now_ms()
+        book = initial_book or self.streams.books.get(instrument.symbol)
+        derivatives = self.context.get(instrument.symbol, {}).get("derivatives", {})
+        capture_initial(signal, book, self.settings, checked, instrument, derivatives.get("funding_rate"))
+        if bars:
+            remember_volume(self.store, instrument.exchange, instrument.symbol, bars[-1].interval, bars, now)
+            signal.evidence["relative_volume_research"] = relative_volume(
+                self.store, instrument.exchange, instrument.symbol, bars[-1], now
+            )
+
+    def observe_duplicate(self, signal, reason):
+        from .research_v212 import suppression
+
+        structure = signal.evidence.get("frozen_structure", {})
+        row = next(
+            (
+                r
+                for r in self.store.active_signals()
+                if all(
+                    r.get(k) == getattr(signal, k)
+                    for k in ("source", "symbol", "horizon_profile", "direction", "family")
+                )
+            ),
+            None,
+        )
+        if row:
+            suppression(
+                self.store,
+                row.get("evidence", {}).get("frozen_structure", {}),
+                structure,
+                source=signal.source,
+                symbol=signal.symbol,
+                horizon=signal.horizon_profile,
+                family=signal.family,
+                direction=signal.direction,
+                now=now_ms(),
+                reason=reason,
+            )
+
+    def save_candidates(
+        self, instrument, context_bars, setup_bars, execution_bars, evaluated, initial_book=None
+    ):
         if not self.recorder.healthy:
             return []
         if not self.flow_ready(instrument.symbol, evaluated):
@@ -435,15 +518,32 @@ class Scanner:
         self.remember_structures(instrument, "CORE_INTRADAY", observations, evaluated)
         for signal in plans:
             assign(signal, "CORE_INTRADAY")
+            self.observe_generation(signal, instrument, setup_bars, evaluated, initial_book)
             from .quality import overlaps_existing
 
             if overlaps_existing(signal, self.store.active_signals()):
+                self.observe_duplicate(signal, "existing active event")
                 continue
             from .v2 import overlaps_legacy
 
             if overlaps_legacy(signal, self.store.active_signals(), self.store.get("bybitflow_v2_cutover")):
                 continue
-            old = self.store.db.execute("SELECT 1 FROM signals WHERE id=?", (signal.id,)).fetchone()
+            old = self.store.db.execute("SELECT payload FROM signals WHERE id=?", (signal.id,)).fetchone()
+            if old:
+                from .research_v212 import suppression
+
+                suppression(
+                    self.store,
+                    json.loads(old[0]).get("evidence", {}).get("frozen_structure", {}),
+                    signal.evidence.get("frozen_structure", {}),
+                    source=signal.source,
+                    symbol=signal.symbol,
+                    horizon=signal.horizon_profile,
+                    family=signal.family,
+                    direction=signal.direction,
+                    now=evaluated,
+                    reason="existing candidate identity",
+                )
             if not old and signal.expires_ms > evaluated:
                 from .quality import remember_attempt
 
@@ -467,6 +567,7 @@ class Scanner:
                 await self.cached_candles(instrument.symbol, tf, now, 120)
                 for tf in (profile.context, profile.setup, profile.execution)
             ]
+            await self.volume_research(instrument, profile.setup, bars[1], now)
             observations = []
             plans = candidates(
                 instrument,
@@ -482,9 +583,11 @@ class Scanner:
             self.remember_structures(instrument, name, observations, now)
             for signal in plans:
                 assign(signal, name)
+                self.observe_generation(signal, instrument, bars[1], now)
                 from .quality import overlaps_existing
 
                 if overlaps_existing(signal, self.store.active_signals()):
+                    self.observe_duplicate(signal, "existing active event")
                     continue
                 from .v2 import overlaps_legacy
 
@@ -494,7 +597,23 @@ class Scanner:
                     continue
                 signal.expires_ms = bars[1][-1].end + DURATIONS[profile.setup]
                 signal.trigger_expires_ms = now + 120_000
-                if not self.store.db.execute("SELECT 1 FROM signals WHERE id=?", (signal.id,)).fetchone():
+                old = self.store.db.execute("SELECT payload FROM signals WHERE id=?", (signal.id,)).fetchone()
+                if old:
+                    from .research_v212 import suppression
+
+                    suppression(
+                        self.store,
+                        json.loads(old[0]).get("evidence", {}).get("frozen_structure", {}),
+                        signal.evidence.get("frozen_structure", {}),
+                        source=signal.source,
+                        symbol=signal.symbol,
+                        horizon=name,
+                        family=signal.family,
+                        direction=signal.direction,
+                        now=now,
+                        reason="existing candidate identity",
+                    )
+                if not old:
                     from .quality import remember_attempt
 
                     remember_attempt(self.store, signal)
@@ -524,6 +643,22 @@ class Scanner:
             "reasons",
         )
         for observation in observations:
+            if observation.get("diagnostic_suppression"):
+                from .research_v212 import suppression
+
+                suppression(
+                    self.store,
+                    observation["existing"],
+                    observation["observed"],
+                    source=instrument.exchange,
+                    symbol=instrument.symbol,
+                    horizon=horizon,
+                    family=observation["family"],
+                    direction=observation["direction"],
+                    now=now,
+                    reason="earlier anchor represents production event",
+                )
+                continue
             value = {k: observation.get(k) for k in keys}
             value.update(
                 source=instrument.exchange,
@@ -842,13 +977,25 @@ class Scanner:
             self.record_quotes(ticker_body, now_ms())
             tickers = {t["symbol"]: t for t in ticker_body["result"]["list"]}
             ranked, broad, errors = [], {}, 0
+            from .diagnostics import record_failure
+
+            scan_id = f"market-broad:{scan_started}"
             verified = []
             requests = 0
+
+            async def scan_candles(symbol, timeframe, checked, count):
+                try:
+                    return await self.cached_candles(symbol, timeframe, checked, count)
+                except Exception as exc:
+                    exc.scan_operation = "completed candle history: " + timeframe
+                    exc.scan_range_start_ms = checked - count * DURATIONS[timeframe]
+                    raise
 
             async def admit(symbol, *, select_stream=True):
                 nonlocal requests, errors
                 if symbol in verified:
                     return
+                operation = "orderbook admission"
                 try:
                     inst, context_bars, setup_bars, execution_bars = broad[symbol]
                     requests += 1
@@ -870,6 +1017,7 @@ class Scanner:
                     ):
                         return
                     evaluated = now_ms()
+                    operation = "open interest/funding context"
                     derivatives = await self.depth_context(
                         inst, tickers[symbol], ticker_body["time"], evaluated
                     )
@@ -890,7 +1038,9 @@ class Scanner:
                         normal["eligible"],
                         dict(depth_verified=True, normal_spread=normal, metadata=inst.metadata),
                     )
-                    self.save_candidates(inst, context_bars, setup_bars, execution_bars, evaluated)
+                    await self.volume_research(inst, "60", setup_bars, evaluated)
+                    operation = "candidate generation / horizon discovery"
+                    self.save_candidates(inst, context_bars, setup_bars, execution_bars, evaluated, book)
                     await self.discover_horizons(inst, evaluated)
                     self.store.put(
                         "market:" + symbol,
@@ -908,12 +1058,23 @@ class Scanner:
                     verified.append(symbol)
                     if select_stream and symbol in priority:
                         await self.streams.select(list(dict.fromkeys(list(self.streams.selected) + [symbol])))
-                except PermissionError:
-                    raise
                 except Exception as exc:
                     if not self.recorder.healthy:
                         raise RuntimeError("Recording unavailable; depth verification aborted") from exc
                     errors += 1
+                    record_failure(
+                        self.store,
+                        exc,
+                        scan_id=scan_id,
+                        phase="admission",
+                        operation=getattr(exc, "scan_operation", operation),
+                        source=self.exchange,
+                        symbol=symbol,
+                        range_start_ms=getattr(exc, "scan_range_start_ms", asof - 120 * DAY),
+                        range_end_ms=now_ms(),
+                    )
+                    if isinstance(exc, PermissionError):
+                        raise
 
             # Restore existing opportunities before broad eligibility ranking. Admission
             # verifies depth; it never changes their original plan or lifecycle state.
@@ -931,32 +1092,45 @@ class Scanner:
                     now = now_ms()
                     bars = await asyncio.gather(
                         *(
-                            self.cached_candles(inst.symbol, tf, now, count)
+                            scan_candles(inst.symbol, tf, now, count)
                             for tf, count in (("240", 160), ("60", 200), ("15", 120))
                         )
                     )
                     broad[inst.symbol] = (inst, *bars)
                     await admit(inst.symbol)
-                except Exception:
+                except Exception as exc:
                     errors += 1
+                    record_failure(
+                        self.store,
+                        exc,
+                        scan_id=scan_id,
+                        phase="active restoration",
+                        operation=getattr(exc, "scan_operation", "active market candle history"),
+                        source=self.exchange,
+                        symbol=raw.get("symbol"),
+                        range_start_ms=getattr(exc, "scan_range_start_ms", asof - 120 * DAY),
+                        range_end_ms=now_ms(),
+                    )
 
             async def broad_scan(raw):
                 nonlocal errors
-                inst = (
-                    self.api.parse(raw, asof)
-                    if isinstance(self.api, VenueAPI)
-                    else parse_eligible_metadata(raw, self.settings, asof)
-                )
-                if not inst:
-                    return
+                operation = "instrument eligibility metadata"
                 try:
+                    inst = (
+                        self.api.parse(raw, asof)
+                        if isinstance(self.api, VenueAPI)
+                        else parse_eligible_metadata(raw, self.settings, asof)
+                    )
+                    if not inst:
+                        return
+                    operation = "daily turnover qualification"
                     t = tickers.get(inst.symbol, {})
                     bid, ask = float(t.get("bid1Price") or 0), float(t.get("ask1Price") or 0)
                     spread = (ask - bid) / ((ask + bid) / 2) * 10000 if ask > bid > 0 else float("inf")
                     if spread > self.settings.max_spread_bps:
                         return
                     now = now_ms()
-                    daily = await self.cached_candles(inst.symbol, "D", now, 120)
+                    daily = await scan_candles(inst.symbol, "D", now, 120)
                     if (
                         len(daily) < 30
                         or now - daily[-1].end >= DAY
@@ -967,12 +1141,13 @@ class Scanner:
                     if turnover < self.settings.min_daily_turnover:
                         return
                     context_bars, setup_bars, execution_bars = await asyncio.gather(
-                        self.cached_candles(inst.symbol, "240", now, 160),
-                        self.cached_candles(inst.symbol, "60", now, 200),
-                        self.cached_candles(inst.symbol, "15", now, 120),
+                        scan_candles(inst.symbol, "240", now, 160),
+                        scan_candles(inst.symbol, "60", now, 200),
+                        scan_candles(inst.symbol, "15", now, 120),
                     )
                     if now - execution_bars[-1].end > 960_000 or now - setup_bars[-1].end > 3_660_000:
                         return
+                    operation = "horizon preliminary ranking"
                     pre = horizon_pre_ranks(
                         daily,
                         context_bars,
@@ -999,12 +1174,23 @@ class Scanner:
                         )
                     )
                     broad[inst.symbol] = (inst, context_bars, setup_bars, execution_bars)
-                except PermissionError:
-                    raise
                 except Exception as exc:
                     if not self.recorder.healthy:
                         raise RuntimeError("Recording unavailable; broad scan aborted") from exc
                     errors += 1
+                    record_failure(
+                        self.store,
+                        exc,
+                        scan_id=scan_id,
+                        phase="broad selection",
+                        operation=getattr(exc, "scan_operation", operation),
+                        source=self.exchange,
+                        symbol=raw.get("symbol"),
+                        range_start_ms=getattr(exc, "scan_range_start_ms", asof - 120 * DAY),
+                        range_end_ms=now_ms(),
+                    )
+                    if isinstance(exc, PermissionError):
+                        raise
 
             # Small batches keep admission and stream work ahead of optional discovery.
             for offset in range(0, len(rows), self.settings.rest_concurrency):
@@ -1114,6 +1300,13 @@ class Scanner:
                     for kind in ("ACTIVE", "CORE", "EXPLOIT", "EXPLORE")
                 },
             )
+            from .diagnostics import failure_summary
+
+            causes = failure_summary(self.store, scan_id)
+            causes = dict(causes, scan_id=scan_id, at_ms=now_ms())
+            causes["without_durable_causes"] = max(0, errors - causes["with_durable_causes"])
+            self.status["broad_scan_causes"] = causes
+            self.store.put("broad_scan_causes", causes)
             self.store.put("scanner", self.status)
             candle_total = self.feature_cache_hits + self.feature_cache_misses
             derivative_total = self.derivative_cache_hits + self.derivative_cache_misses

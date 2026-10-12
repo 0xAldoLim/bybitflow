@@ -156,8 +156,16 @@ def storage_status(store, settings):
     oldest = replayable_boundary(store)
     newest = replayable_boundary(store, oldest=False)
     retention = store.get("recording_retention", {})
-    floor = 15 if used / budget >= 0.85 else getattr(settings, "ml_raw_retention_minutes", 60)
-    estimated = byte_attribution_sample(store, now, now - floor * 60_000)
+    from .recording_maintenance import inventory_status, planning
+
+    plan = planning(store, settings, now)
+    estimated = dict(
+        protected_active_bytes=plan["class_bytes"].get("PROTECTED_ACTIVE_SETUP", 0),
+        protected_unresolved_ml_bytes=plan["class_bytes"].get("PROTECTED_UNRESOLVED_PRIMARY_ML", 0),
+        protected_lease_bytes=plan["class_bytes"].get("PROTECTED_REPLAY_LEASE", 0),
+        finalized_complete_deletable_bytes=plan["class_bytes"].get("DELETABLE_COMPLETE_LABEL_DURABLE", 0),
+        finalized_incomplete_deletable_bytes=plan["class_bytes"].get("DELETABLE_FINALIZED_INCOMPLETE", 0),
+    )
     result = dict(
         at_ms=now,
         retention_enabled=settings.recording_retention_enabled,
@@ -168,7 +176,7 @@ def storage_status(store, settings):
         oldest_replayable_event_ms=oldest,
         newest_replayable_event_ms=newest,
         **estimated,
-        byte_attribution="bounded latest-200-segment sample; packed sizes estimated; categories can overlap",
+        byte_attribution="physical originals and mapped compressed member bytes; categories can overlap; ZIP overhead/unmapped residue excluded",
         pruned_complete_outcomes=retention.get("pruned_complete_outcomes", 0),
         pruned_incomplete_outcomes=retention.get("pruned_incomplete_outcomes", 0),
         skipped_unverifiable_count=retention.get("skipped_unverifiable", 0),
@@ -208,7 +216,8 @@ def storage_status(store, settings):
             for key in ("checkpoint_version", "saved_ms", "cursor_ms", "pending", "verified_boundary_ms")
         },
     )
-    deletable = prune_recordings(store, settings, dry_run=True).get("bytes_freed", 0)
+    deletable = plan["planned_reclaimed_bytes"]
+    result.update(inventory_status(store, plan))
     result.update(
         deletable_bytes=deletable,
         scheduled_deletable_bytes=deletable,
@@ -220,217 +229,23 @@ def storage_status(store, settings):
 
 
 def prune_recordings(store, settings, at_ms=None, dry_run=False, force=False, max_reclaim_bytes=None):
+    from .recording_maintenance import execute, planning
+
     if not settings.recording_retention_enabled:
         return {"status": "disabled"}
-    now = at_ms or now_ms()
     usage = directory_bytes(store.root)
-    budget = settings.max_storage_gb * 1e9
-    if usage >= budget * 0.85:
-        max_reclaim_bytes = None  # Emergency cleanup must recover enough headroom.
-    if (
-        not force
-        and usage < budget * 0.85
-        and store.get("recording_retention", {}).get("status") != "pruning"
-    ):
+    if not force and usage < settings.max_storage_gb * 1e9 * 0.85:
         return dict(
             status="dry-run" if dry_run else "within budget",
-            bytes_before=usage,
             bytes_freed=0,
             freed_bytes=0,
             segments=[],
             archives=[],
-            reason="No deletion scheduled below the pressure threshold",
         )
-    # Eligibility is per evidence interval, never gated by global ML health.
-    # Routine ML cleanup retains a configurable recent floor. Active setups,
-    # unresolved outcomes and readers still protect their exact ranges below.
-    cutoff = now - (
-        15 * 60_000
-        if usage >= budget * 0.85
-        else getattr(settings, "ml_raw_retention_minutes", 60) * 60_000
-        if force
-        else 6 * 3_600_000
-    )
-    ranges = protection_ranges(store, now)
-    from bisect import bisect_right
-
-    merged = []
-    for a, b, _ in sorted(ranges):
-        if merged and a <= merged[-1][1]:
-            merged[-1][1] = max(b, merged[-1][1])
-        else:
-            merged.append([a, b])
-    starts = [r[0] for r in merged]
-
-    def protected(start, end):
-        index = bisect_right(starts, end) - 1
-        return index >= 0 and merged[index][1] >= start
-
-    pruned = {
-        r[0].removeprefix("pruned_segment:")
-        for r in store.db.execute("SELECT key FROM kv WHERE key LIKE 'pruned_segment:%'")
-    }
-    root = (store.root / "segments").resolve()
-    state = store.get("recording_retention", {})
-    through = state.get("through_ms", 0)
-    manifests = [json.loads(r[0]) for r in store.db.execute("SELECT payload FROM segments")]
-    manifests.sort(key=lambda m: m["max_receipt_ms"])
-    selected, planned = [], 0
-    pressure = usage >= budget * 0.85 or force
-    for m in manifests:
-        if max_reclaim_bytes is not None and planned >= max_reclaim_bytes:
-            break
-        end = m["max_receipt_ms"]
-        resume = m.get("id") in pruned or end <= through
-        if not resume and (not pressure or end > cutoff or (not force and usage - planned <= budget * 0.6)):
-            continue
-        if protected(m.get("min_receipt_ms", end), end):
-            continue
-        paths = [Path(m["raw"]), Path(m["parquet"])]
-        paths.append(paths[0].with_name(paths[0].name.removesuffix(".jsonl.gz") + ".manifest.json"))
-        # Never remove files outside the exact managed segment directory, including symlinks.
-        for path in paths:
-            if path.is_symlink() or path.resolve().parent != root:
-                raise ValueError("Retention path outside managed segment directory")
-        size = sum(p.stat().st_size for p in paths if p.exists())
-        if not size:
-            continue
-        selected.append((m, paths))
-        planned += size
-    packs = []
-    for archive, end, start in store.db.execute(
-        "SELECT p.archive,max(json_extract(s.payload,'$.max_receipt_ms')),"
-        "min(json_extract(s.payload,'$.min_receipt_ms')) FROM segment_packs p "
-        "JOIN segments s ON s.id=p.segment_id GROUP BY p.archive"
-    ):
-        if max_reclaim_bytes is not None and planned >= max_reclaim_bytes:
-            break
-        p = Path(archive)
-        if p.is_symlink() or p.resolve().parent != (store.root / "packs").resolve():
-            raise ValueError("Retention path outside managed packs")
-        if (
-            pressure
-            and end <= cutoff
-            and p.exists()
-            and (force or usage - planned > budget * 0.6)
-            and not protected(start, end)
-        ):
-            packs.append((p, end, start))
-            planned += p.stat().st_size
-    if dry_run:
-        return dict(
-            status="dry-run",
-            bytes_before=usage,
-            bytes_freed=planned,
-            segments=[m["id"] for m, _ in selected],
-            archives=[str(p) for p, _, _ in packs],
-            cutoff_ms=cutoff,
-            reason="Old redundant raw evidence beyond active, unresolved-label and replay protection; permanent records remain",
-        )
-    if not selected and not packs:
-        return {
-            "status": "within budget" if not pressure else "active history protected",
-            "bytes": usage,
-            "freed_bytes": 0,
-        }
-    import hashlib
-
-    from .leases import RangeLease
-    from .packing import manifest_for, raw_bytes
-
-    state.update(at_ms=now, status="pruning", bytes_before=usage)
-    store.put("recording_retention", state)
-    freed = 0
-    skipped = []
-    newly_pruned = {}
-
-    def verify(m):
-        if hashlib.sha256(raw_bytes(m["raw"])).hexdigest() != m["sha256"] or manifest_for(m["raw"]) != m:
-            raise ValueError("Retention evidence integrity mismatch")
-
-    for path, end, start in packs:
-        try:
-            with RangeLease(store, start, end, "Prune materialized evidence", exclusive=True) as lease:
-                members = [
-                    json.loads(r[0])
-                    for r in store.db.execute(
-                        "SELECT s.payload FROM segments s JOIN segment_packs p ON p.segment_id=s.id WHERE p.archive=?",
-                        (str(path),),
-                    )
-                ]
-                for m in members:
-                    lease.heartbeat()
-                    verify(m)
-                lease.heartbeat(force=True)
-                for m in members:
-                    if not store.get("pruned_segment:" + m["id"]):
-                        newly_pruned[m["id"]] = m
-                    store.put(
-                        "pruned_segment:" + m["id"],
-                        dict(at_ms=now, sha256=m["sha256"], reason="durable outcomes; no unresolved range"),
-                    )
-                size = path.stat().st_size
-                path.unlink()
-                freed += size
-        except BlockingIOError:
-            continue
-        except (zipfile.BadZipFile, KeyError, FileNotFoundError, ValueError) as exc:
-            # A damaged archive is evidence of a recording gap. Keep its bytes and
-            # manifest for diagnosis; it must not block unrelated safe cleanup.
-            skipped.append(dict(path=str(path), error_type=type(exc).__name__))
-    for m, paths in selected:
-        try:
-            with RangeLease(
-                store,
-                m.get("min_receipt_ms", m["max_receipt_ms"]),
-                m["max_receipt_ms"],
-                "Prune materialized evidence",
-                exclusive=True,
-            ):
-                # A published tombstone makes crash recovery and non-prefix pruning explicit.
-                if not store.get("pruned_segment:" + m["id"]):
-                    verify(m)
-                    newly_pruned[m["id"]] = m
-                    store.put(
-                        "pruned_segment:" + m["id"],
-                        dict(at_ms=now, sha256=m["sha256"], reason="durable outcomes; no unresolved range"),
-                    )
-                for path in paths:
-                    if path.exists():
-                        size = path.stat().st_size
-                        path.unlink()
-                        freed += size
-        except BlockingIOError:
-            continue
-        except (zipfile.BadZipFile, KeyError, FileNotFoundError, ValueError) as exc:
-            skipped.append(dict(path=str(paths[0]), error_type=type(exc).__name__))
-    outcomes = {}
-    for m in newly_pruned.values():
-        for snapshot_id, classification, complete in store.db.execute(
-            "SELECT s.id,json_extract(l.payload,'$.classification'),"
-            "json_extract(l.payload,'$.complete') FROM ml_snapshots s "
-            "JOIN ml_labels l ON l.snapshot_id=s.id AND l.policy='prints-v1' "
-            "WHERE s.stage='decision' AND s.decision_ms BETWEEN ? AND ?",
-            (m["min_receipt_ms"], m["max_receipt_ms"]),
-        ):
-            outcomes[snapshot_id] = (classification, complete)
-    state.update(
-        status="pruned",
-        bytes_after=usage - freed,
-        freed_bytes=freed,
-        total_freed_bytes=state.get("total_freed_bytes", 0) + freed,
-        preserved="database, feature snapshots, outcome labels, datasets, models and segment hashes",
-        skipped_unverifiable=len(skipped),
-        pruned_complete_outcomes=state.get("pruned_complete_outcomes", 0)
-        + sum(bool(complete) for _, complete in outcomes.values()),
-        pruned_incomplete_outcomes=state.get("pruned_incomplete_outcomes", 0)
-        + sum(kind == "incomplete" for kind, _ in outcomes.values()),
-        pruned_outcome_count_note="decision-range estimate since counters were introduced",
-    )
-    store.put("recording_retention", state)
-    if skipped:
-        store.put("recording_retention_errors", dict(at_ms=now, items=skipped[:100], total=len(skipped)))
-    return state
+    if max_reclaim_bytes is None and not force:
+        max_reclaim_bytes = max(0, usage - settings.max_storage_gb * 1e9 * 0.65)
+    plan = planning(store, settings, at_ms, force, max_reclaim_bytes)
+    return execute(store, settings, plan, dry_run)
 
 
 def protection_ranges(store, now):

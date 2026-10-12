@@ -97,7 +97,7 @@ def test_retention_rejects_paths_outside_segments(settings, tmp_path):
     store.close()
 
 
-def test_retention_keeps_corrupt_pack_and_prunes_independent_pack(settings):
+def test_retention_retires_unprotected_corrupt_pack_and_prunes_independent_pack(settings):
     store = Store(settings.data_dir)
     recorder = Recorder(store, settings)
     archives = []
@@ -120,11 +120,17 @@ def test_retention_keeps_corrupt_pack_and_prunes_independent_pack(settings):
     archives[0].write_bytes(b"damaged pack")
     cfg = SimpleNamespace(recording_retention_enabled=True, max_storage_gb=0.000001)
     result = prune_recordings(store, cfg, 8 * 3_600_000)
-    assert result["skipped_unverifiable"] == 1
+    assert result["corrupt_packs_retired"] == 1
     assert result["freed_bytes"] > 0
-    assert archives[0].exists()
+    assert not archives[0].exists()
     assert not archives[1].exists()
-    assert store.get("recording_retention_errors")["items"][0]["error_type"] == "BadZipFile"
+    health = json.loads(
+        store.db.execute(
+            "SELECT payload FROM archive_health WHERE archive=?", (str(archives[0]),)
+        ).fetchone()[0]
+    )
+    assert health["status"] == "RETIRED_CORRUPT"
+    assert health["error_type"] == "BadZipFile"
     store.close()
 
 

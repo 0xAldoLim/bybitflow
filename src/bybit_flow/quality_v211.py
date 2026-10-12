@@ -32,7 +32,9 @@ def trend_qualification(bars, asof):
     return result
 
 
-def structural(bars, family, direction, context, features, asof, *, core_bars=None):
+def structural(
+    bars, family, direction, context, features, asof, *, core_bars=None, _research_start_after=None
+):
     """Bounded completed-bar sequences; anchors precede their first event bar.
 
     Recompute at most six event anchors from the same cached horizon bars. Stop at
@@ -55,7 +57,10 @@ def structural(bars, family, direction, context, features, asof, *, core_bars=No
     anchor = len(closed) - 1
     sequence = {}
     found = False
-    for start in range(max(20, len(closed) - (6 if family == "breakout_retest" else 4)), len(closed)):
+    for start in range(
+        max(20, len(closed) - (6 if family == "breakout_retest" else 4), (_research_start_after or -1) + 1),
+        len(closed),
+    ):
         if family not in {"range_rejection", "breakout_retest"}:
             break
         ref = closed[start - 20 : start]
@@ -213,6 +218,7 @@ def structural(bars, family, direction, context, features, asof, *, core_bars=No
     }.get(context["regime"], "UNCERTAIN")
     result = dict(
         policy=POLICY,
+        setup_interval_ms=last.interval,
         level_policy="prior-20-horizon-bars-v211",
         reference_policy="prior-20-horizon-bars-v211",
         reference_start_ms=reference[0].start,
@@ -492,6 +498,11 @@ def apply(signal, price, now, liquidity=None, minimum_rr=1.5, *, book=None, sett
     if not enabled(signal):
         return
     e = signal.evidence
+    from .research_v212 import capture_initial, execution_change
+    from .research_v212 import enabled as research_enabled
+
+    if settings:
+        capture_initial(signal, book, settings, now)
     if "cost_per_base" in signal.risk:
         e.setdefault(
             "frozen_entry_cost",
@@ -512,6 +523,8 @@ def apply(signal, price, now, liquidity=None, minimum_rr=1.5, *, book=None, sett
         current=current_cost(signal, price, book) if settings else None,
     )
     e["entry_quality"] = q
+    if research_enabled(signal):
+        e["execution_deterioration"] = execution_change(signal, q)
     reasons = list(signal.gates) + list(e.get("frozen_structure", {}).get("reasons", [])) + q["reasons"]
     flow = e.get("flow", {})
     sign = 1 if signal.direction == "LONG" else -1

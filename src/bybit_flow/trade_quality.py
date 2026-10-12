@@ -376,6 +376,31 @@ def research_selectors():
         selectors["liquidity_variant_" + variant] = lambda s, k=variant: str(
             s.get("evidence", {}).get("liquidity_stress", {}).get("variants", {}).get(k, "UNKNOWN")
         )
+    for key, width in (
+        ("initial_executable_net_rr", 0.5),
+        ("current_executable_net_rr", 0.5),
+        ("net_rr_change", 0.25),
+        ("initial_to_current_spread_change_bps", 1),
+        ("elapsed_ms", 60000),
+    ):
+        selectors[key + "_bucket"] = lambda s, k=key, w=width: (
+            str(round(s["evidence"]["execution_deterioration"][k] // w * w, 6))
+            if number(s.get("evidence", {}).get("execution_deterioration", {}).get(k))
+            else "UNKNOWN"
+        )
+    selectors["relative_volume_bucket"] = lambda s: (
+        str(s["evidence"]["relative_volume_research"]["relative_volume"] // 0.5 * 0.5)
+        if number(s.get("evidence", {}).get("relative_volume_research", {}).get("relative_volume"))
+        else "UNKNOWN"
+    )
+    selectors["relative_volume_family_horizon_regime"] = lambda s: " / ".join(
+        (
+            selectors["relative_volume_bucket"](s),
+            str(s.get("family", "UNKNOWN")),
+            str(s.get("horizon_profile", "UNKNOWN")),
+            str(s.get("regime", "UNKNOWN")),
+        )
+    )
     return selectors
 
 

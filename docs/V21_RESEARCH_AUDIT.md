@@ -1,4 +1,49 @@
-# v2.1 / v2.1.1 research and implementation audit
+# v2.1 / v2.1.1 / v2.1.2 research and implementation audit
+
+## v2.1.2 measurement and retention policy
+
+New opportunities carry `research-observations-v212`; old decisions are not
+retroactively annotated. `initial-executable-v1` freezes the first fresh same-venue
+book quote and existing modeled cost reserves, using ask for LONG and bid for
+SHORT. Spread embedded in that price is not charged again. Later
+`execution-deterioration-v1` observations record gross/net RR change, price move
+in known ATR units, spread/cost change and elapsed time. Missing inputs remain
+unknown. These observations add research cohorts, not gates or score weights.
+
+`comparable-session-volume-v1` uses prior completed same-source, symbol,
+timeframe and UTC bucket observations: minimum 3, target 10, maximum 20 samples
+over at most 30 calendar days. Daily bars use earlier completed days. Available
+cached candles are reused; an optional longer fetch uses the existing candle
+adapter and REST limiter, bounded to 1,000 bars per market/timeframe every six hours.
+That fetch never replaces the production candle cache. Auxiliary
+stored reference keys are bounded to 128. Snapshot evidence remains immutable
+even when auxiliary history is evicted. Relative volume never rejects a setup.
+
+`structural-suppression-v1` compares frozen references and actual sequence
+identities. The existing event search and production deduplication remain
+authoritative. A bounded diagnostic search may observe a distinct later sequence
+and record `POTENTIAL_DISTINCT_EVENT`; it does not create a plan or notification.
+The journal retains at most 1,000 observations and aggregates repeated identities.
+
+The earlier broad-scan exception count came from market selection/admission,
+where exceptions were counted without persisted details. New scans record
+operation, market, timeframe/range, exception type, bounded redacted message,
+cause and traceback fingerprint. Forensic decode/chain failures use the same
+durable mechanism. Internal errors are `AUDIT_SOFTWARE_FAULT`, not inferred
+market-data gaps. Old discarded exception details cannot be reconstructed.
+
+`archive_health` is additive durable metadata. Only proven corruption can justify
+corrupt retirement; permission and unknown software failures fail closed.
+Cleanup protects exact active/unresolved intervals, recent tape, writers and
+leases. Replacements verify retained byte hashes/manifests, fsync and close,
+atomically remap retained members and write tombstones/deletion intent, then
+remove the old archive. A crash on either side of the mapping commit preserves
+a readable version. Logical `through_ms` is unchanged by non-prefix pruning.
+
+Cleanup validates canonical per-source trainability and sequence readiness,
+eligible identity digests, registered model hashes and existing dataset/model
+file hashes. A mismatch stops further deletion and persists a failed check.
+See [hypotheses](V211_HYPOTHESES.md) and [ML retention](ML_RESEARCH.md).
 
 ## v2.1.1 maintenance policy (12 October 2026)
 

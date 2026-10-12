@@ -442,6 +442,27 @@ class Recorder:
 
     def flush(self, batch, store=None, ident=None):
         store = store or self.store
+        ident = ident or f"{now_ms()}-{uuid.uuid4().hex[:8]}"
+        key = "writer_batch_v212:recorder"
+        store.put(
+            key,
+            dict(
+                at_ms=now_ms(),
+                id=ident,
+                paths=[
+                    str(store.root / "segments" / (ident + suffix))
+                    for suffix in (".jsonl.gz", ".parquet", ".manifest.json")
+                ],
+            ),
+        )
+        try:
+            self._flush(batch, store, ident)
+        finally:
+            with store.db:
+                store.db.execute("DELETE FROM kv WHERE key=?", (key,))
+
+    def _flush(self, batch, store=None, ident=None):
+        store = store or self.store
         if ident and store.db.execute("SELECT 1 FROM segments WHERE id=?", (ident,)).fetchone():
             return
         flush_started = time.monotonic()

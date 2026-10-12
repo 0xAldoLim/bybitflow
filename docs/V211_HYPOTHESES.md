@@ -1,4 +1,4 @@
-# v2.1.1 hypothesis ledger
+# v2.1.1 / v2.1.2 hypothesis ledger
 
 Predeclared on 12 October 2026 from `817744e`. Every row is **UNPROVEN /
 FORWARD TESTING**. Implementation and unit tests establish definitions, not edge.
@@ -16,6 +16,9 @@ fitted to the small existing sample and no autonomous parameter tuning occurs.
 | H6 RR deterioration | Production separate original/current gross/net RR with frozen/current costs | Current deterioration may explain weak alerts better than score | Reserves misestimate actual execution costs | RR-state cohorts, markouts and 1/1.5/2x modeled-cost stress |
 | H7 Runaway breakout | Research rejected `ACCEPTED_NO_RETEST` offer at four-bar expiry | May quantify missed continuation | A hypothetical late offer differs from an early executable breakout | Frozen rejected-plan outcomes and no-retest cohorts; no chasing card |
 | H8 ID/NR4 | Research inside+NR4, inside-only, NR4-only, expansion states | May improve future regime classification | Quiet illiquidity resembles compression | Compression/relative-volume cohorts after costs; no new compression strategy |
+| H9 Initial executable baseline | Research `initial-executable-v1`, frozen same-venue ask/bid; `execution-deterioration-v1` current comparison | Separate inception economics from later deterioration | Cost reserves differ from actual fills; missing initial quote remains unknown | Initial/current RR buckets, deterioration, spread change, ATR move and delay |
+| H10 Comparable-session volume | Research `comparable-session-volume-v1`; 3–20 prior completed same UTC bucket sessions, at most 30 days | Make short-horizon volume evidence measurable | Small references and weekend/seasonal shifts bias comparison | Volume buckets within family, horizon and regime; causal reference timestamps and sample counts |
+| H11 Structural suppression | Research `structural-suppression-v1`, bounded secondary sequence observation | Determine whether deduplication hides distinct later excursions/retests | Nearby references or sequence changes are mistaken for a new thesis | TRUE_DUPLICATE / POTENTIAL_DISTINCT_EVENT / UNKNOWN; no second production opportunity |
 
 The CORE 24H/6H optional structure variant records past 24 completed 1H bars at
 the scheduled six-hour boundary using the same cached market data. It is a

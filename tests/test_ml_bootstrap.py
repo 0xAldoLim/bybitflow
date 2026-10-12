@@ -424,7 +424,7 @@ async def test_storage_pressure_defers_bootstrap(settings, signal):
     store.close()
 
 
-def test_prune_consumed_slice_preserves_late_commit_and_tail(settings, signal):
+def test_prune_consumed_slice_preserves_late_commit_and_tail(settings, signal, monkeypatch):
     from pathlib import Path
 
     from bybit_flow.retention import prune_recordings
@@ -469,6 +469,9 @@ def test_prune_consumed_slice_preserves_late_commit_and_tail(settings, signal):
             5_000_000,
         ),
     )
+    # Execution rechecks current reachability. Keep the simulated clock consistent
+    # with this valid checkpoint rather than making it years stale at execution.
+    monkeypatch.setattr("bybit_flow.recording_maintenance.now_ms", lambda: 5_000_000)
     result = prune_recordings(store, settings, 5_000_000, force=True)
     assert result["freed_bytes"] > 0
     assert not Path(manifests[0]["raw"]).exists()

@@ -102,6 +102,40 @@ def candidates(
                 level = structure["frozen_reference"]
                 if quality_policy == quality_v211.POLICY and structural_observations is not None:
                     structural_observations.append(dict(family=family, direction=direction, **structure))
+                if (
+                    quality_policy == quality_v211.POLICY
+                    and structural_observations is not None
+                    and family in {"range_rejection", "breakout_retest"}
+                ):
+                    # Observe hidden later anchors; the original production selection is unchanged.
+                    anchor = next(
+                        (i for i, b in enumerate(setup_bars) if b.start == structure.get("event_start_ms")),
+                        None,
+                    )
+                    if anchor is not None:
+                        later = quality_v211.structural(
+                            setup_bars,
+                            family,
+                            direction,
+                            context_features,
+                            setup_features,
+                            asof,
+                            _research_start_after=anchor,
+                        )
+                        if (
+                            later.get("candidate_event")
+                            and later.get("structure_event_id") != structure.get("structure_event_id")
+                            and not later.get("reasons")
+                        ):
+                            structural_observations.append(
+                                dict(
+                                    family=family,
+                                    direction=direction,
+                                    diagnostic_suppression=True,
+                                    existing=structure,
+                                    observed=later,
+                                )
+                            )
                 if quality_policy == quality_v211.POLICY and not structure["candidate_event"]:
                     continue
             repaired_breakout = bool(
@@ -246,6 +280,8 @@ def candidates(
                 )
             )
     for signal in plans:
+        if quality_policy == quality_v211.POLICY:
+            signal.evidence["research_instrumentation"] = "research-observations-v212"
         if quality_policy:
             signal.evidence["production_policies"]["trade_quality"] = quality_module.POLICY
             quality_module.counterfactual(signal, signal.evidence["frozen_structure"]["reasons"], asof)

@@ -1,9 +1,13 @@
-"""Operator diagnostics. Secret values and exception messages never enter output."""
+"""Operator checks and bounded, redacted failure metadata; no secret values."""
 
 import asyncio
+import hashlib
 import json
+import re
 import shutil
 import tempfile
+import traceback
+import zipfile
 from importlib.metadata import version
 from statistics import median
 
@@ -305,3 +309,84 @@ async def discord_test(settings, store, transport=None):
         "at_ms": now,
         "note": "Confirm the message in Discord; ambiguous attempts are not retried",
     }
+
+
+def cause_code(exc):
+    text = str(exc).lower()
+    if isinstance(exc, PermissionError):
+        return "PERMISSION_ERROR"
+    if isinstance(exc, zipfile.BadZipFile):
+        return "ARCHIVE_BAD_ZIP"
+    if isinstance(exc, FileNotFoundError):
+        return "FILE_MISSING"
+    if isinstance(exc, json.JSONDecodeError):
+        return "JSON_DECODE_ERROR"
+    if isinstance(exc, (EOFError,)) or "gzip" in text or "end-of-stream" in text:
+        return "RAW_GZIP_TRUNCATED"
+    if isinstance(exc, KeyError) and ("archive" in text or "directory" in text):
+        return "ARCHIVE_MEMBER_MISSING"
+    for words, code in (
+        (("hash", "checksum", "integrity mismatch"), "RAW_HASH_MISMATCH"),
+        (("manifest",), "MANIFEST_MISMATCH"),
+        (("row-count", "row count"), "RAW_ROW_COUNT_MISMATCH"),
+        (("bounds",), "RAW_BOUNDS_MISMATCH"),
+        (("non-monotonic",), "NON_MONOTONIC_RECEIPT"),
+        (("chain",), "SEGMENT_CHAIN_GAP"),
+        (("budget",), "FORENSIC_BUDGET_EXHAUSTED"),
+    ):
+        if any(word in text for word in words):
+            return code
+    if type(exc).__name__ in {"HTTPStatusError", "ConnectError", "ReadTimeout", "ConnectTimeout"}:
+        return "PUBLIC_API_ERROR"
+    return "UNKNOWN_EXCEPTION"
+
+
+def record_failure(store, exc, *, scan_id, phase, operation, **context):
+    message = re.sub(r"https?://\S+", "[URL redacted]", str(exc))[:500]
+    stack = "".join(traceback.format_tb(exc.__traceback__))
+    row = dict(
+        scan_id=scan_id,
+        at_ms=now_ms(),
+        phase=phase,
+        operation=operation,
+        exception_type=type(exc).__name__,
+        exception_message=message,
+        cause_code=cause_code(exc),
+        traceback_fingerprint=hashlib.sha256(stack.encode()).hexdigest(),
+        retryable=cause_code(exc) == "PUBLIC_API_ERROR",
+        disposition="FAIL_CLOSED",
+        **context,
+    )
+    rows = store.get("failure_causes_v212", [])
+    rows.append(row)
+    store.put("failure_causes_v212", rows[-1000:])
+    runs = store.get("failure_runs_v212", {})
+    run = runs.setdefault(
+        scan_id,
+        dict(
+            total=0,
+            with_durable_causes=0,
+            without_durable_causes=0,
+            causes={},
+            types={},
+            sources={},
+            archives={},
+        ),
+    )
+    run["total"] += 1
+    run["with_durable_causes"] += 1
+    for field, value in (
+        ("causes", row["cause_code"]),
+        ("types", row["exception_type"]),
+        ("sources", context.get("source", "UNKNOWN")),
+        ("archives", context.get("archive", "NONE")),
+    ):
+        run[field][value] = run[field].get(value, 0) + 1
+    store.put("failure_runs_v212", dict(list(runs.items())[-100:]))
+    return row
+
+
+def failure_summary(store, scan_id):
+    return store.get("failure_runs_v212", {}).get(
+        scan_id, dict(total=0, with_durable_causes=0, without_durable_causes=0)
+    )
