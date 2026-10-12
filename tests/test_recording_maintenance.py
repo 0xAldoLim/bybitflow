@@ -246,6 +246,26 @@ def test_scheduled_and_manual_cleanup_cannot_overlap(settings, monkeypatch):
     store.close()
 
 
+def test_stale_inventory_cannot_undo_archive_retirement(settings):
+    from bybit_flow.recording_maintenance import migrate, save_health
+
+    store = Store(settings.data_dir)
+    migrate(store)
+    stale = dict(archive="old.zip", disposition="ELIGIBLE_FOR_RETIREMENT", deleted_ms=None)
+    save_health(store, stale | dict(disposition="RETIREMENT_COMMITTED"))
+    save_health(store, stale)
+    assert (
+        json.loads(store.db.execute("SELECT payload FROM archive_health").fetchone()[0])["disposition"]
+        == "RETIREMENT_COMMITTED"
+    )
+    save_health(store, stale | dict(disposition="RETIRED_CORRUPT", deleted_ms=1000))
+    save_health(store, stale)
+    assert (
+        json.loads(store.db.execute("SELECT payload FROM archive_health").fetchone()[0])["deleted_ms"] == 1000
+    )
+    store.close()
+
+
 def test_orphan_grace_writer_and_unknown_fail_closed(settings):
     store = Store(settings.data_dir)
     root = store.root / "segments"

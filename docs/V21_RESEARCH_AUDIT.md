@@ -44,6 +44,8 @@ A renewable ten-minute run claim serializes scheduled and manual destructive
 cleanup before eligibility capture. Expired or replaced ownership stops further
 deletion. Each run persists its own result report alongside pre/post inventory,
 so concurrent triggers cannot split freed-byte counters or verification state.
+Archive disposition metadata only advances: stale inventory writes cannot undo
+committed retirement or a completed deletion record.
 Live broad selection identified three listings with fewer than the existing
 60 completed candles required by horizon features. They remain rejected with
 `CANDLE_HISTORY_INSUFFICIENT`; the history requirement is unchanged.

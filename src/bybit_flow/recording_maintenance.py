@@ -197,6 +197,19 @@ def archive_health(store, path, members, run_id):
 
 def save_health(store, health):
     with store.db:
+        row = store.db.execute(
+            "SELECT payload FROM archive_health WHERE archive=?", (health["archive"],)
+        ).fetchone()
+        previous = json.loads(row[0]) if row else {}
+        if previous.get("deleted_ms") and not health.get("deleted_ms"):
+            return  # A stale planning observer cannot resurrect retired metadata.
+        if previous.get("disposition") == "RETIREMENT_COMMITTED" and health.get("disposition") not in {
+            "RETIREMENT_COMMITTED",
+            "REBUILT",
+            "RETIRED_CORRUPT",
+            "RETIRED_MATERIALIZED",
+        }:
+            return
         store.db.execute(
             "INSERT OR REPLACE INTO archive_health VALUES(?,?)", (health["archive"], json.dumps(health))
         )
