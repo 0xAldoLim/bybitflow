@@ -247,9 +247,16 @@ def test_audit_projection_keeps_decision_evidence_and_original_snapshot(settings
     try:
         now = time.time_ns() // 1000000
         ident = FeatureStore(store).capture(signal, now, "decision")
+        snapshot = json.loads(
+            store.db.execute("SELECT payload FROM ml_snapshots WHERE id=?", (ident,)).fetchone()[0]
+        )
+        # Duplicated feature diagnostics must not consume the bounded audit payload.
+        snapshot["feature_metadata"] = {"unused_replay": "x" * (33 * 1024 * 1024)}
+        store.db.execute("UPDATE ml_snapshots SET payload=? WHERE id=?", (json.dumps(snapshot), ident))
         original = store.db.execute("SELECT payload FROM ml_snapshots WHERE id=?", (ident,)).fetchone()[0]
         rows, truncated = load_rows(store.db, now + 1)
         assert not truncated and len(rows) == 1
+        assert "feature_metadata" not in rows[0]["snapshot"]
         evidence = rows[0]["snapshot"]["signal"]["evidence"]
         assert evidence["flow"]["delta_pct"] == 30 and "profile" not in evidence["flow"]
         assert evidence["v2"]["mechanism"]["score"] == 0

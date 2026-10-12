@@ -103,7 +103,7 @@ def load_rows(db, now, days=30, source=None, horizon=None, family=None, limit=50
     payload_bytes = 0
     truncated = False
     for ident, raw, current, status, message in db.execute(
-        "SELECT m.id,json_remove(m.payload,'$.values','$.sequence',"
+        "SELECT m.id,json_remove(m.payload,'$.values','$.sequence','$.feature_metadata',"
         "'$.signal.evidence.flow.profile','$.signal.evidence.flow.cvd_path',"
         "'$.signal.evidence.volume_profile.raw_volume_profile',"
         "'$.signal.evidence.volume_profile.effective_volume_profile',"

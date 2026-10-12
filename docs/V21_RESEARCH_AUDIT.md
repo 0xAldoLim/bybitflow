@@ -205,3 +205,8 @@ before all local decisions were included. The read query now projects out unused
 footprint/profile arrays and ML vectors while retaining causal diagnostic fields.
 Original stored snapshots remain byte-for-byte unchanged. Truncation is still
 reported if the compact decision bound is reached.
+
+The live audit also projects out duplicated feature metadata that no audit
+calculation consumes. An oversized-metadata regression verifies the decision's
+causal signal evidence remains readable under the byte limit and the original
+stored snapshot is unchanged.
