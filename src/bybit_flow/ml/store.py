@@ -61,6 +61,9 @@ def migrate(db):
     if "scope" not in {r[1] for r in db.execute("PRAGMA table_info(ml_holdouts)")}:
         db.execute("ALTER TABLE ml_holdouts ADD COLUMN scope TEXT NOT NULL DEFAULT 'legacy-primary'")
         db.commit()
+    from ..query_projections import migrate as migrate_projection
+
+    migrate_projection(db, "retention")
 
 
 class FeatureStore:

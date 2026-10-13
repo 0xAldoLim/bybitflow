@@ -32,6 +32,11 @@ PROVEN_CORRUPTION = {
     "RAW_GZIP_TRUNCATED",
     "JSON_DECODE_ERROR",
 }
+FINALIZED_QUERY = (
+    "SELECT s.decision_ms,coalesce(l.exit_ms,l.available_ms),l.complete,l.classification "
+    "FROM ml_snapshots s JOIN ml_label_retention l "
+    "ON l.snapshot_id=s.id AND l.policy='prints-v1' WHERE s.stage='decision'"
+)
 
 
 def migrate(store):
@@ -318,12 +323,7 @@ def planning(store, settings, now=None, force=False, max_reclaim_bytes=None):
     usage = directory_bytes(store.root)
     budget = settings.max_storage_gb * 1e9
     floor = 15 if usage >= 0.85 * budget else getattr(settings, "ml_raw_retention_minutes", 60)
-    finalized = [
-        (r[0] - 900000, max(r[0], r[1]), r[2], r[3])
-        for r in store.db.execute(
-            "SELECT s.decision_ms,coalesce(json_extract(l.payload,'$.exit_ms'),l.available_ms),json_extract(l.payload,'$.complete'),json_extract(l.payload,'$.classification') FROM ml_snapshots s JOIN ml_labels l ON l.snapshot_id=s.id AND l.policy='prints-v1' WHERE s.stage='decision'"
-        )
-    ]
+    finalized = [(r[0] - 900000, max(r[0], r[1]), r[2], r[3]) for r in store.db.execute(FINALIZED_QUERY)]
     cutoff = now - floor * 60000
     ranges = protection_ranges(store, now)
     items = []

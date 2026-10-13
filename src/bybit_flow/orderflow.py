@@ -132,8 +132,10 @@ class Book:
         mid = (bid + ask) / 2
         depth = {}
         for bps in (5, 10, 25):
-            b = sum(p * q for p, q in self.bids.items() if p >= mid * (1 - D(bps) / 10000))
-            a = sum(p * q for p, q in self.asks.items() if p <= mid * (1 + D(bps) / 10000))
+            bid_min = mid * (1 - D(bps) / 10000)
+            ask_max = mid * (1 + D(bps) / 10000)
+            b = sum(p * q for p, q in self.bids.items() if p >= bid_min)
+            a = sum(p * q for p, q in self.asks.items() if p <= ask_max)
             depth[str(bps)] = dict(
                 bid=float(b), ask=float(a), imbalance=float((b - a) / (b + a)) if b + a else 0
             )

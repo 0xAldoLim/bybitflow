@@ -16,8 +16,11 @@ TERMINAL = {"EXPIRED", "INVALIDATED", "RESOLVED"}
 
 
 def migrate(store):
+    from .query_projections import migrate as migrate_projection
+
     db = store.db
     if store.get("horizons_migration_complete"):
+        migrate_projection(db, "research")
         return
     # SQLite backup, not a copy of a live WAL database. Never remove previous backups.
     target = store.root / "before-horizons-v1.sqlite"
@@ -42,6 +45,7 @@ def migrate(store):
                 (ident, payload, hashlib.sha256(payload.encode()).hexdigest()),
             )
         db.execute("INSERT OR REPLACE INTO kv VALUES('horizons_migration_complete','true')")
+    migrate_projection(db, "research")
 
 
 def preserve_origin(store, signal):
@@ -321,7 +325,7 @@ def refresh_recommendations(root, asof):
     store = Store(root)
     try:
         families = {}
-        query = "SELECT json_extract(payload,'$.coverage_complete'), json_extract(payload,'$.signal.family'), json_extract(payload,'$.extended_same_rules_outcome'), json_extract(payload,'$.best_observed_horizon') FROM research_labels WHERE available_ms<? ORDER BY available_ms DESC LIMIT 10000"
+        query = "SELECT coverage_complete,family,outcome,horizon FROM research_label_summaries WHERE available_ms<? ORDER BY available_ms DESC,source_rowid LIMIT 10000"
         for complete, family, outcome, horizon in store.db.execute(query, (asof,)).fetchall():
             if not complete:
                 continue
