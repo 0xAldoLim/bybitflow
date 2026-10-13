@@ -62,15 +62,15 @@ def capture_initial(signal, book, settings, now, instrument=None, funding_rate=N
 
 
 def execution_change(signal, quality):
-    initial = signal.evidence.get("initial_executable_quote", {})
-    current = quality.get("current_execution_cost_estimate", {})
+    initial = signal.evidence.get("initial_executable_quote") or {}
+    current = quality.get("current_execution_cost_estimate") or {}
     a, b = initial.get("net_rr"), quality.get("cost_adjusted_rr_now")
     delta = b - a if number(a) and number(b) else None
     atr = (
-        signal.evidence.get("stop_plan", {}).get("setup_atr")
-        or signal.evidence.get("execution_features", {}).get("atr")
-        or signal.evidence.get("h1", {}).get("atr")
-        or signal.evidence.get("m15", {}).get("atr")
+        (signal.evidence.get("stop_plan") or {}).get("setup_atr")
+        or (signal.evidence.get("execution_features") or {}).get("atr")
+        or (signal.evidence.get("h1") or {}).get("atr")
+        or (signal.evidence.get("m15") or {}).get("atr")
     )
 
     def difference(new, old):
@@ -99,7 +99,7 @@ def execution_change(signal, quality):
         if price_move is not None and number(atr) and atr > 0
         else None,
         initial_to_current_spread_change_bps=difference(
-            quality.get("quote_provenance", {}).get("spread_bps"), initial.get("spread_bps")
+            (quality.get("quote_provenance") or {}).get("spread_bps"), initial.get("spread_bps")
         ),
         initial_to_current_cost_change_r=cost_change / risk if cost_change is not None and risk > 0 else None,
         elapsed_ms=quality["available_ms"] - initial["available_ms"] if initial else None,

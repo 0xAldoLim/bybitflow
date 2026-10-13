@@ -80,6 +80,27 @@ def observations(interval, days=31, bucket=0):
     return [Candle(i * 86400000 + bucket, interval, 100, 101, 99, 100, 10 + i, 1000) for i in range(days)]
 
 
+@pytest.mark.parametrize(
+    "field", ["initial_executable_quote", "stop_plan", "execution_features", "h1", "m15"]
+)
+def test_null_optional_research_mapping_is_missing_evidence(signal, field):
+    quality = dict(available_ms=2000)
+    baseline = execution_change(signal, quality)
+    signal.evidence[field] = None
+    before = signal.model_dump()
+    assert execution_change(signal, quality) == baseline
+    assert signal.model_dump() == before
+    assert baseline["state"] == "EXECUTION_UNAVAILABLE" and baseline["research_only"]
+
+
+@pytest.mark.parametrize("field", ["current_execution_cost_estimate", "quote_provenance"])
+def test_null_optional_quote_mapping_does_not_block_research(signal, field):
+    quality = dict(available_ms=2000)
+    baseline = execution_change(signal, quality)
+    quality[field] = None
+    assert execution_change(signal, quality) == baseline
+
+
 @pytest.mark.parametrize("interval", [900000, 3600000, 14400000, 86400000])
 def test_relative_volume_sessions_causal_bounded(settings, interval):
     store = Store(settings.data_dir)

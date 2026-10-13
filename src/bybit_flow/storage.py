@@ -253,6 +253,34 @@ class Store:
             for r in self.db.execute("SELECT payload FROM signals ORDER BY created_ms DESC LIMIT ?", (limit,))
         ]
 
+    def signal_summaries(self, limit=200):
+        """Dashboard list fields; complete evidence remains in signal detail."""
+        fields = (
+            "id",
+            "symbol",
+            "direction",
+            "family",
+            "horizon_profile",
+            "quality",
+            "final_tier",
+            "state",
+            "created_ms",
+        )
+        columns = ",".join(f"json_extract(payload,'$.{field}')" for field in fields)
+        rows = self.db.execute(
+            "SELECT " + columns + ",json_extract(payload,'$.coverage'),"
+            "json_extract(payload,'$.evidence.expiry_mark') FROM signals "
+            "ORDER BY created_ms DESC LIMIT ?",
+            (limit,),
+        )
+        result = []
+        for row in rows:
+            summary = dict(zip(fields, row[: len(fields)]))
+            summary["coverage"] = json.loads(row[-2]) if row[-2] else {}
+            summary["evidence"] = {"expiry_mark": json.loads(row[-1])} if row[-1] else {}
+            result.append(summary)
+        return result
+
     def active_signals(self, limit=-1):
         return [
             json.loads(r[0])

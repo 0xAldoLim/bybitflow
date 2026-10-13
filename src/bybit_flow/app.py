@@ -244,11 +244,14 @@ def create_app(settings=None):
         from .thesis_health import summary as health_summary
 
         store, rec, scanner = request.app.state.store, request.app.state.recorder, request.app.state.scanner
+        signals = await asyncio.to_thread(
+            read_report, settings.data_dir, lambda reader: reader.signal_summaries()
+        )
         return dict(
             scanner=scanner.status,
             exchange=scanner.exchange,
             watchlist=store.get("watchlist", []),
-            signals=store.signals(),
+            signals=signals,
             health=dict(
                 recorder=rec.healthy,
                 recorder_reason=rec.reason,
