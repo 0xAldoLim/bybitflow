@@ -773,6 +773,19 @@ class Scanner:
             available,
         )
 
+    def record_confirmation_book_gap(self, signal, now, start, end):
+        from .coverage import record as coverage_record
+        from .funnel import emit
+
+        signal.coverage.update(
+            book_fresh=False,
+            trade_window_complete=False,
+            reasons=["order book unavailable during confirmation"],
+        )
+        coverage_record(self, signal, now, ["COVERAGE_BOOK_STALE"], start, end)
+        self.store.signal(signal, signal.coverage["readiness"])
+        emit(self.store, "coverage_incomplete", now, signal=signal, reason="COVERAGE_BOOK_STALE")
+
     def record_quotes(self, body, receipt):
         oi_scope = set(
             list(
@@ -955,9 +968,22 @@ class Scanner:
                 self.status.pop(key, None)
             self.status.update(state="scanning", started_ms=scan_started, at_ms=scan_started)
             self.store.put("scanner", self.status)
+            clock_started = now_ms()
             body = await self.api.get("time")
             asof = int(body["time"])
-            if abs(asof - now_ms()) > 2000:
+            clock_received = now_ms()
+            self.store.put(
+                "clock_health",
+                dict(
+                    source=self.exchange,
+                    at_ms=clock_received,
+                    skew_ms=(clock_started + clock_received) // 2 - asof,
+                    round_trip_ms=clock_received - clock_started,
+                    receipt_offset_ms=clock_received - asof,
+                    method="request midpoint minus exchange time; warning only",
+                ),
+            )
+            if abs(asof - clock_received) > 2000:
                 raise ValueError("Local/exchange clock skew exceeds two seconds")
             metadata_cache = getattr(self, "instrument_cache", None)
             if metadata_cache and 0 <= asof - metadata_cache[0] < 1_800_000:
@@ -1895,17 +1921,9 @@ class Scanner:
             if not bf.get("available"):
                 # A stream reset can occur while footprint work yields to its
                 # worker. Missing depth is a coverage gap, not a spread value.
-                from .coverage import record as coverage_record
-
-                s.coverage.update(
-                    book_fresh=False,
-                    trade_window_complete=False,
-                    reasons=["order book unavailable during confirmation"],
-                )
-                coverage_record(self, s, now, ["COVERAGE_BOOK_STALE"], start, end)
-                self.store.signal(s, s.coverage["readiness"])
-                emit(self.store, "coverage_incomplete", now, signal=s, reason="COVERAGE_BOOK_STALE")
+                self.record_confirmation_book_gap(s, now, start, end)
                 continue
+            book_epoch = book.ofi_epoch
             from .evidence import flow_response
 
             prior_trades = tape.window(start - window_ms, start)
@@ -1929,6 +1947,12 @@ class Scanner:
                 quality_history,
                 self.store.get("cross:" + s.symbol, {}),
             )
+            # Flow response/quality workers also yield. A reconnect can clear
+            # the live book after the earlier footprint check, or replace its
+            # epoch before execution pricing. Retry without freezing a decision.
+            if not book.valid or not book.bids or not book.asks or book.ofi_epoch != book_epoch:
+                self.record_confirmation_book_gap(s, now, start, end)
+                continue
             flow["quality"] = quality
             s.evidence["flow_quality"] = quality
             if ":flow-quality-v1" not in s.version:

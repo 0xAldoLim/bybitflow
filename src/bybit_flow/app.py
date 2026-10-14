@@ -241,6 +241,7 @@ def create_app(settings=None):
 
     @app.get("/api/overview")
     async def overview(request: Request):
+        from .operator_health import warnings
         from .thesis_health import summary as health_summary
 
         store, rec, scanner = request.app.state.store, request.app.state.recorder, request.app.state.scanner
@@ -248,6 +249,7 @@ def create_app(settings=None):
             read_report, settings.data_dir, lambda reader: reader.signal_summaries()
         )
         return dict(
+            warnings=warnings(settings, store, scanner, rec, now_ms()),
             scanner=scanner.status,
             exchange=scanner.exchange,
             watchlist=store.get("watchlist", []),

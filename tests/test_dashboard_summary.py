@@ -34,6 +34,7 @@ async def test_overview_keeps_list_states_and_full_evidence_remains_in_detail(se
     overview = next(route.endpoint for route in app.routes if route.path == "/api/overview")
     detail = next(route.endpoint for route in app.routes if route.path == "/api/signals/{ident}")
     response = await overview(request)
+    assert "warnings" in response
     row = response["signals"][0]
     for field in (
         "id",

@@ -163,6 +163,11 @@ async function render() {
     if (gen !== generation) return;
     $("#status").textContent = data.scanner.state;
     $("#clock").textContent = utc(data.at_ms);
+    const warnings = data.warnings || [];
+    $("#runtime-warnings").hidden = !warnings.length;
+    $("#runtime-warnings").innerHTML = warnings.map(w =>
+      `<article class="runtime-warning ${w.severity === "error" ? "runtime-error" : ""}"><strong>${escape(w.title)}</strong><p>${escape(w.message)}</p><p class="warning-action">${escape(w.action)}</p></article>`
+    ).join("");
     document.querySelectorAll("nav a").forEach((a) => a.classList.toggle("active", a.hash === "#" + page));
     const titles = {
       overview: "Market overview",

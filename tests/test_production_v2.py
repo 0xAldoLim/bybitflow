@@ -304,7 +304,7 @@ def test_existing_plan_unchanged_by_new_generation(signal, instrument):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("schema", ["candidate-v10", "candidate-v20"])
-@pytest.mark.parametrize("reset_during_compute", [False, True])
+@pytest.mark.parametrize("reset_during_compute", [None, "footprint", "flow_quality"])
 async def test_scanner_retries_then_alerts_without_ml_champion(
     settings, signal, instrument, monkeypatch, schema, reset_during_compute
 ):
@@ -338,6 +338,8 @@ async def test_scanner_retries_then_alerts_without_ml_champion(
         context_features=candle_features(bars, end),
         setup_features=candle_features(bars, end),
     )
+    if reset_during_compute == "flow_quality":
+        signal.evidence["production_policies"] = {"trade_quality": "trade-validity-v21.1"}
     # A reclaim through the frozen level satisfies response independently of candle color.
     bars[-1] = Candle(end - 60000, 60000, 99.8, 101, 98.9, 100, 10, 1000)
     book = Book()
@@ -411,9 +413,13 @@ async def test_scanner_retries_then_alerts_without_ml_champion(
 
         original_to_thread = asyncio.to_thread
 
+        from bybit_flow.flow_quality import assess as assess_flow_quality
+
+        reset_callback = footprint if reset_during_compute == "footprint" else assess_flow_quality
+
         async def reset_book_after_footprint(callback, *args, **kwargs):
             result = await original_to_thread(callback, *args, **kwargs)
-            if callback is footprint:
+            if callback is reset_callback:
                 book.reset()
             return result
 

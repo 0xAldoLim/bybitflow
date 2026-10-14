@@ -198,6 +198,19 @@ eventually require capacity planning; retention is not unlimited storage.
 
 ### Clock skew or future timestamps
 
+Operational warnings appear above the current page on every dashboard tab.
+They identify clock drift, interrupted scans or quotes, stale live feeds,
+spread-history gaps, recording/storage pressure, confirmation errors and
+Discord delivery problems, with a recovery action for each condition.
+Warnings refresh with the dashboard and clear when the measured condition
+recovers; they do not relax signal requirements.
+
+A clock warning starts at one second of measured drift, before the scanner's
+two-second hard stop. Some quote freshness checks are stricter than that hard
+stop, so a running scanner does not by itself establish a synchronized clock.
+After correcting the clock or a network outage, spread history may still need
+fresh observations before affected markets become eligible again.
+
 1. Open Windows **Settings → Time & language → Date & time**.
 2. Enable **Set time automatically**, select the correct time zone, and click
    **Sync now** under clock synchronization.
