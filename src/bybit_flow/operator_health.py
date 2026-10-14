@@ -33,9 +33,18 @@ def warnings(settings, store, scanner, recorder, now):
         clock = {}
     if not clock:
         probe = store.get("probe:" + scanner.exchange, {})
-        clock = dict(at_ms=probe.get("at_ms"), skew_ms=probe.get("clock_skew_ms"))
+        clock = dict(
+            at_ms=probe.get("at_ms"),
+            skew_ms=probe.get("clock_skew_ms"),
+            round_trip_ms=probe.get("rest_latency_ms", 0),
+        )
     age = now - (clock.get("at_ms") or 0)
     skew = clock.get("skew_ms")
+    round_trip = clock.get("round_trip_ms") or 0
+    # Exchange time may be generated anywhere within the request interval,
+    # including after waiting for the shared REST limiter. A slow request
+    # cannot establish drift merely from its midpoint estimate.
+    minimum_drift = max(0, abs(skew) - max(0, round_trip) / 2) if isinstance(skew, (int, float)) else 0
     if settings.scan_enabled and (
         not isinstance(skew, (int, float)) or not 0 <= age <= max(360_000, settings.scan_seconds * 2000)
     ):
@@ -45,14 +54,22 @@ def warnings(settings, store, scanner, recorder, now):
             "There is no recent exchange clock measurement.",
             "Check Exchange health. Restore exchange access before relying on signal freshness.",
         )
-    elif isinstance(skew, (int, float)) and abs(skew) >= 1000:
+    elif minimum_drift >= 1000:
         direction = "ahead of" if skew > 0 else "behind"
         add(
             "CLOCK_DRIFT",
             "Clock synchronization needed",
-            f"The system clock is about {abs(skew) / 1000:.2f} seconds {direction} the exchange. Clock drift can block fresh market data.",
+            f"The system clock is at least {minimum_drift / 1000:.2f} seconds {direction} the exchange. Clock drift can block fresh market data.",
             "Windows Settings → Time & language → Date & time → Set time automatically → Sync now. If drift remains, check Docker time.",
             severity="error",
+            at_ms=clock.get("at_ms"),
+        )
+    elif isinstance(skew, (int, float)) and abs(skew) >= 1000:
+        add(
+            "CLOCK_CHECK_DELAYED",
+            "Clock check delayed",
+            "The exchange time request was too slow to distinguish clock drift from request delay.",
+            "The next scan repeats the check. Check Exchange health if response delays persist; this measurement does not establish that the clock needs synchronization.",
             at_ms=clock.get("at_ms"),
         )
 

@@ -49,6 +49,22 @@ def test_old_or_other_source_clock_is_not_reported_as_synchronized(settings, clo
         store.close()
 
 
+@pytest.mark.parametrize(
+    "skew,round_trip,expected", [(-1732, 3947, "CLOCK_CHECK_DELAYED"), (-4000, 4000, "CLOCK_DRIFT")]
+)
+def test_queued_request_is_not_misidentified_as_clock_drift(settings, skew, round_trip, expected):
+    settings, store, scanner, recorder, now = context(settings)
+    try:
+        store.put("clock_health", dict(source="binance", at_ms=now, skew_ms=skew, round_trip_ms=round_trip))
+        result = warnings(settings, store, scanner, recorder, now)
+        assert [row["code"] for row in result] == [expected]
+        if expected == "CLOCK_CHECK_DELAYED":
+            assert result[0]["severity"] == "warning"
+            assert "Sync now" not in result[0]["action"]
+    finally:
+        store.close()
+
+
 def test_runtime_fault_warnings_clear_on_actual_recovery_without_changing_state(settings):
     settings, store, scanner, recorder, now = context(settings)
     try:
