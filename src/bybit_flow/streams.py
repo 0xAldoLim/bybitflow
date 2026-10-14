@@ -40,8 +40,10 @@ class Streams:
             )
         ]
 
-    async def select(self, symbols):
+    async def select(self, symbols, *, retain_selected=False):
         async with self.selection_lock:
+            if retain_selected:
+                symbols = list(self.selected) + list(symbols)
             await self._select(symbols)
 
     async def _select(self, symbols):

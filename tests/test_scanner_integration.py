@@ -90,7 +90,7 @@ async def test_full_rest_scan_to_ranked_persistent_watchlist(settings, instrumen
     scanner.api = Bybit(settings, recorder, httpx.MockTransport(handle))
     selected = []
 
-    async def select(symbols):
+    async def select(symbols, **kwargs):
         selected.extend(symbols)
 
     scanner.streams.select = select

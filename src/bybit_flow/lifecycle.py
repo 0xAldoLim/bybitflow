@@ -175,7 +175,7 @@ async def bootstrap(scanner):
         )
     scanner.streams.required_symbols = set(scanner.pending_symbols())
     scanner.recorder.critical_symbols = {s["symbol"] for s in native} | {"BTCUSDT", "ETHUSDT"}
-    await scanner.streams.select(scanner.pending_symbols())
+    await scanner.streams.select(scanner.pending_symbols(), retain_selected=True)
     if getattr(scanner, "cross_venue", None):
         await scanner.cross_venue.restore_required()
     for payload in native:
@@ -200,7 +200,7 @@ async def tick(scanner, now):
     )
     scanner.streams.required_symbols = required
     scanner.recorder.critical_symbols = {s.symbol for s in active} | {"BTCUSDT", "ETHUSDT"}
-    await scanner.streams.select(list(required) + list(scanner.streams.selected))
+    await scanner.streams.select(list(required), retain_selected=True)
     if getattr(scanner, "cross_venue", None):
         await scanner.cross_venue.restore_required()
     ready = pending = unavailable = stale = 0

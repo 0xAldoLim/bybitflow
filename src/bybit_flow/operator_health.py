@@ -136,6 +136,24 @@ def warnings(settings, store, scanner, recorder, now):
         )
 
     selected = runtime.get("selected", []) if runtime.get("source") == scanner.exchange else []
+    desired = set(scanner.status.get("deep_symbols", []))
+    if (
+        settings.scan_enabled
+        and desired
+        and runtime.get("source") == scanner.exchange
+        and 0 <= now - runtime.get("at_ms", 0) <= 60_000
+        and now - scanner.status.get("at_ms", now) >= 120_000
+        and len(selected) < min(len(desired), settings.deep_symbols)
+        and desired - set(selected)
+    ):
+        add(
+            "SUBSCRIPTIONS_MISSING",
+            "Market subscriptions incomplete",
+            f"{len(desired - set(selected))} selected markets are missing from the live subscription list. New setups in those markets cannot be confirmed.",
+            "Check Data health and service logs. The next market scan retries selection; active setup plans remain independently monitored.",
+            severity="error",
+            at_ms=runtime.get("at_ms"),
+        )
     missing = 0
     for symbol in selected:
         key = (

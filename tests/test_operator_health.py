@@ -115,3 +115,24 @@ def test_spread_warning_requires_actual_gaps_and_clears_with_valid_distinct_quot
         assert warnings(settings, store, scanner, recorder, now) == []
     finally:
         store.close()
+
+
+def test_claimed_selection_with_missing_live_subscriptions_is_visible(settings):
+    settings, store, scanner, recorder, now = context(settings)
+    try:
+        scanner.status.update(deep_symbols=["BTCUSDT", "ETHUSDT"], at_ms=now - 180_000)
+        store.put("runtime_health", dict(source="binance", at_ms=now, selected=["BTCUSDT"]))
+        codes = {row["code"] for row in warnings(settings, store, scanner, recorder, now)}
+        assert "SUBSCRIPTIONS_MISSING" in codes
+        store.put("runtime_health", dict(source="binance", at_ms=now, selected=["BTCUSDT", "ETHUSDT"]))
+        assert "SUBSCRIPTIONS_MISSING" not in {
+            row["code"] for row in warnings(settings, store, scanner, recorder, now)
+        }
+        # Active lifecycle requirements may legitimately replace an optional
+        # scan market at capacity; that is not a lost-subscription episode.
+        store.put("runtime_health", dict(source="binance", at_ms=now, selected=["BTCUSDT", "ACTIVEUSDT"]))
+        assert "SUBSCRIPTIONS_MISSING" not in {
+            row["code"] for row in warnings(settings, store, scanner, recorder, now)
+        }
+    finally:
+        store.close()

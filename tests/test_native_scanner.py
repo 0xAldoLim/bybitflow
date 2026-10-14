@@ -147,7 +147,7 @@ async def test_native_rest_to_persistent_watchlist(settings, venue):
     scanner.streams.api = scanner.api
     selected = []
 
-    async def select(symbols):
+    async def select(symbols, **kwargs):
         selected.extend(symbols)
 
     scanner.streams.select = select

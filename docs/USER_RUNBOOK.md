@@ -200,7 +200,7 @@ eventually require capacity planning; retention is not unlimited storage.
 
 Operational warnings appear above the current page on every dashboard tab.
 They identify clock drift, interrupted scans or quotes, stale live feeds,
-spread-history gaps, recording/storage pressure, confirmation errors and
+spread-history gaps, missing market subscriptions, recording/storage pressure, confirmation errors and
 Discord delivery problems, with a recovery action for each condition.
 Warnings refresh with the dashboard and clear when the measured condition
 recovers; they do not relax signal requirements.

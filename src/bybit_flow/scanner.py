@@ -897,7 +897,7 @@ class Scanner:
                     # Recover current source first. Active plans never change venue.
                     previous = self.exchange
                     self.streams.required_symbols = set(self.pending_symbols())
-                    await self.streams.select(list(self.streams.selected) + self.pending_symbols())
+                    await self.streams.select(self.pending_symbols(), retain_selected=True)
                     if self.settings.market_source in {"auto", "multi"}:
                         self.source_ready = False
                         try:
@@ -1083,7 +1083,7 @@ class Scanner:
                     )
                     verified.append(symbol)
                     if select_stream and symbol in priority:
-                        await self.streams.select(list(dict.fromkeys(list(self.streams.selected) + [symbol])))
+                        await self.streams.select([symbol], retain_selected=True)
                 except Exception as exc:
                     if not self.recorder.healthy:
                         raise RuntimeError("Recording unavailable; depth verification aborted") from exc
@@ -2314,7 +2314,7 @@ class Scanner:
                 )
                 preserve_feed = feed_available and self.source_ready and self.recorder.healthy
                 self.streams.required_symbols = set(self.pending_symbols())
-                await self.streams.select(list(self.streams.selected) + self.pending_symbols())
+                await self.streams.select(self.pending_symbols(), retain_selected=True)
                 self.status["live_feed_preserved"] = preserve_feed
                 self.store.put("scanner", self.status)
                 log.warning("scan_failed", extra={"error_type": type(exc).__name__})

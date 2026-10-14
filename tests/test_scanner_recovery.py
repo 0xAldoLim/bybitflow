@@ -27,7 +27,7 @@ async def test_failed_scan_retries_then_restores_normal_cadence(monkeypatch):
         if len(delays) == 1:
             assert scanner.context == {"BTCUSDT": {"stale": True}}
             assert scanner.source_ready is True
-            scanner.streams.select.assert_awaited_once_with([])
+            scanner.streams.select.assert_awaited_once_with([], retain_selected=True)
         else:
             raise asyncio.CancelledError
 
@@ -110,7 +110,7 @@ async def test_rest_failure_preserves_live_confirmation_history(monkeypatch, fai
     assert bool(scanner.context) is preserved
     assert scanner.source_ready is preserved
     assert scanner.status["live_feed_preserved"] is preserved
-    streams.select.assert_awaited_once_with(["BTCUSDT", "QUIETUSDT"])
+    streams.select.assert_awaited_once_with([], retain_selected=True)
 
 
 @pytest.mark.asyncio

@@ -315,7 +315,7 @@ class CrossVenue:
                 continue
             _, streams = self.ensure_peer(name)
             streams.required_symbols = required
-            await streams.select(sorted(required) + list(streams.selected))
+            await streams.select(sorted(required), retain_selected=True)
 
     async def run(self):
         try:
