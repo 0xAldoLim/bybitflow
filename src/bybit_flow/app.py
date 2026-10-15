@@ -14,6 +14,7 @@ from .config import Settings
 from .fundamentals import Fact, add_fact
 from .models import Signal
 from .notifications import embed
+from .orderflow import LIQUIDITY_FRAME_LIMIT
 from .scanner import Scanner
 from .storage import Recorder, Store, now_ms
 
@@ -215,7 +216,7 @@ def create_app(settings=None):
         return {
             "exchange": scanner.exchange,
             "symbol": symbol,
-            "frames": list(scanner.streams.frames.get(symbol, []))[-120:],
+            "frames": list(scanner.streams.frames.get(symbol, []))[-LIQUIDITY_FRAME_LIMIT:],
             "methodology": "5-second observed depth samples, not every update or hidden liquidity",
         }
 

@@ -9,6 +9,8 @@ from .models import Trade
 from .ofi import l1_event, update_bucket
 
 D = Decimal
+# The dashboard exposes only the latest ten minutes of five-second frames.
+LIQUIDITY_FRAME_LIMIT = 120
 
 
 class BookGap(ValueError):
@@ -25,7 +27,6 @@ class Book:
         self.update = self.seq = self.event_ms = self.receipt_ms = 0
         self.changes = deque(maxlen=5000)
         self.pressure_samples = deque(maxlen=120)
-        self.ofi_events = deque(maxlen=1200)  # legacy diagnostic sample only
         self.ofi_epoch = getattr(self, "ofi_epoch", 0) + 1
         self.ofi_buckets = deque(maxlen=120)
 
@@ -78,16 +79,6 @@ class Book:
             )
             new_micro = float(
                 (ask * self.bids[bid] + bid * self.asks[ask]) / (self.bids[bid] + self.asks[ask])
-            )
-            self.ofi_events.append(
-                (
-                    receipt_ms,
-                    l1_event(before_bid, before_ask, after_bid, after_ask),
-                    old_mid,
-                    new_mid,
-                    old_micro,
-                    new_micro,
-                )
             )
             update_bucket(
                 self,

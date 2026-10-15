@@ -8,7 +8,7 @@ D = Decimal
 DAY = 86_400_000
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class Candle:
     start: int
     interval: int  # milliseconds

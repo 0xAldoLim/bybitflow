@@ -15,7 +15,7 @@ from decimal import Decimal as D
 from websockets.asyncio.client import connect
 
 from .exchanges import trade_from_wire
-from .orderflow import Book, BookGap, Tape
+from .orderflow import LIQUIDITY_FRAME_LIMIT, Book, BookGap, Tape
 from .storage import now_ms
 
 
@@ -143,7 +143,7 @@ class NativeStreams:
             ):
                 mapping.pop(s, None)
         for s in added:
-            self.frames[s] = deque(maxlen=720)
+            self.frames[s] = deque(maxlen=LIQUIDITY_FRAME_LIMIT)
             self.books[s], self.tapes[s], self.liquidations[s] = (
                 Book(),
                 Tape(self.settings.tape_max_trades, source=self.api.name, symbol=s),

@@ -9,7 +9,7 @@ from decimal import Decimal
 import websockets
 
 from .models import Trade
-from .orderflow import Book, Tape
+from .orderflow import LIQUIDITY_FRAME_LIMIT, Book, Tape
 from .storage import now_ms
 
 log = logging.getLogger(__name__)
@@ -112,7 +112,7 @@ class Streams:
             self.books[symbol].apply(msg, receipt)
             if receipt - self.last_frame.get(symbol, 0) >= 5000:
                 frame = self.books[symbol].features(receipt) | {"exchange": "bybit"}
-                self.frames.setdefault(symbol, deque(maxlen=720)).append(frame)
+                self.frames.setdefault(symbol, deque(maxlen=LIQUIDITY_FRAME_LIMIT)).append(frame)
                 self.last_frame[symbol] = receipt
                 self.recorder.offer("liquidity/frame", symbol, self.books[symbol].event_ms, frame, receipt)
         elif topic.startswith("publicTrade."):

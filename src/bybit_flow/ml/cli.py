@@ -494,6 +494,7 @@ def run(arguments, settings, store):
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             background.enter_context(heartbeat(store.root))
             first_monitor = True
+            last_memory_release = 0
             while True:
                 if not settings.ml_enabled:
                     result = dict(at_ms=now_ms(), status="DISABLED")
@@ -506,6 +507,20 @@ def run(arguments, settings, store):
                 first_monitor = result["status"] in {"DEFERRED_SQLITE_BUSY", "DEFERRED_LIVE_PRESSURE"}
                 if args.command == "cycle":
                     break
+                import sqlite3
+
+                from .memory import release_unused
+
+                # Allocator reclamation can be expensive. Run after model work
+                # or once per monitoring interval, not on every idle poll.
+                if result.get("tracks") or now_ms() - last_memory_release >= 900_000:
+                    memory = release_unused()
+                    last_memory_release = now_ms()
+                    try:
+                        store.put("ml_memory", dict(at_ms=last_memory_release, **memory))
+                    except sqlite3.OperationalError as exc:
+                        if "locked" not in str(exc).lower() and "busy" not in str(exc).lower():
+                            raise
                 time.sleep(30)
     else:
         result = registry.summary(enabled=settings.ml_enabled)

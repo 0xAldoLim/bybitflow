@@ -235,6 +235,18 @@ its 30-second worker cycle. It also checks between venue backfills and model fit
 Existing models, labels and progress checkpoints are retained. Historical drop
 counters alone do not keep learning paused.
 
+Memory use is bounded without shortening trade evidence windows. The dashboard
+keeps its latest 120 liquidity frames per market (ten minutes at five-second
+sampling); all sampled frames continue to be recorded. Production OFI retains
+its second aggregates, while the unused legacy event copy is removed. Cached
+candles use compact immutable objects. Between cycles, the ML worker releases
+unused Arrow and heap allocations after model work or once per 15-minute
+monitoring interval; models, labels and checkpoints remain intact.
+Its last reclamation result is saved as `ml_memory` diagnostic metadata.
+
+Docker/WSL memory also includes Linux filesystem cache. This cache can be
+reclaimed by Linux under pressure and is separate from the Python process heap.
+
 A clock warning starts at one second of measured drift, before the scanner's
 two-second hard stop. Some quote freshness checks are stricter than that hard
 stop, so a running scanner does not by itself establish a synchronized clock.
