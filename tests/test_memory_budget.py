@@ -1,4 +1,5 @@
 import asyncio
+from collections import deque
 from contextlib import nullcontext
 from decimal import Decimal
 from types import SimpleNamespace
@@ -10,6 +11,30 @@ from bybit_flow.native_streams import NativeStreams
 from bybit_flow.orderflow import Book
 from bybit_flow.storage import Store
 from bybit_flow.streams import Streams
+
+
+async def test_disconnected_bybit_rotation_releases_only_removed_market_history(settings, monkeypatch):
+    store = SimpleNamespace(put=lambda *_: None)
+    recorder = SimpleNamespace(offer=lambda *args, **kwargs: True, healthy=True)
+    streams = Streams(settings, store, recorder)
+
+    async def run():
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(streams, "run", run)
+    await streams.select(["KEEPUSDT", "OLDUSDT"])
+    retained = deque([{"event_ms": 1234}], maxlen=120)
+    streams.frames = {"KEEPUSDT": retained, "OLDUSDT": deque([{"event_ms": 1234}])}
+    streams.last_frame = {"KEEPUSDT": 1234, "OLDUSDT": 1234}
+    try:
+        await streams.select(["KEEPUSDT", "NEWUSDT"])
+        assert streams.frames == {"KEEPUSDT": retained}
+        assert streams.frames["KEEPUSDT"] is retained
+        assert streams.last_frame == {"KEEPUSDT": 1234}
+        await streams.select([])
+        assert not streams.frames and not streams.last_frame
+    finally:
+        await streams.stop()
 
 
 @pytest.mark.parametrize("venue", ["bybit", "binance"])

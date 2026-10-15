@@ -80,6 +80,8 @@ class Streams:
                 self.invalidate("subscription rotation failed")
         await self.stop()
         self.selected = symbols
+        self.frames = {s: frames for s, frames in self.frames.items() if s in symbols}
+        self.last_frame = {s: at for s, at in self.last_frame.items() if s in symbols}
         self.books = {s: Book() for s in symbols}
         self.tapes = {s: Tape(self.settings.tape_max_trades, source="bybit", symbol=s) for s in symbols}
         self.liquidations = {s: deque(maxlen=10000) for s in symbols}
