@@ -1,9 +1,11 @@
+import asyncio
 from types import SimpleNamespace
 
 import pytest
 from pydantic import SecretStr
 
 from bybit_flow.operator_health import warnings
+from bybit_flow.scanner import Scanner
 from bybit_flow.storage import Store
 
 
@@ -59,6 +61,53 @@ def test_clock_warning_appears_before_scan_hard_limit_and_clears_after_sync(sett
         store.put("clock_health", dict(source="binance", at_ms=now + 1, skew_ms=15))
         assert warnings(settings, store, scanner, recorder, now + 1) == []
     finally:
+        store.close()
+
+
+@pytest.mark.parametrize("outcome", ["synced", "failed", "source_changed"])
+async def test_independent_clock_check_refreshes_during_blocked_scan(settings, monkeypatch, outcome):
+    settings, store, scanner, recorder, now = context(settings)
+    scanner.settings, scanner.store, scanner.scan_lock = settings, store, asyncio.Lock()
+    old = dict(source="binance", at_ms=now - 30_000, skew_ms=1950)
+    store.put("clock_health", old)
+    closed = asyncio.Event()
+    monkeypatch.setattr("bybit_flow.scanner.now_ms", lambda: now)
+
+    class API:
+        def __init__(self, source, config):
+            assert source == "binance"
+
+        async def get(self, endpoint):
+            assert endpoint == "time"
+            if outcome == "failed":
+                raise TimeoutError
+            if outcome == "source_changed":
+                scanner.exchange = "okx"
+            return {"time": now}
+
+        async def close(self):
+            closed.set()
+
+    monkeypatch.setattr("bybit_flow.scanner.VenueAPI", API)
+    task = None
+    try:
+        assert warnings(settings, store, scanner, recorder, now)[0]["code"] == "CLOCK_DRIFT"
+        async with scanner.scan_lock:
+            task = asyncio.create_task(Scanner.clock_loop(scanner))
+            await asyncio.wait_for(closed.wait(), 1)
+            if outcome == "synced":
+                assert store.get("clock_health")["skew_ms"] == 0
+                assert warnings(settings, store, scanner, recorder, now) == []
+            else:
+                assert store.get("clock_health") == old
+                if outcome == "failed":
+                    assert store.get("clock_check_health")["state"] == "DEGRADED"
+                    assert warnings(settings, store, scanner, recorder, now)[0]["code"] == "CLOCK_DRIFT"
+        assert scanner.status == {"state": "collecting"}
+    finally:
+        if task:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
         store.close()
 
 

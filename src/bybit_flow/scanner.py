@@ -967,6 +967,39 @@ class Scanner:
         }
         return derivatives
 
+    async def clock_loop(self):
+        """Refresh operator diagnostics independently of long scans and REST queues."""
+        while True:
+            source = self.exchange
+            api = VenueAPI(source, self.settings)
+            try:
+                started = now_ms()
+                async with asyncio.timeout(5):
+                    body = await api.get("time")
+                received = now_ms()
+                if source == self.exchange:
+                    exchange_time = int(body["time"])
+                    self.store.put(
+                        "clock_health",
+                        dict(
+                            source=source,
+                            at_ms=received,
+                            skew_ms=(started + received) // 2 - exchange_time,
+                            round_trip_ms=received - started,
+                            receipt_offset_ms=received - exchange_time,
+                            method="request midpoint minus exchange time; warning only",
+                        ),
+                    )
+                    self.store.put("clock_check_health", dict(source=source, at_ms=received, state="HEALTHY"))
+            except Exception as exc:
+                self.store.put(
+                    "clock_check_health",
+                    dict(source=source, at_ms=now_ms(), state="DEGRADED", error_type=type(exc).__name__),
+                )
+            finally:
+                await api.close()
+            await asyncio.sleep(60)
+
     async def scan_once(self):
         from .discovery import depth_shortlist, horizon_pre_ranks
 
@@ -2521,6 +2554,7 @@ class Scanner:
         start_task("v8_research", self.v8_loop)
         start_task("storage", self.storage_loop)
         if self.settings.scan_enabled:
+            start_task("clock", self.clock_loop)
             if self.settings.macro_news_enabled:
                 from .macro import run as macro_run
 

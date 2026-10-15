@@ -209,6 +209,11 @@ recovers; they do not relax signal requirements.
 it does not by itself mean Windows needs synchronization. Check exchange access
 and available memory. Spread sampling includes request time in its configured
 interval, but genuine timeouts or stale quotes still leave coverage gaps.
+The operator clock check runs independently every minute with a five-second
+request budget. After synchronizing Windows, allow up to one minute for the
+warning to clear from a fresh exchange observation. A long market scan does not
+delay this check. Failed checks cannot mark the clock as synchronized, and the
+production clock/freshness limits remain unchanged.
 
 Stream failures reconnect automatically. Removing a subscription preserves
 cancellation even if a socket fails while closing, so rotation can finish.
