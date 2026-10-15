@@ -842,7 +842,9 @@ class Scanner:
         )
 
     async def quote_loop(self):
+        loop = asyncio.get_running_loop()
         while True:
+            started = loop.time()
             try:
                 if not self.source_ready:
                     await asyncio.sleep(5)
@@ -851,7 +853,10 @@ class Scanner:
                 self.record_quotes(body, now_ms())
             except Exception as exc:
                 self.store.put("quote_health", {"at_ms": now_ms(), "error_type": type(exc).__name__})
-            await asyncio.sleep(self.settings.quote_sample_seconds)
+            # Request/processing time belongs inside the sampling interval.
+            # Sleeping a full interval afterwards steadily skips time buckets.
+            # Overruns do not fabricate observations or replay missed samples.
+            await asyncio.sleep(max(0, self.settings.quote_sample_seconds - (loop.time() - started)))
 
     async def source_watchdog(self):
         failed_since = None

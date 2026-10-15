@@ -205,6 +205,11 @@ Discord delivery problems, with a recovery action for each condition.
 Warnings refresh with the dashboard and clear when the measured condition
 recovers; they do not relax signal requirements.
 
+**Clock check delayed** means the time request was too slow to establish drift;
+it does not by itself mean Windows needs synchronization. Check exchange access
+and available memory. Spread sampling includes request time in its configured
+interval, but genuine timeouts or stale quotes still leave coverage gaps.
+
 A clock warning starts at one second of measured drift, before the scanner's
 two-second hard stop. Some quote freshness checks are stricter than that hard
 stop, so a running scanner does not by itself establish a synchronized clock.

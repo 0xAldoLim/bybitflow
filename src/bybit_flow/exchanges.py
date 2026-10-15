@@ -259,8 +259,10 @@ class VenueAPI:
             return {"time": int(b["serverTime"] if self.name == "binance" else b["data"][0]["ts"])}
         if endpoint == "tickers":
             if self.name == "binance":
-                quotes = await self.request("/fapi/v1/ticker/bookTicker")
                 marks = {r["symbol"]: r for r in await self.request("/fapi/v1/premiumIndex")}
+                # Fetch executable quotes last: an unrelated funding request
+                # must not age an already-received book snapshot before use.
+                quotes = await self.request("/fapi/v1/ticker/bookTicker")
                 rows = [
                     dict(
                         symbol=r["symbol"],
