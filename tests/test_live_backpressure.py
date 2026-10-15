@@ -172,3 +172,31 @@ def test_ml_pressure_status_writer_contention_defers_instead_of_crashing(setting
         assert cli.worker_step(settings, store)["status"] == "DEFERRED_SQLITE_BUSY"
     finally:
         store.close()
+
+
+def test_real_recorder_health_drives_ml_deferral_and_resume(settings, monkeypatch):
+    store = Store(settings.data_dir)
+    recorder = Recorder(store, settings.model_copy(update={"queue_size": 100}))
+    now, calls = 1_000_000, []
+    monkeypatch.setattr(cli, "now_ms", lambda: now)
+    monkeypatch.setattr("bybit_flow.storage.now_ms", lambda: now)
+    monkeypatch.setattr(cli, "monitor", lambda *args: calls.append("monitor"))
+    monkeypatch.setattr(
+        cli, "train_ready", lambda *args: calls.append("train") or {"status": "collecting", "tracks": {}}
+    )
+    for i in range(75):
+        recorder.offer("fixture", "BTCUSDT", now, {"i": i})
+    try:
+        store.put("recorder_health", recorder.metrics())
+        assert cli.worker_step(settings, store)["status"] == "DEFERRED_LIVE_PRESSURE"
+        assert calls == []
+        assert store.get("ml_live_priority_checkpoint")["at_ms"] == now
+        while not recorder.queue.empty():
+            recorder.queue.get_nowait()
+        recorder.pending_bytes = 0  # The writer has acknowledged the entire burst.
+        now += 30_000
+        store.put("recorder_health", recorder.metrics())
+        assert cli.worker_step(settings, store)["status"] == "collecting"
+        assert calls == ["monitor", "train"]
+    finally:
+        store.close()

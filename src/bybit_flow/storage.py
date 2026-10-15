@@ -374,8 +374,10 @@ class Recorder:
             samples.append((second, count))
 
     def metrics(self):
-        second = now_ms() // 1000
+        now = now_ms()
+        second = now // 1000
         return dict(
+            at_ms=now,
             state=self.state,
             healthy=self.healthy,
             reason=self.reason,
