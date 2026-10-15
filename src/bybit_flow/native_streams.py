@@ -281,6 +281,7 @@ class NativeStreams:
             self.tapes[symbol].reset(now_ms())
             self.record("control/subscribed", symbol, now_ms(), {"symbols": [symbol]})
             while True:
+                await self.recorder.wait_for_capacity()
                 msg = json.loads(await asyncio.wait_for(ws.recv(), 35))["data"]
                 self.record("raw/market", symbol, int(msg["E"]), msg)
                 if msg["e"] == "aggTrade":
@@ -328,12 +329,14 @@ class NativeStreams:
         url = f"wss://fstream.binance.com/public/ws/{symbol.lower()}@depth@100ms"
         async with connect(url, max_queue=64, max_size=2_000_000, open_timeout=15) as ws:
             # The websocket library buffers bounded messages while the REST snapshot is requested.
+            await self.recorder.wait_for_capacity()
             snapshot = await self.api.request("/fapi/v1/depth", symbol=symbol, limit=1000)
             book = self.books[symbol]
             state = SequencedBook("binance", book)
             state.apply(snapshot, now_ms(), snapshot=True)
             book.valid = False
             while True:
+                await self.recorder.wait_for_capacity()
                 msg = json.loads(await asyncio.wait_for(ws.recv(), 10))
                 self.record("raw/depth", symbol, int(msg["E"]), msg)
                 if not state.bridged and int(msg["u"]) < state.last:
@@ -366,6 +369,7 @@ class NativeStreams:
             )
             while True:
                 try:
+                    await self.recorder.wait_for_capacity()
                     raw = await asyncio.wait_for(ws.recv(), 20)
                 except TimeoutError:
                     await ws.send("ping")

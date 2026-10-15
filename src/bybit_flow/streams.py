@@ -173,6 +173,7 @@ class Streams:
                     await ws.send(json.dumps({"op": "subscribe", "args": args}))
                     heartbeat = asyncio.create_task(self.heartbeat(ws))
                     while True:
+                        await self.recorder.wait_for_capacity()
                         msg = json.loads(await asyncio.wait_for(ws.recv(), timeout=35))
                         received = now_ms()
                         self.last_message = received

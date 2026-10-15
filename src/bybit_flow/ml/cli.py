@@ -11,6 +11,41 @@ from .registry import Registry
 from .store import FeatureStore
 
 
+class LiveRecordingPressure(RuntimeError):
+    pass
+
+
+def prioritize_live_recording(store):
+    """Yield optional learning work; cumulative historical drops are not an outage."""
+    now = now_ms()
+    health = store.get("recorder_health", {})
+    if not health or not 0 <= now - health.get("at_ms", 0) <= 90_000:
+        return
+    previous = store.get("ml_live_priority_checkpoint", {})
+    dropped = health.get("events_dropped", 0)
+    store.put("ml_live_priority_checkpoint", dict(at_ms=now, events_dropped=dropped))
+    waiting = health.get("last_backpressure_ms", 0)
+    if (
+        health.get("healthy") is False
+        or health.get("state") in {"RECORDER_PRESSURE", "RECORDER_BACKPRESSURE"}
+        or health.get("queue_usage_percent", 0) >= 50
+        or waiting
+        and 0 <= now - waiting < 60_000
+        or previous
+        and dropped > previous.get("events_dropped", dropped)
+    ):
+        store.put(
+            "ml_worker_state",
+            dict(
+                at_ms=now,
+                status="DEFERRED_LIVE_PRESSURE",
+                reason="Live recording has priority; background learning resumes automatically",
+                retry_seconds=30,
+            ),
+        )
+        raise LiveRecordingPressure("Live recording has priority; background learning resumes automatically")
+
+
 def cycle(settings, store, source_override=None):
     from .labels import label_recordings
     from .recordings import worker_rows
@@ -135,16 +170,16 @@ def monitor(settings, store):
     from .bootstrap import backfill, readiness
 
     # Restore current-feature outcomes first, independently of raw print gaps.
-    result["monitored"] = {
-        source: asyncio.run(monitored.backfill(store, settings, source, limit=100))
-        for source in monitored.SOURCES
-    }
+    result["monitored"] = {}
+    for source in monitored.SOURCES:
+        prioritize_live_recording(store)
+        result["monitored"][source] = asyncio.run(monitored.backfill(store, settings, source, limit=100))
     store.put("ml_monitored_trainability", monitored.readiness(store))
 
-    result["bootstrap"] = {
-        source: asyncio.run(backfill(store, settings, source, limit=100, resume=True))
-        for source in ("binance", "bybit", "okx")
-    }
+    result["bootstrap"] = {}
+    for source in ("binance", "bybit", "okx"):
+        prioritize_live_recording(store)
+        result["bootstrap"][source] = asyncio.run(backfill(store, settings, source, limit=100, resume=True))
     store.put("ml_bootstrap_trainability", readiness(store))
     from .horizon import fit as fit_horizon
 
@@ -182,6 +217,7 @@ def fit_due(previous, count, now, manual=False):
 
 
 def train_ready(settings, store, manual=False):
+    prioritize_live_recording(store)
     from ..storage import directory_bytes
     from .bootstrap import train as bootstrap_train
     from .monitored import train as monitored_train
@@ -206,6 +242,7 @@ def train_ready(settings, store, manual=False):
             previous = store.get(key, {})
             if not fit_due(previous, count, now_ms(), manual):
                 continue
+            prioritize_live_recording(store)
             result = dict(
                 previous,
                 at_ms=now_ms(),
@@ -267,10 +304,13 @@ def worker_step(settings, store, first_monitor=False, manual=False):
 
     try:
         store.put("ml_worker_state", dict(at_ms=now_ms(), status="RUNNING"))
+        prioritize_live_recording(store)
         if first_monitor or now_ms() - store.get("ml_monitor", {}).get("at_ms", 0) >= 900_000:
             try:
                 monitor(settings, store)
             except sqlite3.OperationalError:
+                raise
+            except LiveRecordingPressure:
                 raise
             except Exception as exc:
                 store.put("ml_monitor", dict(at_ms=now_ms(), status="abstained", reason=str(exc)))
@@ -278,6 +318,9 @@ def worker_step(settings, store, first_monitor=False, manual=False):
         recovered_storage = store.get("ml_cycle", {}).get("status") == "STORAGE_BACKPRESSURE"
         if result.get("tracks") or manual or result["status"] == "STORAGE_BACKPRESSURE" or recovered_storage:
             store.put("ml_cycle", result)
+        return result
+    except LiveRecordingPressure as exc:
+        result = dict(at_ms=now_ms(), status="DEFERRED_LIVE_PRESSURE", reason=str(exc), retry_seconds=30)
         return result
     except sqlite3.OperationalError as exc:
         if "locked" not in str(exc).lower() and "busy" not in str(exc).lower():
@@ -460,7 +503,7 @@ def run(arguments, settings, store):
                     time.sleep(30)
                     continue
                 result = worker_step(settings, store, first_monitor, args.command == "cycle")
-                first_monitor = result["status"] == "DEFERRED_SQLITE_BUSY"
+                first_monitor = result["status"] in {"DEFERRED_SQLITE_BUSY", "DEFERRED_LIVE_PRESSURE"}
                 if args.command == "cycle":
                     break
                 time.sleep(30)

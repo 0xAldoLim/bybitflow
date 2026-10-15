@@ -39,8 +39,10 @@ class Book:
         elif int(d["u"]) <= self.update or int(d["seq"]) < self.seq:
             self.reset()
             raise BookGap("Non-monotonic book update; resubscribe")
-        before_bid = (max(self.bids), self.bids[max(self.bids)]) if self.valid else None
-        before_ask = (min(self.asks), self.asks[min(self.asks)]) if self.valid else None
+        bid = max(self.bids) if self.valid else None
+        ask = min(self.asks) if self.valid else None
+        before_bid = (bid, self.bids[bid]) if bid is not None else None
+        before_ask = (ask, self.asks[ask]) if ask is not None else None
         changed = []
         # u/seq are NOT documented as consecutive; a jump alone cannot prove loss.
         for side, levels in (("bid", d["b"]), ("ask", d["a"])):
@@ -60,12 +62,13 @@ class Book:
                     changed.append((side, p, q - old))
         self.update, self.seq = int(d["u"]), int(d["seq"])
         self.event_ms, self.receipt_ms = int(message.get("cts", message["ts"])), receipt_ms
-        self.valid = bool(self.bids and self.asks) and max(self.bids) < min(self.asks)
+        bid = max(self.bids) if self.bids else None
+        ask = min(self.asks) if self.asks else None
+        self.valid = bid is not None and ask is not None and bid < ask
         if not self.valid:
             self.reset()
             raise BookGap("Empty or crossed book")
         if not snapshot and before_bid and before_ask:
-            bid, ask = max(self.bids), min(self.asks)
             after_bid, after_ask = (bid, self.bids[bid]), (ask, self.asks[ask])
             old_mid = float((before_bid[0] + before_ask[0]) / 2)
             new_mid = float((bid + ask) / 2)
@@ -97,7 +100,6 @@ class Book:
                 changed,
             )
         if not self.pressure_samples or receipt_ms - self.pressure_samples[-1][0] >= 1000:
-            bid, ask = max(self.bids), min(self.asks)
             pressure = float((self.bids[bid] - self.asks[ask]) / (self.bids[bid] + self.asks[ask]))
             self.pressure_samples.append((receipt_ms, pressure))
 

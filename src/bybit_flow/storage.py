@@ -359,6 +359,7 @@ class Recorder:
         self.gaps = {}
         self.last_offered_receipt_ms = None
         self.receipt_clock_adjustments = 0
+        self.backpressure_waits = self.backpressure_wait_ms = self.last_backpressure_ms = 0
         from collections import deque
 
         self.enqueued = deque(maxlen=120)
@@ -400,7 +401,35 @@ class Recorder:
             last_error_ms=self.last_error_ms,
             retries=self.retries,
             receipt_clock_adjustments=self.receipt_clock_adjustments,
+            backpressure_waits=self.backpressure_waits,
+            backpressure_wait_ms=self.backpressure_wait_ms,
+            last_backpressure_ms=self.last_backpressure_ms,
         )
+
+    def pressure(self):
+        return max(
+            self.queue.qsize() / self.queue.maxsize, self.pending_bytes / self.settings.queue_byte_limit
+        )
+
+    async def wait_for_capacity(self, timeout=2):
+        """Bound socket backpressure before consuming another market message."""
+        if not self.healthy:
+            raise RuntimeError("Recording unavailable")
+        if self.pressure() < 0.5:
+            return
+        started = asyncio.get_running_loop().time()
+        self.backpressure_waits += 1
+        self.last_backpressure_ms = now_ms()
+        try:
+            while self.pressure() >= 0.5:
+                if not self.healthy:
+                    raise RuntimeError("Recording unavailable")
+                if asyncio.get_running_loop().time() - started >= timeout:
+                    raise RuntimeError("Recorder capacity did not recover within the feed buffer budget")
+                await asyncio.sleep(0.01)
+        finally:
+            self.backpressure_wait_ms += (asyncio.get_running_loop().time() - started) * 1000
+            self.last_backpressure_ms = now_ms()
 
     def _gap(self, source, symbol, at, reason):
         from .ml.coverage import market_source
@@ -427,9 +456,7 @@ class Recorder:
         ):
             receipt = self.last_offered_receipt_ms
         optional = symbol not in self.critical_symbols and "control/" not in source
-        pressure = max(
-            self.queue.qsize() / self.queue.maxsize, self.pending_bytes / self.settings.queue_byte_limit
-        )
+        pressure = self.pressure()
         if pressure >= 0.7 and optional:
             self.state = "RECORDER_BACKPRESSURE"
             self._gap(source, symbol, receipt, "RECORDER_BACKPRESSURE")

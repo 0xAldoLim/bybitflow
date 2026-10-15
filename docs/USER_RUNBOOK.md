@@ -223,6 +223,18 @@ returns HTTP 503. This detects lost progress even when the container process is
 still alive. Docker's health label alone does not restart a container; the scanner
 timeout and subsystem supervisors handle recovery inside the application.
 
+Short recording bursts use bounded socket backpressure: readers wait before
+consuming another message when the recorder reaches 50% of its queue budget.
+They wait at most two seconds, then use the existing reconnect and coverage-gap
+handling if pressure persists. Queue and storage limits are unchanged; stale or
+missing evidence still cannot qualify. Wait counts and duration appear in the
+recorder metrics.
+
+Background ML yields to current recording pressure and resumes automatically on
+its 30-second worker cycle. It also checks between venue backfills and model fits.
+Existing models, labels and progress checkpoints are retained. Historical drop
+counters alone do not keep learning paused.
+
 A clock warning starts at one second of measured drift, before the scanner's
 two-second hard stop. Some quote freshness checks are stricter than that hard
 stop, so a running scanner does not by itself establish a synchronized clock.
