@@ -227,13 +227,17 @@ def create_app(settings=None):
 
     @app.get("/healthz")
     async def health(request: Request):
+        from .operator_health import runtime_health_stale
+
         rec, scanner = request.app.state.recorder, request.app.state.scanner
-        status = 200 if rec.healthy and scanner.status["state"] != "error" else 503
+        stale = runtime_health_stale(settings, request.app.state.store, now_ms())
+        status = 200 if rec.healthy and scanner.status["state"] != "error" and not stale else 503
         return JSONResponse(
             {
                 "ok": status == 200,
                 "scanner": scanner.status,
                 "recording": rec.healthy,
+                "runtime_health_stale": stale,
                 "alerts_only": True,
             },
             status,

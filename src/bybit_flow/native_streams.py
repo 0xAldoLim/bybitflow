@@ -84,6 +84,7 @@ class NativeStreams:
         self.last_message = 0
         self.frames = {}
         self.selection_lock = asyncio.Lock()
+        self.stopping = set()
 
     @property
     def connected(self):
@@ -123,10 +124,14 @@ class NativeStreams:
         # half-removed state. Close all sockets concurrently, not one timeout each.
         self.selected = tuple(s for s in self.selected if s not in removed)
         stopping = [self.tasks.pop(s) for s in removed]
-        for task in stopping:
-            task.cancel()
-        if stopping:
-            await asyncio.gather(*stopping, return_exceptions=True)
+        self.stopping.update(stopping)
+        try:
+            for task in stopping:
+                task.cancel()
+            if stopping:
+                await asyncio.gather(*stopping, return_exceptions=True)
+        finally:
+            self.stopping.difference_update(stopping)
         for s in removed:
             for mapping in (
                 self.books,
@@ -237,6 +242,18 @@ class NativeStreams:
                     self.record("control/gap", symbol, now_ms(), {"reason": "subscription stopped"}, False)
                 raise
             except Exception as exc:
+                # A TaskGroup child can fail while external cancellation is
+                # closing its siblings. That error must not turn a removed
+                # subscription back into an infinite reconnect loop.
+                # TaskGroup can also cancel its parent during an ordinary
+                # child failure. Use explicit rotation intent, not its internal
+                # cancellation count, to preserve normal reconnect behavior.
+                if asyncio.current_task() in self.stopping:
+                    if self.recorder.healthy:
+                        self.record(
+                            "control/gap", symbol, now_ms(), {"reason": "subscription stopped"}, False
+                        )
+                    raise asyncio.CancelledError from exc
                 self.books[symbol].reset()
                 self.tapes[symbol].reset(now_ms())
                 self.reconnects[symbol] = self.reconnects.get(symbol, 0) + 1

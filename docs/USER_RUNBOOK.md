@@ -210,6 +210,19 @@ it does not by itself mean Windows needs synchronization. Check exchange access
 and available memory. Spread sampling includes request time in its configured
 interval, but genuine timeouts or stale quotes still leave coverage gaps.
 
+Stream failures reconnect automatically. Removing a subscription preserves
+cancellation even if a socket fails while closing, so rotation can finish.
+Source recovery waits for an available scan lock without stopping health updates.
+A stalled broad scan times out after 15 minutes or three configured scan intervals,
+whichever is longer, then retries after at most 60 seconds. Existing setup plans
+and their original lifecycle deadlines remain unchanged.
+
+**Live health reporting stalled** means no current heartbeat has arrived for
+90 seconds after startup grace. The dashboard shows a red warning and `/healthz`
+returns HTTP 503. This detects lost progress even when the container process is
+still alive. Docker's health label alone does not restart a container; the scanner
+timeout and subsystem supervisors handle recovery inside the application.
+
 A clock warning starts at one second of measured drift, before the scanner's
 two-second hard stop. Some quote freshness checks are stricter than that hard
 stop, so a running scanner does not by itself establish a synchronized clock.

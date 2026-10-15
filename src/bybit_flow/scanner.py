@@ -898,6 +898,10 @@ class Scanner:
                 continue
             failed_since = failed_since or now_ms()
             if now_ms() - failed_since >= 120_000:
+                # Recovery must not stop the independent health heartbeat
+                # while a broad scan owns the source/selection lock.
+                if self.scan_lock.locked():
+                    continue
                 async with self.scan_lock:
                     # Recover current source first. Active plans never change venue.
                     previous = self.exchange
@@ -2301,7 +2305,11 @@ class Scanner:
         while True:
             delay = self.settings.scan_seconds
             try:
-                await self.scan_once()
+                # A cold history load can take several minutes. Bound an
+                # actually stuck cycle so its lock is released and supervision
+                # can retry without changing any existing setup plan.
+                async with asyncio.timeout(max(900, self.settings.scan_seconds * 3)):
+                    await self.scan_once()
             except Exception as exc:
                 self.status = dict(state="error", error_type=type(exc).__name__, at_ms=now_ms())
                 if isinstance(exc, ValueError):

@@ -17,6 +17,7 @@ async def test_native_subscription_recovers_after_recorder_failure(settings):
     from bybit_flow.orderflow import Book, Tape
 
     stream = NativeStreams.__new__(NativeStreams)
+    stream.stopping = set()
     stream.sessions, stream.reconnects = {}, {}
     stream.books, stream.tapes, stream.liquidations = {"TEST": Book()}, {"TEST": Tape()}, {"TEST": []}
     stream.api = SimpleNamespace(name="okx")

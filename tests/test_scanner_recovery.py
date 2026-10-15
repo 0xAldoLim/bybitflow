@@ -142,6 +142,7 @@ async def test_selected_feed_gets_new_minutes_after_pending_expires():
 async def test_native_removal_cancels_all_feeds_before_waiting():
     streams = NativeStreams.__new__(NativeStreams)
     streams.selection_lock = asyncio.Lock()
+    streams.stopping = set()
     streams.tapes = {}
     streams.settings = SimpleNamespace(deep_symbols=30)
     streams.selected = ("A", "B")

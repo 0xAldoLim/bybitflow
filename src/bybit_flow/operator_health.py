@@ -3,6 +3,18 @@
 from .liquidity import SpreadHistory
 
 
+def runtime_health_stale(settings, store, now):
+    if not settings.scan_enabled:
+        return False
+    started = store.get("scanner_process_start", {}).get("at_ms", 0)
+    if started and 0 <= now - started < 90_000:
+        return False  # Allow the new process to publish its first heartbeat.
+    observed = store.get("runtime_health", {}).get("at_ms")
+    if observed is None:
+        return bool(started and now - started >= 90_000)
+    return not 0 <= now - observed <= 90_000
+
+
 def warnings(settings, store, scanner, recorder, now):
     result = []
 
@@ -52,7 +64,7 @@ def warnings(settings, store, scanner, recorder, now):
             "CLOCK_UNVERIFIED",
             "Clock check unavailable",
             "There is no recent exchange clock measurement.",
-            "Check Exchange health. Restore exchange access before relying on signal freshness.",
+            "The scanner repeats this check automatically. Check scan progress and exchange access if the warning persists.",
         )
     elif minimum_drift >= 1000:
         direction = "ahead of" if skew > 0 else "behind"
@@ -119,6 +131,15 @@ def warnings(settings, store, scanner, recorder, now):
             at_ms=quotes.get("at_ms"),
         )
     runtime = store.get("runtime_health", {})
+    if runtime_health_stale(settings, store, now):
+        add(
+            "RUNTIME_HEALTH_STALE",
+            "Live health reporting stalled",
+            "Live-feed health has stopped refreshing. Current market coverage cannot be verified from this report.",
+            "Timed-out scans retry automatically. Check service logs if recovery does not progress; preserve the data volume and active setup history.",
+            severity="error",
+            at_ms=runtime.get("at_ms"),
+        )
     streams = runtime.get("primary_persistent_stream_health", {})
     if (
         settings.scan_enabled

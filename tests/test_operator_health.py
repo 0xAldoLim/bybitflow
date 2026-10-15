@@ -22,6 +22,31 @@ def context(settings, now=2_000_000):
     return settings, store, scanner, recorder, now
 
 
+def test_stale_runtime_is_visible_and_current_heartbeat_clears_warning(settings):
+    settings, store, scanner, recorder, now = context(settings)
+    try:
+        store.put("scanner_process_start", dict(at_ms=now - 300_000))
+        store.put("runtime_health", dict(at_ms=now - 180_000))
+        result = warnings(settings, store, scanner, recorder, now)
+        assert [row["code"] for row in result] == ["RUNTIME_HEALTH_STALE"]
+        assert result[0]["severity"] == "error"
+        store.put("runtime_health", dict(at_ms=now))
+        assert warnings(settings, store, scanner, recorder, now) == []
+    finally:
+        store.close()
+
+
+def test_new_process_can_replace_old_runtime_snapshot_before_stale_warning(settings):
+    settings, store, scanner, recorder, now = context(settings)
+    try:
+        store.put("scanner_process_start", dict(at_ms=now))
+        store.put("runtime_health", dict(at_ms=now - 180_000))
+        assert warnings(settings, store, scanner, recorder, now + 30_000) == []
+        assert warnings(settings, store, scanner, recorder, now + 90_001)[0]["code"] == "RUNTIME_HEALTH_STALE"
+    finally:
+        store.close()
+
+
 @pytest.mark.parametrize("skew", [-1950, 1950])
 def test_clock_warning_appears_before_scan_hard_limit_and_clears_after_sync(settings, skew):
     settings, store, scanner, recorder, now = context(settings)
