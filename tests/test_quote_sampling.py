@@ -91,8 +91,16 @@ async def test_quote_cadence_includes_request_time_and_never_replays_missed_samp
     )
     with pytest.raises(asyncio.CancelledError):
         await Scanner.quote_loop(scanner)
-    assert starts == [i * max(60, duration) for i in range(3)]
-    assert sleeps == [max(0, 60 - duration)] * 3
+    if fail_first:
+        assert starts == [0, duration + 15, duration + 15 + max(60, duration)]
+        assert sleeps == [15, max(0, 60 - duration), max(0, 60 - duration)]
+    else:
+        assert starts == [i * max(60, duration) for i in range(3)]
+        assert sleeps == [max(0, 60 - duration)] * 3
     assert len(observed) == 3 - int(fail_first)
     if fail_first:
-        scanner.store.put.assert_called_once_with("quote_health", {"at_ms": 2000, "error_type": "OSError"})
+        scanner.store.put.assert_called_once()
+        key, health = scanner.store.put.call_args.args
+        assert key == "quote_health"
+        assert health["at_ms"] == 2000 and health["error_type"] == "OSError"
+        assert health["error_category"] == "CONNECTION_ERROR" and health["retry_at_ms"] == 17_000

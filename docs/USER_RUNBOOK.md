@@ -210,10 +210,18 @@ it does not by itself mean Windows needs synchronization. Check exchange access
 and available memory. Spread sampling includes request time in its configured
 interval, but genuine timeouts or stale quotes still leave coverage gaps.
 The operator clock check runs independently every minute with a five-second
-request budget. After synchronizing Windows, allow up to one minute for the
-warning to clear from a fresh exchange observation. A long market scan does not
-delay this check. Failed checks cannot mark the clock as synchronized, and the
-production clock/freshness limits remain unchanged.
+request budget. Failed clock checks and quote collection retry after 15 seconds;
+successful collection returns to its normal cadence. A long market scan does not
+delay the clock check. Failed checks cannot mark the clock as synchronized, and
+the production clock/freshness limits remain unchanged.
+
+**Exchange clock verification interrupted** and **Clock check unavailable** mean
+that exchange time cannot currently be verified. They do not establish clock
+drift, and clicking **Sync now** cannot repair a failed exchange connection.
+Warnings distinguish hostname-resolution failures, certificate failures,
+connection failures and timeouts where the exception provides that information.
+They clear after a successful observation. Sync Windows only for measured clock
+drift or independently incorrect system time.
 
 Stream failures reconnect automatically. Removing a subscription preserves
 cancellation even if a socket fails while closing, so rotation can finish.
@@ -221,6 +229,11 @@ Source recovery waits for an available scan lock without stopping health updates
 A stalled broad scan times out after 15 minutes or three configured scan intervals,
 whichever is longer, then retries after at most 60 seconds. Existing setup plans
 and their original lifecycle deadlines remain unchanged.
+Failed parallel REST batches cancel and await unfinished sibling requests before
+returning, so retries do not accumulate obsolete candle/derivative requests.
+Partial feed degradation is also reported when it persists for two minutes;
+brief warm-up or rotation does not produce this warning. No recovery path
+fabricates quotes, reduces required coverage or turns off certificate validation.
 
 **Live health reporting stalled** means no current heartbeat has arrived for
 90 seconds after startup grace. The dashboard shows a red warning and `/healthz`
@@ -420,6 +433,11 @@ The relay in `compose.doh.yaml` uses verified HTTPS to Google Public DNS and doe
 not fall back to unencrypted upstream DNS. It affects these project containers,
 not Windows/browser DNS. Google receives their queries. It reserves
 `172.30.53.0/24`; use an unused subnet if that conflicts with another Docker network.
+The relay shares concurrent identical lookups and caches at most 128 positive
+responses for their actual DNS TTL, capped at 60 seconds. It decrements returned
+TTLs and never serves expired answers or caches failures/truncated responses.
+This reduces repeated encrypted-DNS requests during reconnection; it cannot
+guarantee connectivity during an upstream or network outage.
 
 For a checkout without an existing `compose.override.yaml`, run in CMD:
 

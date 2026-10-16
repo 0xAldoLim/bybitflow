@@ -8,6 +8,14 @@ from . import POLICY_VERSION, SCHEMA_VERSION
 from .store import canonical, digest
 
 
+class ArtifactCorrupt(ValueError):
+    """A readable registry artifact failed its saved integrity check."""
+
+
+class ArtifactUnreadable(ValueError):
+    """The registry artifact is missing or cannot be decoded."""
+
+
 def promotion_reasons(m):
     if (
         m.get("track") == "monitored"
@@ -90,10 +98,13 @@ class Registry:
     def get(self, ident):
         row = self.db.execute("SELECT manifest,sha256 FROM ml_models WHERE id=?", (ident,)).fetchone()
         if not row:
-            raise ValueError("Unknown registry model")
-        result = json.loads(row[0])
+            raise ArtifactUnreadable("Unknown registry model")
+        try:
+            result = json.loads(row[0])
+        except (ValueError, TypeError) as exc:
+            raise ArtifactUnreadable("Model artifact cannot be decoded; abstaining") from exc
         if digest(result) != row[1]:
-            raise ValueError("Model integrity failure; abstaining")
+            raise ArtifactCorrupt("Model integrity failure; abstaining")
         return result
 
     def champion(self):

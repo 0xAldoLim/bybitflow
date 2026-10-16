@@ -19,8 +19,14 @@ NUMERIC = tuple(
 ) + ("book_spread_bps", "book_microprice", "funding_rate", "net_rr", "cost_per_base")
 
 
+class FeatureSchemaUnsupported(ValueError):
+    """The historical bootstrap projection does not support this schema."""
+
+
 def project(row):
-    if row["schema_version"] not in SUPPORTED or row["source"] not in {"binance", "bybit", "okx"}:
+    if row["schema_version"] not in SUPPORTED:
+        raise FeatureSchemaUnsupported("Unsupported bootstrap feature schema: " + str(row["schema_version"]))
+    if row["source"] not in {"binance", "bybit", "okx"}:
         raise ValueError("Unsupported bootstrap source/schema")
     decision = row["decision_ms"]
     values, metadata = {}, {}

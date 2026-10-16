@@ -3,6 +3,22 @@
 from .liquidity import SpreadHistory
 
 
+def recovery_detail(health, now):
+    labels = {
+        "DNS_RESOLUTION": "Exchange hostname resolution failed.",
+        "TLS_CERTIFICATE": "Exchange certificate verification failed; verification remains enabled.",
+        "NETWORK_TIMEOUT": "The exchange request timed out.",
+        "CONNECTION_ERROR": "The exchange connection failed.",
+        "ACCESS_OR_RATE_LIMIT": "Exchange access is denied or temporarily rate limited; cooldowns remain in force.",
+        "DATA_VALIDATION": "The public response failed validation.",
+    }
+    detail = labels.get(health.get("error_category"), "")
+    retry = health.get("retry_at_ms")
+    if isinstance(retry, (int, float)) and retry > now:
+        detail += f" Automatic retry in approximately {max(1, (retry - now + 999) // 1000):g} seconds."
+    return detail.strip()
+
+
 def runtime_health_stale(settings, store, now):
     if not settings.scan_enabled:
         return False
@@ -57,14 +73,31 @@ def warnings(settings, store, scanner, recorder, now):
     # including after waiting for the shared REST limiter. A slow request
     # cannot establish drift merely from its midpoint estimate.
     minimum_drift = max(0, abs(skew) - max(0, round_trip) / 2) if isinstance(skew, (int, float)) else 0
-    if settings.scan_enabled and (
+    check = store.get("clock_check_health", {})
+    check_failed = (
+        settings.scan_enabled
+        and check.get("source") == scanner.exchange
+        and check.get("state") == "DEGRADED"
+        and check.get("at_ms", 0) >= (clock.get("at_ms") or 0)
+        and 0 <= now - check.get("at_ms", 0) <= 90_000
+    )
+    if check_failed:
+        add(
+            "CLOCK_CHECK_FAILED",
+            "Exchange clock verification interrupted",
+            "The latest exchange time request failed. This does not establish clock drift. "
+            + recovery_detail(check, now),
+            "Clock verification retries automatically. Syncing Windows time does not repair exchange connectivity; no restart is needed for a transient connection failure.",
+            at_ms=check.get("at_ms"),
+        )
+    elif settings.scan_enabled and (
         not isinstance(skew, (int, float)) or not 0 <= age <= max(360_000, settings.scan_seconds * 2000)
     ):
         add(
             "CLOCK_UNVERIFIED",
             "Clock check unavailable",
-            "There is no recent exchange clock measurement.",
-            "The scanner repeats this check automatically. Check scan progress and exchange access if the warning persists.",
+            "There is no recent exchange clock measurement. An unavailable check does not establish clock drift.",
+            "Clock verification retries independently of market scans. Check exchange connectivity if it persists; syncing Windows time alone cannot repair a failed connection.",
         )
     elif minimum_drift >= 1000:
         direction = "ahead of" if skew > 0 else "behind"
@@ -89,8 +122,10 @@ def warnings(settings, store, scanner, recorder, now):
         add(
             "SCAN_ERROR",
             "Market scan interrupted",
-            scanner.status.get("reason") or "The latest market scan failed.",
-            "Check Exchange health and network/DNS access. The scanner retries automatically.",
+            (scanner.status.get("reason") or "The latest market scan failed.")
+            + " "
+            + recovery_detail(store.get("scan_health", {}), now),
+            "The scanner retries automatically and preserves existing setup plans and subscriptions. Check Exchange health if connection failures persist.",
             severity="error",
             at_ms=scanner.status.get("at_ms"),
         )
@@ -126,8 +161,9 @@ def warnings(settings, store, scanner, recorder, now):
         add(
             "QUOTE_COLLECTION",
             "Quote collection interrupted",
-            "Spread-history observations are failing or have stopped arriving.",
-            "Check exchange connectivity and DNS. Valid quotes must rebuild spread history before new signals can qualify.",
+            "Spread-history observations are failing or have stopped arriving. "
+            + recovery_detail(quotes, now),
+            "Quote collection retries automatically. Valid quotes rebuild spread history after connectivity recovers; the sample and coverage requirements stay in force.",
             at_ms=quotes.get("at_ms"),
         )
     runtime = store.get("runtime_health", {})
@@ -153,6 +189,22 @@ def warnings(settings, store, scanner, recorder, now):
             "No selected market currently has both a fresh order book and fresh trades.",
             "Check exchange connectivity and DNS. New signals remain blocked until the live feeds recover.",
             severity="error",
+            at_ms=runtime.get("at_ms"),
+        )
+
+    degraded_since = runtime.get("feeds_degraded_since_ms")
+    if (
+        settings.scan_enabled
+        and 0 <= now - runtime.get("at_ms", 0) <= 60_000
+        and 0 < streams.get("fresh", 0) < streams.get("total", 0)
+        and isinstance(degraded_since, (int, float))
+        and now - degraded_since >= 120_000
+    ):
+        add(
+            "FEED_DEGRADED",
+            "Some market feeds are still recovering",
+            f"{streams['fresh']} of {streams['total']} selected markets have both a fresh order book and fresh trades.",
+            "Individual streams reconnect automatically. Affected markets remain blocked until fresh evidence returns; existing setups retain their original plans and monitoring.",
             at_ms=runtime.get("at_ms"),
         )
 

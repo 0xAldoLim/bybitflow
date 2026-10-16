@@ -3,9 +3,10 @@
 import json
 
 from ..storage import now_ms
+from .bootstrap_features import FeatureSchemaUnsupported
 from .features import snapshot
 from .models import explain, predict
-from .registry import Registry
+from .registry import ArtifactCorrupt, Registry
 from .store import FeatureStore
 from .validation import accepted
 
@@ -62,20 +63,39 @@ def select_compatible(registry, signal, row, now):
         model = {}
         try:
             model = registry.get(ident)
-            if model.get("track") == "bootstrap":
-                from .bootstrap_features import project
-
-                reasons = compatibility_reasons(model, signal, project(row), now, registry)
-            else:
-                reasons = compatibility_reasons(model, signal, row, now, registry)
+        except ArtifactCorrupt:
+            reasons, reason_codes = ["artifact checksum mismatch"], ["ARTIFACT_CORRUPT"]
         except (ValueError, KeyError, TypeError):
-            reasons = ["unreadable or corrupt artifact"]
+            reasons, reason_codes = ["artifact is unreadable or missing"], ["ARTIFACT_UNREADABLE"]
+        else:
+            # Projection/compatibility failures say nothing about artifact integrity.
+            try:
+                if model.get("track") == "bootstrap":
+                    from .bootstrap_features import project
+
+                    reasons = compatibility_reasons(model, signal, project(row), now, registry)
+                else:
+                    reasons = compatibility_reasons(model, signal, row, now, registry)
+            except FeatureSchemaUnsupported as exc:
+                reasons, reason_codes = [str(exc)], ["FEATURE_SCHEMA_UNSUPPORTED"]
+            except (ValueError, KeyError, TypeError):
+                reasons, reason_codes = ["model context incompatible"], ["MODEL_CONTEXT_INCOMPATIBLE"]
+            else:
+                reason_codes = list(
+                    dict.fromkeys(
+                        "SCHEMA_INCOMPATIBLE"
+                        if reason == "feature schema changed; retraining required"
+                        else "MODEL_CONTEXT_INCOMPATIBLE"
+                        for reason in reasons
+                    )
+                )
         if not reasons:
             return model, ident == champion and model.get("track", "primary") == "primary", skipped
         skipped.append(
             dict(
                 model_id=ident,
                 reasons=reasons,
+                reason_codes=reason_codes,
                 track=model.get("track", track),
             )
         )

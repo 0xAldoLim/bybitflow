@@ -102,7 +102,9 @@ async def test_independent_clock_check_refreshes_during_blocked_scan(settings, m
                 assert store.get("clock_health") == old
                 if outcome == "failed":
                     assert store.get("clock_check_health")["state"] == "DEGRADED"
-                    assert warnings(settings, store, scanner, recorder, now)[0]["code"] == "CLOCK_DRIFT"
+                    warning = warnings(settings, store, scanner, recorder, now)[0]
+                    assert warning["code"] == "CLOCK_CHECK_FAILED"
+                    assert "does not establish clock drift" in warning["message"]
         assert scanner.status == {"state": "collecting"}
     finally:
         if task:

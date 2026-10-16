@@ -18,6 +18,7 @@ from .models import DAY, Signal
 from .native_streams import NativeStreams
 from .notifications import Notifier
 from .orderflow import Book, footprint
+from .recovery import failure_health, rest_batch, success_health
 from .risk import evaluate_risk
 from .scoring import score
 from .storage import now_ms
@@ -838,13 +839,15 @@ class Scanner:
             self.store.db.executemany("INSERT OR REPLACE INTO kv VALUES(?,?)", updates)
         self.store.put(
             "quote_health",
-            {"at_ms": receipt, "event_ms": int(body["time"]), "symbols": len(updates), "status": "observed"},
+            success_health(receipt)
+            | {"event_ms": int(body["time"]), "symbols": len(updates), "status": "observed"},
         )
 
     async def quote_loop(self):
         loop = asyncio.get_running_loop()
         while True:
             started = loop.time()
+            delay = self.settings.quote_sample_seconds
             try:
                 if not self.source_ready:
                     await asyncio.sleep(5)
@@ -852,19 +855,33 @@ class Scanner:
                 body = await self.api.get("tickers", category="linear")
                 self.record_quotes(body, now_ms())
             except Exception as exc:
-                self.store.put("quote_health", {"at_ms": now_ms(), "error_type": type(exc).__name__})
+                delay = min(15, delay)
+                self.store.put(
+                    "quote_health",
+                    failure_health(self.store.get("quote_health", {}), exc, now_ms(), delay),
+                )
             # Request/processing time belongs inside the sampling interval.
             # Sleeping a full interval afterwards steadily skips time buckets.
             # Overruns do not fabricate observations or replay missed samples.
-            await asyncio.sleep(max(0, self.settings.quote_sample_seconds - (loop.time() - started)))
+            await asyncio.sleep(
+                delay
+                if delay < self.settings.quote_sample_seconds
+                else max(0, delay - (loop.time() - started))
+            )
 
     async def source_watchdog(self):
         failed_since = None
+        degraded_since = None
         while True:
             await asyncio.sleep(30)
             from .feed_health import persistent_health
 
             persistent = persistent_health(self, now_ms())
+            counts = persistent.get("primary_persistent_stream_health", {})
+            if counts.get("total", 0) > counts.get("fresh", 0):
+                degraded_since = degraded_since or now_ms()
+            else:
+                degraded_since = None
             # Native symbols reconnect independently. One quiet or stale symbol
             # must not destroy continuous history for the rest of the universe.
             source_feed_available = (
@@ -883,6 +900,7 @@ class Scanner:
                     source=self.exchange,
                     source_ready=self.source_ready,
                     selected=list(self.streams.selected),
+                    feeds_degraded_since_ms=degraded_since,
                     streams_fresh=self.streams.connected
                     and all(self.flow_ready(s, now_ms()) for s in self.streams.selected)
                     and persistent["active_lifecycle_stream_health"]["fresh"]
@@ -926,7 +944,7 @@ class Scanner:
 
     async def depth_context(self, inst, ticker, ticker_time, evaluated):
         t = ticker
-        (oi, oi_observed), (funding, funding_observed) = await asyncio.gather(
+        (oi, oi_observed), (funding, funding_observed) = await rest_batch(
             self.cached_derivative_history(
                 "open-interest", inst.symbol, evaluated - 4 * 3_600_000, evaluated, 180_000
             ),
@@ -972,6 +990,7 @@ class Scanner:
         while True:
             source = self.exchange
             api = VenueAPI(source, self.settings)
+            delay = 60
             try:
                 started = now_ms()
                 async with asyncio.timeout(5):
@@ -990,15 +1009,17 @@ class Scanner:
                             method="request midpoint minus exchange time; warning only",
                         ),
                     )
-                    self.store.put("clock_check_health", dict(source=source, at_ms=received, state="HEALTHY"))
+                    self.store.put("clock_check_health", success_health(received) | dict(source=source))
             except Exception as exc:
+                delay = 15
                 self.store.put(
                     "clock_check_health",
-                    dict(source=source, at_ms=now_ms(), state="DEGRADED", error_type=type(exc).__name__),
+                    failure_health(self.store.get("clock_check_health", {}), exc, now_ms(), delay)
+                    | dict(source=source),
                 )
             finally:
                 await api.close()
-            await asyncio.sleep(60)
+            await asyncio.sleep(delay)
 
     async def scan_once(self):
         from .discovery import depth_shortlist, horizon_pre_ranks
@@ -1158,7 +1179,7 @@ class Scanner:
                     if inst is None:
                         continue
                     now = now_ms()
-                    bars = await asyncio.gather(
+                    bars = await rest_batch(
                         *(
                             scan_candles(inst.symbol, tf, now, count)
                             for tf, count in (("240", 160), ("60", 200), ("15", 120))
@@ -1208,7 +1229,7 @@ class Scanner:
                     turnover = median(c.turnover for c in daily[-7:])
                     if turnover < self.settings.min_daily_turnover:
                         return
-                    context_bars, setup_bars, execution_bars = await asyncio.gather(
+                    context_bars, setup_bars, execution_bars = await rest_batch(
                         scan_candles(inst.symbol, "240", now, 160),
                         scan_candles(inst.symbol, "60", now, 200),
                         scan_candles(inst.symbol, "15", now, 120),
@@ -1262,7 +1283,7 @@ class Scanner:
 
             # Small batches keep admission and stream work ahead of optional discovery.
             for offset in range(0, len(rows), self.settings.rest_concurrency):
-                await asyncio.gather(
+                await rest_batch(
                     *(broad_scan(raw) for raw in rows[offset : offset + self.settings.rest_concurrency])
                 )
             ranked.sort(key=lambda r: r["best_pre_rank"], reverse=True)
@@ -1291,7 +1312,7 @@ class Scanner:
                 batch = shortlist[
                     offset : offset + min(self.settings.rest_concurrency, admission_limit - len(verified))
                 ]
-                await asyncio.gather(*(admit(symbol, select_stream=False) for symbol in batch))
+                await rest_batch(*(admit(symbol, select_stream=False) for symbol in batch))
             deep_admit_duration_ms = now_ms() - admit_started
             retained = [x for x in pinned if x in self.streams.selected]
             selected = list(dict.fromkeys(retained + [x for x in shortlist if x in verified]))[
@@ -2343,8 +2364,13 @@ class Scanner:
                 # can retry without changing any existing setup plan.
                 async with asyncio.timeout(max(900, self.settings.scan_seconds * 3)):
                     await self.scan_once()
+                self.store.put("scan_health", success_health(now_ms()))
             except Exception as exc:
+                delay = min(delay, 60)
+                health = failure_health(self.store.get("scan_health", {}), exc, now_ms(), delay)
+                self.store.put("scan_health", health)
                 self.status = dict(state="error", error_type=type(exc).__name__, at_ms=now_ms())
+                self.status.update(error_category=health["error_category"], retry_at_ms=health["retry_at_ms"])
                 if isinstance(exc, ValueError):
                     self.status["reason"] = (
                         "Local/exchange clock skew exceeds two seconds"
