@@ -1,5 +1,6 @@
 """Compact operator warnings from measured runtime state; no qualification changes."""
 
+from .discord_health import FAILED, transport_health
 from .liquidity import SpreadHistory
 
 
@@ -259,14 +260,14 @@ def warnings(settings, store, scanner, recorder, now):
             severity="error",
             at_ms=confirmation.get("last_error_ms"),
         )
-    transport = store.get("discord_transport", {})
-    if transport.get("status") in {"error", "failed", "rejected", "uncertain"}:
-        add(
-            "DISCORD_DELIVERY",
-            "Discord delivery problem",
-            "The latest Discord delivery did not have a confirmed successful receipt.",
-            "Check the webhook configuration and Discord connectivity test. Do not assume that an uncertain card was delivered.",
-            severity="error",
-            at_ms=transport.get("at_ms"),
-        )
+    for destination, transport in transport_health(store)["destinations"].items():
+        if transport.get("status") in FAILED:
+            add(
+                "DISCORD_DELIVERY",
+                "Discord delivery problem",
+                f"The last {destination} request ({transport.get('method', 'POST')}) did not have a confirmed successful receipt.",
+                "Check this destination's webhook and connectivity. See Signals for delivery history. An uncertain initial card is not automatically resent.",
+                severity="error",
+                at_ms=transport.get("at_ms"),
+            )
     return result

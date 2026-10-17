@@ -5,6 +5,7 @@ from urllib.parse import urlparse
 
 import httpx
 
+from .discord_health import record_transport
 from .storage import now_ms
 
 INITIAL_REQUEST_TIMEOUT = 15
@@ -496,20 +497,30 @@ class Notifier:
                 card["description"] += (
                     f"\n**Updated original card** · First posted <t:{initial[2] // 1000}:f>"
                 )
+                transport_detail = dict(category="UNKNOWN", http_status=None)
                 try:
                     async with httpx.AsyncClient(timeout=15, transport=self.transport) as client:
                         response = await client.patch(
                             secret.split("?")[0].rstrip("/") + "/messages/" + initial[1],
                             json=payload,
                         )
+                        transport_detail.update(category="HTTP", http_status=response.status_code)
                         if response.is_success:
                             status = "sent"
                         elif response.status_code == 429:
                             delay = max(delay, min(3600, float(response.json().get("retry_after", delay))))
                         elif response.status_code < 500:
                             status = "failed"
-                except httpx.TransportError:
-                    pass  # Editing the same known message is idempotent, including ambiguous timeouts.
+                except httpx.TransportError as exc:
+                    # Editing the same known message remains idempotent. Never
+                    # persist exception text, which may contain webhook secrets.
+                    transport_detail.update(
+                        category="TIMEOUT" if isinstance(exc, httpx.TimeoutException) else "CONNECTION_ERROR",
+                        error_type=type(exc).__name__,
+                    )
+                record_transport(
+                    self.store, transport_detail | dict(at_ms=now_ms(), status=status), "signals", "PATCH"
+                )
             else:
                 # Never post a standalone terminal card when the original
                 # destination is unknown or retired. Internal tracking continues.
@@ -728,7 +739,13 @@ class Notifier:
                     (f"discord_initial_webhook_id:{signal_id}", json.dumps(delivery["webhook_id"])),
                 )
 
-        self.store.put("discord_transport", transport_detail | dict(status=status))
+        if http_attempted:
+            destination = (
+                "monitoring" if ":monitoring:" in key else "operations" if channel == "ml-ops" else "signals"
+            )
+            record_transport(
+                self.store, transport_detail | dict(at_ms=now_ms(), status=status), destination, "POST"
+            )
 
         if real_initial and http_attempted:
             metric = {"sent": "discord_sent", "uncertain": "discord_uncertain"}.get(

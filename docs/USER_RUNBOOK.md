@@ -205,6 +205,16 @@ Discord delivery problems, with a recovery action for each condition.
 Warnings refresh with the dashboard and clear when the measured condition
 recovers; they do not relax signal requirements.
 
+Discord health tracks actual sends and original-card edits separately for the
+signals, monitoring, and operations destinations. A success in one destination
+does not clear another destination's failure. Signals → Discord transport history
+shows the last request and its timestamp, including historical unconfirmed
+attempts from older releases. A later successful edit clears the stale transport
+alarm, but never marks an earlier uncertain initial card as delivered or resends
+it. Initial-delivery counts remain in Real signal delivery. These are request
+results, not a continuous connection test; syncing the clock cannot resolve a
+historical Discord timeout.
+
 **Clock check delayed** means the time request was too slow to establish drift;
 it does not by itself mean Windows needs synchronization. Check exchange access
 and available memory. Spread sampling includes request time in its configured

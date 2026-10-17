@@ -138,9 +138,11 @@ def create_app(settings=None):
 
     @app.get("/api/delivery")
     async def delivery_view(request: Request):
+        from .discord_health import transport_health
         from .identity import delivery_status
 
-        return delivery_status(request.app.state.store)
+        store = request.app.state.store
+        return delivery_status(store) | dict(transport_health=transport_health(store))
 
     @app.get("/api/horizons")
     async def horizon_research(request: Request):

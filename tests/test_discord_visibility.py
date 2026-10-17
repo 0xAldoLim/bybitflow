@@ -31,12 +31,15 @@ async def test_invisible_setup_has_no_pause_and_visible_outage_has_one(settings,
         assert await notifier.send_research(signal, update=True) == "blocked:no-visible-initial"
     assert store.active_signals()[0]["coverage"]["monitoring"] == "paused"
     assert not calls
+    assert not store.get("discord_transport:monitoring")
     with store.db:
         store.db.execute("UPDATE outbox SET status=?,message_id=?", ("sent", "initial-card"))
     for _ in range(3):
         await notifier.send_research(signal, update=True)
     assert len(calls) == 1 and calls[0][0].startswith("/api/webhooks/456/")
     assert calls[0][1]["embeds"][0]["title"].startswith("MONITORING PAUSED")
+    assert store.get("discord_transport:monitoring")["status"] == "sent"
+    assert not store.get("discord_transport:signals")
     assert not notifier.was_initially_delivered(signal.id, "validated")
     visible = store.get("discord_visibility:research:" + signal.id)
     assert visible["user_visible_initial"] and visible["initial_message_id"] == "initial-card"

@@ -5,8 +5,10 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import httpx
+import pytest
 from pydantic import SecretStr
 
+from bybit_flow.discord_health import transport_health
 from bybit_flow.lifecycle import advance_trades
 from bybit_flow.models import Candle, Trade
 from bybit_flow.native_streams import NativeStreams
@@ -18,7 +20,8 @@ from bybit_flow.storage import Store
 from bybit_flow.thesis_health import evaluate, summary
 
 
-async def test_transient_stop_wick_and_durable_terminal(settings, signal):
+@pytest.mark.parametrize("failure", ["503", "timeout", "connect"])
+async def test_transient_stop_wick_and_durable_terminal(settings, signal, failure):
     store = Store(settings.data_dir)
     signal.state = "ALERTED"
     store.signal(signal)
@@ -48,10 +51,21 @@ async def test_transient_stop_wick_and_durable_terminal(settings, signal):
 
     def transport(request):
         attempts.append(request)
+        if len(attempts) == 1 and failure != "503":
+            error = httpx.ReadTimeout if failure == "timeout" else httpx.ConnectError
+            raise error("https://discord.com/api/webhooks/123/SECRET", request=request)
         return httpx.Response(503 if len(attempts) == 1 else 200, json={"id": "123"})
 
+    store.put("last_terminal_delivery_ms", 1)
     notifier = Notifier(settings, store, transport=httpx.MockTransport(transport))
     await notifier.retry_terminals()
+    detail = store.get("discord_transport:signals")
+    assert detail["http_status"] == (503 if failure == "503" else None)
+    assert store.get("discord_transport:signals")["status"] == "pending"
+    assert transport_health(store)["destinations"]["signals"]["status"] == "pending"
+    assert "SECRET" not in json.dumps(detail)
+    if failure != "503":
+        assert detail["category"] == ("TIMEOUT" if failure == "timeout" else "CONNECTION_ERROR")
     with store.db:
         store.db.execute("UPDATE terminal_events SET next_ms=0")
     await notifier.retry_terminals()
@@ -63,6 +77,8 @@ async def test_transient_stop_wick_and_durable_terminal(settings, signal):
     assert any("Entry 100" in f["value"] and "SL 95" in f["value"] for f in card["fields"])
     assert store.db.execute("SELECT payload,message_id FROM outbox").fetchone()[:] == ("{}", "123")
     assert store.db.execute("SELECT notification_status FROM terminal_events").fetchone()[0] == "sent"
+    assert store.get("discord_transport:signals")["http_status"] == 200
+    assert store.get("discord_transport:signals")["status"] == "sent"
     assert before == (
         signal.entry,
         signal.zone,

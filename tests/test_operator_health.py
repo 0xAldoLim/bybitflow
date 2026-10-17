@@ -4,6 +4,7 @@ from types import SimpleNamespace
 import pytest
 from pydantic import SecretStr
 
+from bybit_flow.discord_health import record_transport, transport_health
 from bybit_flow.operator_health import warnings
 from bybit_flow.scanner import Scanner
 from bybit_flow.storage import Store
@@ -174,6 +175,52 @@ def test_runtime_fault_warnings_clear_on_actual_recovery_without_changing_state(
         for key in keys:
             store.put(key, {})
         assert warnings(settings, store, scanner, recorder, now) == []
+    finally:
+        store.close()
+
+
+def test_legacy_timeout_with_later_confirmed_edit_is_history_not_active_failure(settings):
+    settings, store, scanner, recorder, now = context(settings)
+    try:
+        timeout = dict(status="uncertain", at_ms=now - 90_000, category="TIMEOUT")
+        store.put("discord_transport", timeout)
+        store.put("last_terminal_delivery_ms", now - 60_000)
+        with store.db:
+            store.db.execute(
+                "INSERT INTO outbox VALUES(?,?,?,?,?,?)",
+                ("research:expired:initial", "expired", "uncertain", "{}", None, now - 90_000),
+            )
+        before = list(store.db.iterdump())
+        assert warnings(settings, store, scanner, recorder, now) == []
+        health = transport_health(store)
+        assert health["historical_unconfirmed_attempt"] == timeout
+        assert health["destinations"]["signals"]["method"] == "PATCH"
+        assert health["destinations"]["signals"]["status"] == "sent"
+        assert list(store.db.iterdump()) == before  # Reporting cannot reconcile or resend the initial.
+        store.put("last_terminal_delivery_ms", now - 100_000)
+        assert [w["code"] for w in warnings(settings, store, scanner, recorder, now)] == ["DISCORD_DELIVERY"]
+    finally:
+        store.close()
+
+
+def test_discord_recovery_requires_a_success_to_the_same_destination(settings):
+    settings, store, scanner, recorder, now = context(settings)
+    try:
+        record_transport(store, dict(status="uncertain", at_ms=now - 20_000), "signals", "POST")
+        record_transport(store, dict(status="sent", at_ms=now - 10_000), "monitoring", "POST")
+        result = warnings(settings, store, scanner, recorder, now)
+        assert len(result) == 1 and "signals" in result[0]["message"]
+        record_transport(store, dict(status="sent", at_ms=now), "signals", "PATCH")
+        assert warnings(settings, store, scanner, recorder, now) == []
+        record_transport(store, dict(status="rate-limited", at_ms=now + 1), "monitoring", "POST")
+        record_transport(store, dict(status="sent", at_ms=now + 2), "signals", "PATCH")
+        result = warnings(settings, store, scanner, recorder, now + 2)
+        assert len(result) == 1 and "monitoring" in result[0]["message"]
+        # Neither elapsed time nor a success in the operations channel clears it.
+        record_transport(store, dict(status="sent", at_ms=now + 3), "operations", "POST")
+        assert transport_health(store)["destinations"]["monitoring"]["status"] == "rate-limited"
+        store.put("clock_health", dict(source="binance", at_ms=now + 86_400_000, skew_ms=0))
+        assert "monitoring" in warnings(settings, store, scanner, recorder, now + 86_400_000)[0]["message"]
     finally:
         store.close()
 

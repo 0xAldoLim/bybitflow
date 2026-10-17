@@ -128,12 +128,18 @@ async def test_valid_initial_and_later_terminal_edit_keep_visibility(settings, s
     notifier = Notifier(settings, store, httpx.MockTransport(transport))
     assert await notifier.send_research(signal) == "sent"
     assert notifier.was_initially_delivered(signal.id, "research")
+    assert store.get("discord_transport:signals")["method"] == "POST"
+    receipt = store.db.execute("SELECT * FROM outbox").fetchone()[:]
     clock["now"] = 200_001
     signal.state = "EXPIRED"
     store.signal(signal, "Original entry deadline elapsed")
     await notifier.retry_terminals()
     assert [method for method, _ in calls] == ["POST", "PATCH"]
     assert calls[1][1]["embeds"][0]["title"].startswith("ENTRY EXPIRED")
+    assert store.get("discord_transport:signals") == dict(
+        at_ms=200_001, status="sent", category="HTTP", http_status=200, destination="signals", method="PATCH"
+    )
+    assert store.db.execute("SELECT * FROM outbox").fetchone()[:] == receipt
     store.close()
 
 
@@ -159,5 +165,6 @@ async def test_initial_total_timeout_is_uncertain_without_retry(settings, signal
     assert await notifier.send_research(signal) == "duplicate-plan-suppressed"
     assert len(calls) == 1
     assert store.get("discord_transport")["category"] == "TIMEOUT"
+    assert store.get("discord_transport:signals")["status"] == "uncertain"
     assert not notifier.was_initially_delivered(signal.id, "research")
     store.close()
