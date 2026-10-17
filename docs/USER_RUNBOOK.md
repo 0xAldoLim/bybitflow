@@ -115,6 +115,14 @@ unknown. A manual Paper journal close remains separate from simulated outcomes.
 
 ## Collection and Discord delivery
 
+Short intraday reversals in wicky or stressed conditions require two completed
+five-minute reclaim/hold bars after the setup trigger. New plans schedule their
+two-minute entry window after those required bars can close, bounded by the
+original setup expiry. The confirmer still requires the actual reclaim, hold,
+fresh executed flow, profile support, and all risk gates. Waiting for bars alone
+never qualifies a setup. Previously stored plans keep their original deadlines;
+expired setups are not reopened or resent.
+
 Contracts must pass age, turnover, spread, liquidity, and history checks. The
 minute-spread configuration needs at least 12 distinct valid minute observations
 and 80% coverage; repeated quotes in one bucket count once. Warm-up usually takes

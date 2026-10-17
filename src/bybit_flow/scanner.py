@@ -597,7 +597,11 @@ class Scanner:
                 ):
                     continue
                 signal.expires_ms = bars[1][-1].end + DURATIONS[profile.setup]
-                signal.trigger_expires_ms = now + 120_000
+                from .production import confirmation_entry_window
+
+                timing = confirmation_entry_window(signal, now)
+                signal.trigger_expires_ms = timing["trigger_expires_ms"]
+                signal.evidence["confirmation_entry_window"] = timing
                 old = self.store.db.execute("SELECT payload FROM signals WHERE id=?", (signal.id,)).fetchone()
                 if old:
                     from .research_v212 import suppression

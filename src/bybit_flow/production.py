@@ -2,6 +2,35 @@
 
 INTRADAY = {"SHORT_INTRADAY", "CORE_INTRADAY"}
 REVERSALS = {"liquidity_sweep", "range_rejection"}
+RECLAIM_BAR_MS = 300_000
+
+
+def requires_reclaim_hold(signal):
+    return (
+        signal.horizon_profile == "SHORT_INTRADAY"
+        and signal.family in REVERSALS
+        and signal.evidence.get("wick_regime", {}).get("state") in {"WICKY", "LIQUIDITY_STRESS"}
+    )
+
+
+def confirmation_entry_window(signal, now):
+    """Schedule a new plan's entry window after its mandatory bars can close.
+
+    This is generation-only: never re-arm or extend a persisted setup. The
+    confirmer still requires the actual completed reclaim/hold bars and flow.
+    """
+    earliest = now
+    available = signal.evidence.get("structural_trigger", {}).get("available_ms")
+    if requires_reclaim_hold(signal) and type(available) is int and 0 <= available <= now:
+        earliest = max(now, (available // RECLAIM_BAR_MS + 2) * RECLAIM_BAR_MS)
+    return dict(
+        policy="confirmation-entry-window-v1",
+        entry_window_start_ms=earliest,
+        trigger_expires_ms=min(signal.expires_ms, earliest + 120_000),
+        required_post_trigger_bars=2 if requires_reclaim_hold(signal) else 0,
+        bar_interval_ms=RECLAIM_BAR_MS if requires_reclaim_hold(signal) else None,
+        entry_window_ms=120_000,
+    )
 
 
 def wick_regime(bars, direction, atr, asof):
@@ -90,7 +119,9 @@ def reclaim_hold(signal, bars, asof):
     sign = 1 if signal.direction == "LONG" else -1
     trigger = signal.evidence.get("structural_trigger", {})
     level, extreme = trigger.get("level"), trigger.get("extreme")
-    closed = [b for b in bars if b.interval == 300000 and trigger.get("available_ms", 0) < b.end <= asof]
+    closed = [
+        b for b in bars if b.interval == RECLAIM_BAR_MS and trigger.get("available_ms", 0) < b.end <= asof
+    ]
     if level is None or extreme is None or len(closed) < 2:
         return False
     if any(b.low < extreme if sign > 0 else b.high > extreme for b in closed):
@@ -490,11 +521,7 @@ def evaluate_intraday_confirmation(signal, flow, bars, asof, alignment=None):
         profile_ok = False
     factor_ok = not (alignment or {}).get("blocked", False)
     passed = bool(response and (support["state"] == "FLOW_SUPPORTIVE" and part_ok or remote_ok) and factor_ok)
-    stressed = (
-        signal.horizon_profile == "SHORT_INTRADAY"
-        and signal.family in REVERSALS
-        and signal.evidence.get("wick_regime", {}).get("state") in {"WICKY", "LIQUIDITY_STRESS"}
-    )
+    stressed = requires_reclaim_hold(signal)
     hold_ok = reclaim_hold(signal, bars, asof) if stressed else True
     if stressed:
         passed = passed and hold_ok and profile_ok
