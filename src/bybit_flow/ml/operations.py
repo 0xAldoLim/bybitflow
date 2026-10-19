@@ -99,7 +99,7 @@ def partition_status(store, primary, bootstrap, prefix="ml_partition_feasibility
     return result
 
 
-def trainability(store, asof_ms=None):
+def trainability(store, asof_ms=None, *, row_limits=None):
     """Cache-ready counts from bounded scalar pages, never sorting feature payloads."""
     from . import SCHEMA_VERSION
 
@@ -146,16 +146,21 @@ def trainability(store, asof_ms=None):
     epoch_start = store.get("ml_maturity_epoch", {}).get("started_ms")
     while True:
         page = " AND (s.decision_ms,s.id)>(?,?)" if cursor else ""
-        params = list(cursor) if cursor else []
+        label_limit = " AND l.rowid<=?" if row_limits is not None else ""
+        snapshot_limit = " AND s.rowid<=?" if row_limits is not None else ""
+        params = [row_limits["ml_labels"], row_limits["ml_snapshots"]] if row_limits is not None else []
+        params += list(cursor) if cursor else []
         rows = store.db.execute(
             "SELECT s.decision_ms,s.id,s.schema_version,"
             "json_extract(s.payload,'$.source'),json_array_length(s.payload,'$.sequence'),"
             "coalesce(c.candidate_identity,s.signal_id),l.snapshot_id,l.available_ms,"
             "json_extract(l.payload,'$.complete'),json_extract(l.payload,'$.net_r'),"
             "json_extract(l.payload,'$.exit_ms'),json_extract(l.payload,'$.classification'),json_extract(l.payload,'$.data_gaps') "
-            "FROM ml_snapshots s LEFT JOIN ml_labels l ON l.snapshot_id=s.id AND l.policy='prints-v1' "
+            "FROM ml_snapshots s LEFT JOIN ml_labels l ON l.snapshot_id=s.id AND l.policy='prints-v1'"
+            + label_limit
+            + " "
             "LEFT JOIN candidate_identities c ON c.signal_id=s.signal_id "
-            "WHERE s.stage='decision'" + page + " ORDER BY s.decision_ms,s.id LIMIT 1000",
+            "WHERE s.stage='decision'" + snapshot_limit + page + " ORDER BY s.decision_ms,s.id LIMIT 1000",
             params,
         ).fetchall()
         if not rows:

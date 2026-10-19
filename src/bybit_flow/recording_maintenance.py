@@ -269,15 +269,17 @@ def cleanup_priority(classes):
     return min((order.index(c) for c in classes if c in order), default=6)
 
 
-def ml_inventory(store, asof, artifacts=False):
+def ml_inventory(store, asof, artifacts=False, *, row_limits=None):
     from .ml import SCHEMA_VERSION
     from .ml.operations import trainability
     from .ml.store import FeatureStore
 
-    ready = trainability(store, asof)["by_source"]
+    ready = trainability(store, asof, row_limits=row_limits)["by_source"]
     identities = {}
     for source in ready:
-        rows = FeatureStore(store).dataset(asof, source=source, schema_version=SCHEMA_VERSION)
+        rows = FeatureStore(store).dataset(
+            asof, source=source, schema_version=SCHEMA_VERSION, row_limits=row_limits
+        )
         ids = sorted(r["candidate_identity"] for r in rows)
         identities[source] = dict(
             count=len(ids),
@@ -289,6 +291,7 @@ def ml_inventory(store, asof, artifacts=False):
         by_source=ready,
         eligible=identities,
         models={r[0]: r[1] for r in store.db.execute("SELECT id,sha256 FROM ml_models")},
+        row_limits=row_limits,
     )
     if artifacts:
         result["artifacts"] = {
@@ -677,7 +680,15 @@ def _execute(store, settings, plan, dry_run=False, owner=None):
     if store.get("cleanup_verification_v212", {}).get("status") == "FAILED":
         raise RuntimeError("Previous cleanup verification FAILED; cleanup remains stopped")
     asof = now_ms()
-    before = ml_inventory(store, asof, artifacts=True)
+    # Availability/decision time can predate insertion (historical labeling).
+    # Freeze insertion boundaries as well as causal time: concurrent additions
+    # must not be mistaken for loss of immutable training rows.
+    limits = store.db.execute(
+        "SELECT coalesce((SELECT max(rowid) FROM ml_snapshots),0),"
+        "coalesce((SELECT max(rowid) FROM ml_labels),0)"
+    ).fetchone()
+    row_limits = dict(zip(("ml_snapshots", "ml_labels"), limits))
+    before = ml_inventory(store, asof, artifacts=True, row_limits=row_limits)
     directory = store.root / "ml" / "maintenance"
     directory.mkdir(parents=True, exist_ok=True)
     (directory / (plan["run_id"].replace(":", "-") + "-pre.json")).write_text(
@@ -701,21 +712,24 @@ def _execute(store, settings, plan, dry_run=False, owner=None):
         state["freed_bytes"] += size
         state["freed_by_class"][category] = state["freed_by_class"].get(category, 0) + size
 
-    def row_digest():
+    def row_inventory():
         h = hashlib.sha256()
+        counts = {}
         for table, query in (
-            ("snapshots", "SELECT id FROM ml_snapshots WHERE decision_ms<=? ORDER BY id"),
+            ("ml_snapshots", "SELECT id FROM ml_snapshots WHERE rowid<=? ORDER BY id"),
             (
-                "labels",
-                "SELECT snapshot_id,policy FROM ml_labels WHERE available_ms<=? ORDER BY snapshot_id,policy",
+                "ml_labels",
+                "SELECT snapshot_id,policy FROM ml_labels WHERE rowid<=? ORDER BY snapshot_id,policy",
             ),
         ):
             h.update(table.encode())
-            for row in store.db.execute(query, (asof,)):
+            counts[table] = 0
+            for row in store.db.execute(query, (row_limits[table],)):
                 h.update(json.dumps(tuple(row)).encode())
-        return h.hexdigest()
+                counts[table] += 1
+        return dict(digest=h.hexdigest(), counts=counts)
 
-    rows_before = row_digest()
+    rows_before = row_inventory()
 
     def done():
         # An expired/replaced claim never authorizes another destructive step.
@@ -727,8 +741,16 @@ def _execute(store, settings, plan, dry_run=False, owner=None):
             )
             if renewed.rowcount != 1:
                 raise RuntimeError("Cleanup ownership expired/lost; stopped")
-        if rows_before != row_digest():
-            raise RuntimeError("Cleanup durable ML row identities changed; stopped")
+        # Inserts above the frozen boundary cannot replace a missing original.
+        # Scalar counts avoid hashing every historical ID before every segment;
+        # the full identity digest is checked again before successful completion.
+        for table in ("ml_snapshots", "ml_labels"):
+            count = store.db.execute(
+                f"SELECT count(*) FROM {table} INDEXED BY sqlite_autoindex_{table}_1 WHERE rowid<=?",
+                (row_limits[table],),
+            ).fetchone()[0]
+            if count != rows_before["counts"][table]:
+                raise RuntimeError("Cleanup durable ML row identities changed; stopped")
         maximum = plan.get("max_reclaim_bytes")
         return maximum is not None and state["freed_bytes"] >= maximum
 
@@ -836,6 +858,8 @@ def _execute(store, settings, plan, dry_run=False, owner=None):
                             for m in retain
                         ):
                             continue
+                        if done():
+                            break
                         # All originals are unmodified until replacement verification and mapping commit.
                         target = replacement(store, path, retain, health, leases) if retain else None
                         with store.db:
@@ -949,6 +973,8 @@ def _execute(store, settings, plan, dry_run=False, owner=None):
                                     or cause_code(exc) not in PROVEN_CORRUPTION
                                 ):
                                     raise
+                            if done():
+                                break
                             with store.db:
                                 tombstone(store, m, classes, plan["run_id"])
                             state["deleted_segments"] += 1
@@ -973,7 +999,9 @@ def _execute(store, settings, plan, dry_run=False, owner=None):
                     state["skipped_unverifiable"] += 1
                     if isinstance(exc, RuntimeError):
                         raise
-        after = ml_inventory(store, asof, artifacts=True)
+        if rows_before != row_inventory():
+            raise RuntimeError("Cleanup durable ML row identities changed; stopped")
+        after = ml_inventory(store, asof, artifacts=True, row_limits=row_limits)
         verify_ml(before, after)
         (directory / (plan["run_id"].replace(":", "-") + "-post.json")).write_text(
             json.dumps(after, sort_keys=True)

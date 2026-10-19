@@ -441,7 +441,11 @@ durable disposition. Archive health and tombstones permanently record provenance
 Every cleanup captures canonical per-source `trainable_current_schema`,
 `sequence_ready_16`, unique eligible identities/digests and immutable model and
 dataset hashes. It rechecks them after deletion at the same causal cutoff; a
-mismatch stops cleanup. Artifacts are under `ml/maintenance`. `storage status`
+mismatch stops cleanup. Both checks use the same snapshot/label insertion
+boundaries as well as the causal cutoff. Concurrent historical labels remain
+available to learning but do not change the frozen cleanup comparison. Original
+row counts and identity digests also detect removal of existing records.
+Artifacts are under `ml/maintenance`. `storage status`
 exposes cached canonical counts separately from physical recording counts.
 Informational totals across venues cannot satisfy a source-specific 500-outcome
 minimum. A model's immutable manifest separately identifies the training,

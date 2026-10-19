@@ -246,6 +246,79 @@ def test_scheduled_and_manual_cleanup_cannot_overlap(settings, monkeypatch):
     store.close()
 
 
+@pytest.mark.parametrize("addition", ["snapshot", "historical_label"])
+def test_cleanup_freezes_existing_rows_while_learning_continues(settings, signal, monkeypatch, addition):
+    from bybit_flow import recording_maintenance as maintenance
+
+    store = Store(settings.data_dir)
+    tape(store, settings, 1000)
+    signal.source, signal.feature_schema_version = "binance", "candidate-v20"
+    features = FeatureStore(store)
+    ident = features.capture(signal, 2_000_000, "decision")
+    plan = planning(store, settings, 8 * 3600000, force=True)
+    other = Store(settings.data_dir)
+    original = maintenance.classify
+    added = []
+
+    def publish_label(*args, **kwargs):
+        if not added:
+            target = ident
+            if addition == "snapshot":
+                target = FeatureStore(other).capture(
+                    signal.model_copy(update={"id": "later-historical-candidate"}), 2_100_000, "decision"
+                )
+            FeatureStore(other).label(
+                target,
+                dict(policy="prints-v1", complete=True, classification="target", net_r=2, exit_ms=2_200_000),
+                2_300_000,
+            )
+            added.append(target)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(maintenance, "classify", publish_label)
+    result = execute(store, settings, plan)
+    assert result["freed_bytes"] > 0
+    verification = store.get("cleanup_verification_v212")
+    assert verification["status"] == "PASSED"
+    assert verification["before"]["eligible"] == verification["after"]["eligible"]
+    assert (
+        FeatureStore(store).dataset(now_ms(), source="binance", schema_version="candidate-v20")[0]["id"]
+        == added[0]
+    )
+    other.close()
+    store.close()
+
+
+def test_cleanup_still_stops_if_existing_label_disappears(settings, signal, monkeypatch):
+    from bybit_flow import recording_maintenance as maintenance
+
+    store = Store(settings.data_dir)
+    manifest = tape(store, settings, 1000)
+    features = FeatureStore(store)
+    ident = features.capture(signal, 1000, "decision")
+    features.label(
+        ident, dict(policy="prints-v1", complete=True, classification="target", net_r=2, exit_ms=5000), 6000
+    )
+    plan = planning(store, settings, 8 * 3600000, force=True)
+    original = maintenance.managed
+    removed = []
+
+    def lose_label(*args, **kwargs):
+        if not removed:
+            with store.db:
+                store.db.execute("DELETE FROM ml_labels WHERE snapshot_id=?", (ident,))
+            removed.append(ident)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(maintenance, "managed", lose_label)
+    with pytest.raises(RuntimeError, match="ML row identities changed"):
+        execute(store, settings, plan)
+    assert store.get("cleanup_verification_v212")["status"] == "FAILED"
+    assert Path(manifest["raw"]).exists()
+    assert not store.get("cleanup_run_claim_v212")
+    store.close()
+
+
 def test_stale_inventory_cannot_undo_archive_retirement(settings):
     from bybit_flow.recording_maintenance import migrate, save_health
 

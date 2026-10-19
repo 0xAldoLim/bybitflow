@@ -168,6 +168,7 @@ class FeatureStore:
         source=None,
         schema_version=None,
         confirmation_policy=None,
+        row_limits=None,
     ):
         """Return at most `limit` causally available, unique completed outcomes.
 
@@ -186,6 +187,11 @@ class FeatureStore:
             "json_extract(l.payload,'$.exit_ms')<=?",
         ]
         filters = [stage, policy, asof_ms, asof_ms]
+        if row_limits is not None:
+            # Cleanup compares the same immutable rows before/after while new
+            # historical labels may be published concurrently.
+            where.extend(["s.rowid<=?", "l.rowid<=?"])
+            filters.extend([row_limits["ml_snapshots"], row_limits["ml_labels"]])
         if source is not None:
             where.append("json_extract(s.payload,'$.source')=?")
             filters.append(source)

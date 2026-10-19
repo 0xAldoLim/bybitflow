@@ -161,6 +161,29 @@ def test_writer_commit_acknowledgement_retry_is_idempotent(settings):
     store.close()
 
 
+def test_writer_waits_for_independent_cleanup_then_retries_same_batch(settings, monkeypatch):
+    from bybit_flow.storage import StorageBudgetExceeded
+
+    store = Store(settings.data_dir)
+    cfg = settings.model_copy(update={"max_storage_gb": 0.11})
+    filler = store.root / "budget-fixture.bin"
+    with filler.open("wb") as stream:
+        stream.truncate(110_000_000)
+    recorder = Recorder(store, cfg)
+    monkeypatch.setattr(
+        "bybit_flow.retention.prune_recordings",
+        lambda *args, **kwargs: pytest.fail("Cleanup must not run inside the bounded writer"),
+    )
+    with pytest.raises(StorageBudgetExceeded):
+        recorder.flush([envelope(1000)], ident="budget-retry")
+    assert not store.rows("segments")
+    filler.unlink()  # Independent maintenance has reclaimed eligible space.
+    recorder.flush([envelope(1000)], ident="budget-retry")
+    assert len(store.rows("segments")) == 1
+    assert recorder.written == 1
+    store.close()
+
+
 def test_malformed_execution_is_preserved_as_gap(settings):
     from bybit_flow.packing import raw_stream
 

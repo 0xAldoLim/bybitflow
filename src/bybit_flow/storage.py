@@ -531,9 +531,9 @@ class Recorder:
         self.retention_freed = freed
         reserve = 2 * sum(len(json.dumps(row).encode()) for row in batch) + 65536
         if self.disk_bytes + reserve >= self.settings.max_storage_gb * 1e9:
-            from .retention import prune_recordings
-
-            prune_recordings(store, self.settings)
+            # The independent storage loop owns cleanup. Running its full
+            # archive/ML audit here exceeds the bounded writer's timeout and
+            # repeatedly kills cleanup before it can restore recording.
             self.disk_bytes = directory_bytes(self.store.root)
             self.retention_freed = store.get("recording_retention", {}).get("total_freed_bytes", 0)
             if self.disk_bytes + reserve >= self.settings.max_storage_gb * 1e9:

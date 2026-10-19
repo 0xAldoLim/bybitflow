@@ -51,6 +51,11 @@ Permanent snapshots, labels, exported datasets, models and Discord receipts are
 preserved. Canonical per-source training counts, sequence counts and eligible
 identity digests are checked before and after cleanup. Safely releasing raw tape
 after a final label does not remove the derived training candidate.
+Cleanup freezes both causal time and the existing snapshot/label insertion
+boundaries, so historical labels arriving during cleanup do not trigger a false
+data-loss alarm. Missing original records still stop cleanup. The recorder waits
+for independent maintenance at the storage limit and retries its pending batch;
+archive verification does not run inside its bounded writer process.
 
 Inspect or plan cleanup from the repository directory:
 
