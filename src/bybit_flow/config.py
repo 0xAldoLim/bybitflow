@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     macro_refresh_minutes: int = Field(15, ge=15, le=1440)
     score_profile_auto_promote: bool = False
     ml_enabled: bool = False
+    ml_print_recovery_enabled: bool = True
     ml_filter_research: bool = False
     v8_production_gating: bool = True
     v8_gate_spot_perp: bool = True

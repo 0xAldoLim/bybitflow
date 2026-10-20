@@ -260,9 +260,24 @@ setup. See the [horizon and lifecycle guide](docs/USER_RUNBOOK.md#multi-horizon-
 
 | Track | Evidence | Authority |
 |---|---|---|
-| Primary | Current `candidate-v20` decisions with complete `prints-v1` outcomes from recorded trades | Preferred compatible model; promotion requires independent admission checks |
+| Primary | Current `candidate-v20` decisions with complete `prints-v1` outcomes from local or verified historical trades | Preferred compatible model; promotion requires independent admission checks |
 | Monitored | Current `candidate-v20` features with `monitored-ohlc-v1` setup outcomes recovered from original-exchange candles | Advisory model with full current features; hypothetical fills, no production filtering |
 | Bootstrap | `bootstrap-core-v1` features with `ohlc-path-v1` historical one-minute candle outcomes | Advisory OHLC-proxy challenger; promotion and production filtering disabled |
+
+The trainer also attempts **primary trade-history recovery** after interruptions.
+For Binance decisions, it replays the original exchange's aggregate trades with
+the same frozen entry window, latency, volume participation, costs and exit rules
+as local recording. Only a verified consecutive trade sequence can supply a
+complete outcome. Recoveries join the primary pool with explicit provenance;
+existing complete labels and decision features remain unchanged. A shutdown can
+pause replay, which resumes from saved progress. Unverifiable paths stay excluded.
+
+This runs automatically with the ML worker. Inspect `primary_trade_recovery` in
+`docker compose exec trainer bybit-flow ml status`. Recent trades use the public
+API; older trades use checksummed official daily archives. Recovery uses bounded
+work batches and a 128 MB archive cache within the configured data cap. Bybit/OKX
+primary historical replay and archives exceeding that cache limit are not
+supported. Candle recovery remains a separate, lower-resolution track.
 
 The laptop does **not** need to stay on throughout a position for monitored
 learning. On restart, saved setups retain their original plans and lifecycle
@@ -287,8 +302,9 @@ assumed costs, not a verified account win.
 V10 recovery continues and its snapshots, labels, and models are preserved.
 V10 outcomes do not count toward the v20 minimum, and incompatible v1/bootstrap
 models abstain on new v20 setups. New setups retain deterministic authority while
-their own compatible models mature. Continuous recording remains necessary only
-for the strict print track; monitored recovery keeps its separate fidelity.
+their own compatible models mature. The primary track requires a verified complete
+trade path, obtained locally or through supported historical recovery. Monitored
+candle recovery retains its separate fidelity.
 
 The baseline compares Logistic Regression and LightGBM. With
 `FLOW_ML_TWO_STAGE=true`, the primary sequence pipeline can compare LightGBM,

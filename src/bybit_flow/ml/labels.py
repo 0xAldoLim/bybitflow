@@ -12,6 +12,43 @@ from ..models import Signal, Trade
 from .store import FeatureStore, digest
 
 
+def primary_outcome(snapshot, position, settings, input_event_hash):
+    """The unchanged prints-v1 fill/cost target for local and verified history replay."""
+    outcome = position.outcome()
+    # Liquidity participation may prevent a timely time-stop exit; do not label a later fill as 4H.
+    if outcome["exit_ms"] and outcome["exit_ms"] > position.signal.created_ms + position.horizon_ms:
+        outcome["complete"] = False
+        outcome["data_gaps"].append("exit beyond maximum frozen horizon policy")
+    reserve = position.entry_value * settings.funding_reserve_bps / 10000
+    risk = position.quantity * abs(position.signal.entry - position.signal.stop)
+    if outcome["complete"]:
+        outcome["net_pnl"] -= reserve
+        outcome["net_r"] = outcome["net_pnl"] / risk if risk else None
+        outcome["classification"] = (
+            "win" if outcome["net_r"] > 1e-10 else "loss" if outcome["net_r"] < -1e-10 else "breakeven"
+        )
+    else:
+        outcome["net_pnl"] = outcome["net_r"] = None
+        outcome["classification"] = "incomplete"
+    outcome.update(
+        policy="prints-v1",
+        data_kind="recorded-public-prints",
+        source_methodology=snapshot["source"],
+        funding_reserve=reserve,
+        costs_verified=False,
+        fees_bps=settings.taker_fee_bps,
+        slippage_bps=settings.slippage_bps,
+        funding_assumption_bps=settings.funding_reserve_bps,
+        feature_schema_version=snapshot["schema_version"],
+        model_version=snapshot["signal"].get("model_version"),
+        horizon_profile=position.signal.horizon_profile,
+        entry_session=position.signal.entry_session,
+        input_event_hash=input_event_hash,
+        outcome_definition="whole position TP1/stop/frozen horizon, 1% trade participation, fee/slip/funding assumptions",
+    )
+    return outcome
+
+
 def close_pre_retention_decisions(store):
     """Freeze unverifiable old decisions without inventing a paper outcome."""
     from ..storage import now_ms
@@ -128,38 +165,7 @@ def label_recordings(
             heapq.heappush(deadlines, (position.signal.created_ms + position.horizon_ms + 60_000, ident))
 
     def finish(ident, snapshot, position, at_ms):
-        outcome = position.outcome()
-        # Liquidity participation may prevent a timely time-stop exit; do not label a later fill as 4H.
-        if outcome["exit_ms"] and outcome["exit_ms"] > position.signal.created_ms + position.horizon_ms:
-            outcome["complete"] = False
-            outcome["data_gaps"].append("exit beyond maximum frozen horizon policy")
-        reserve = position.entry_value * settings.funding_reserve_bps / 10000
-        risk = position.quantity * abs(position.signal.entry - position.signal.stop)
-        if outcome["complete"]:
-            outcome["net_pnl"] -= reserve
-            outcome["net_r"] = outcome["net_pnl"] / risk if risk else None
-            outcome["classification"] = (
-                "win" if outcome["net_r"] > 1e-10 else "loss" if outcome["net_r"] < -1e-10 else "breakeven"
-            )
-        else:
-            outcome["net_pnl"] = outcome["net_r"] = None
-            outcome["classification"] = "incomplete"
-        outcome.update(
-            policy="prints-v1",
-            data_kind="recorded-public-prints",
-            source_methodology=snapshot["source"],
-            funding_reserve=reserve,
-            costs_verified=False,
-            fees_bps=settings.taker_fee_bps,
-            slippage_bps=settings.slippage_bps,
-            funding_assumption_bps=settings.funding_reserve_bps,
-            feature_schema_version=snapshot["schema_version"],
-            model_version=snapshot["signal"].get("model_version"),
-            horizon_profile=position.signal.horizon_profile,
-            entry_session=position.signal.entry_session,
-            input_event_hash=event_hash.hexdigest(),
-            outcome_definition="whole position TP1/stop/frozen horizon, 1% trade participation, fee/slip/funding assumptions",
-        )
+        outcome = primary_outcome(snapshot, position, settings, event_hash.hexdigest())
         # A coverage gap permanently excludes this primary outcome. Freeze the
         # exclusion now instead of pinning raw data until a long horizon ends.
         # Clean pending positions remain protected.

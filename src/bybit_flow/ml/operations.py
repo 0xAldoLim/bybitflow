@@ -156,7 +156,7 @@ def trainability(store, asof_ms=None, *, row_limits=None):
             "coalesce(c.candidate_identity,s.signal_id),l.snapshot_id,l.available_ms,"
             "json_extract(l.payload,'$.complete'),json_extract(l.payload,'$.net_r'),"
             "json_extract(l.payload,'$.exit_ms'),json_extract(l.payload,'$.classification'),json_extract(l.payload,'$.data_gaps') "
-            "FROM ml_snapshots s LEFT JOIN ml_labels l ON l.snapshot_id=s.id AND l.policy='prints-v1'"
+            "FROM ml_snapshots s LEFT JOIN ml_primary_labels l ON l.snapshot_id=s.id AND l.policy='prints-v1'"
             + label_limit
             + " "
             "LEFT JOIN candidate_identities c ON c.signal_id=s.signal_id "
@@ -380,6 +380,7 @@ def status(store, summary, enabled=True):
         latest_model_id=latest_model_id[0] if latest_model_id else None,
         ml_trainability=readiness,
         primary_data_quality=store.get("primary_data_quality", {}),
+        primary_trade_recovery=store.get("ml_print_recovery", {}),
         partition_feasibility=partition_status(
             store, readiness["by_source"], store.get("ml_bootstrap_trainability", {})
         ),

@@ -23,7 +23,7 @@ The separate immutable `bybitflow_v2_cutover` records this transition without
 replacing the existing maturity epoch.
 
 The `prints-v1` label policy evaluates frozen candidates, including rejected setups,
-against recorded trades. Paper fills use participation limits, latency, fees,
+against local or verified original-venue historical trades. Paper fills use participation limits, latency, fees,
 slippage, and a funding reserve. Outcomes exit at TP1, stop, or the frozen holding
 deadline (four hours for legacy/core intraday). TP2 is informational. Missing continuity, late exits, and unresolved
 positions do not become complete training outcomes.
@@ -63,8 +63,39 @@ worker reports that reason instead of weakening the checks.
 
 ## Monitored setups and laptop downtime
 
-Continuous local recording is required for the strict `prints-v1` paper-fill
-policy, but is **not required for monitored learning**. The separate
+### Primary trade-history recovery
+
+A local recording interruption does not permanently disqualify a current-schema
+Binance candidate when the original venue's full trade sequence can be recovered.
+The worker replays aggregate trades through the same `PaperPosition` engine:
+500 ms latency, 60-second entry fill window, 1% printed-volume participation,
+frozen quantity, entry/stop/TP1/horizon and the original fee, slippage and funding
+reserve assumptions. This remains hypothetical execution, not account fills.
+
+Recovery verifies a pre-decision anchor, consecutive aggregate IDs and monotonic
+event times through the exit. It retains the original decision features and
+incomplete label. A separate immutable `prints-recovered-v1` label records the
+sequence bounds/hash, original snapshot/label hashes, simulation version and
+recovery time. The effective primary dataset uses that certified result only
+when the original `prints-v1` label is incomplete; existing complete labels
+always take precedence. Training validates the certificate and records label
+provenance. The primary outcome target and all admission thresholds are unchanged.
+
+The first implementation supports Binance aggregate trades, matching the live
+`aggTrade` stream. Recent paths use REST; older paths use SHA-256 checked official
+[daily futures archives](https://github.com/binance/binance-public-data/). A 128 MB
+cache, bounded batches and live recorder pressure
+checks limit resource use. Progress is checkpointed across shutdowns. Missing or
+invalid sequences, unsupported sources and oversized archives are deferred or
+excluded rather than treated as losses. Labels become available at recovery
+time, never retroactively at their historical exit, so chronological validation
+cannot use them before they were known. The worker reports cached progress under
+`primary_trade_recovery` and retries every normal 15-minute monitoring cycle.
+`FLOW_ML_PRINT_RECOVERY_ENABLED=false` disables this optional work.
+
+### Monitored candle recovery
+
+Continuous local recording is **not required for monitored learning**. The separate
 `monitored-ohlc-v1` track uses the full, immutable current `candidate-v20` decision
 features and recovers the original venue's closed one-minute price history.
 It keeps the original entry zone/window, stop, TP1, holding deadline and cost

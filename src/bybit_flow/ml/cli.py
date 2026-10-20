@@ -151,6 +151,9 @@ def monitor(settings, store):
     if result["status"] == "observed":
         result["last_success_ms"] = now_ms()
     store.put("ml_monitor", result)
+    from .print_recovery import backfill as recover_prints
+
+    result["print_recovery"] = asyncio.run(recover_prints(store, settings))
     cache_readiness(store)
     from ..retention import prune_recordings
 

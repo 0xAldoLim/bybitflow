@@ -261,7 +261,7 @@ class Registry:
                 "SELECT COUNT(*) FROM ml_labels WHERE json_extract(payload,'$.complete')=1"
             ).fetchone()[0],
             sequence_outcomes=self.db.execute(
-                "SELECT COUNT(DISTINCT coalesce(c.candidate_identity,s.signal_id)) FROM ml_snapshots s JOIN ml_labels l ON l.snapshot_id=s.id LEFT JOIN candidate_identities c ON c.signal_id=s.signal_id "
+                "SELECT COUNT(DISTINCT coalesce(c.candidate_identity,s.signal_id)) FROM ml_snapshots s JOIN ml_primary_labels l ON l.snapshot_id=s.id LEFT JOIN candidate_identities c ON c.signal_id=s.signal_id "
                 "WHERE s.stage='decision' AND l.policy='prints-v1' AND json_extract(l.payload,'$.complete')=1 "
                 "AND json_array_length(s.payload,'$.sequence')=16"
             ).fetchone()[0],

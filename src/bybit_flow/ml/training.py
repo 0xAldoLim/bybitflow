@@ -55,7 +55,11 @@ def read_dataset(path, max_rows=10_000, track="primary"):
         ):
             raise ValueError("Unresolved, future, nonfinite or incompatible training label")
         policy = {"bootstrap": "ohlc-path-v1", "monitored": MONITORED_POLICY}.get(track, "prints-v1")
-        if label.get("policy", "prints-v1") != policy:
+        if track == "primary" and label.get("policy") == "prints-recovered-v1":
+            from .print_recovery import validate_recovered
+
+            validate_recovered(row)
+        elif label.get("policy", "prints-v1") != policy:
             raise ValueError("Mixed or incompatible label policies")
         if track == "bootstrap" and (
             label.get("execution_fidelity") != "proxy"
@@ -276,6 +280,7 @@ def _train(store, path, kinds, calibration, track):
         feature_schema_version=schema,
         track=track,
         label_policy=label_policy,
+        label_provenance_policies=sorted({r["label"].get("policy", label_policy) for r in rows}),
         holdout_scope=scope,
         label_fidelity={"bootstrap": "OHLC_PROXY", "monitored": "MONITORED_OHLC_PROXY"}.get(
             track, "RECORDED_PRINTS"

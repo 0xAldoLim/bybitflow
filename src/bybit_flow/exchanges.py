@@ -29,6 +29,7 @@ BASES = {
 PATHS = {
     "binance": {
         "/fapi/v1/time",
+        "/fapi/v1/aggTrades",
         "/fapi/v1/exchangeInfo",
         "/fapi/v1/ticker/bookTicker",
         "/fapi/v1/premiumIndex",

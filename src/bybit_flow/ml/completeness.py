@@ -888,7 +888,7 @@ def cache_readiness(store, asof_ms=None):
             "coalesce(json_extract(l.payload,'$.complete'),0) "
             "FROM ml_snapshots s INDEXED BY ml_snapshot_stage_time "
             "LEFT JOIN candidate_identities c ON c.signal_id=s.signal_id "
-            "LEFT JOIN ml_labels l ON l.snapshot_id=s.id AND l.policy='prints-v1' "
+            "LEFT JOIN ml_primary_labels l ON l.snapshot_id=s.id AND l.policy='prints-v1' "
             "WHERE s.stage='decision' AND s.schema_version=? AND s.decision_ms<=?"
             + page
             + " ORDER BY s.decision_ms,s.id LIMIT 500",

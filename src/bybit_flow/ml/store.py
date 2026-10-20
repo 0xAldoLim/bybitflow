@@ -65,6 +65,17 @@ def migrate(db):
 
     migrate_projection(db, "retention")
 
+    # Original labels remain immutable. A certified reconstruction can replace
+    # only an incomplete effective label, never an existing complete outcome.
+    db.executescript("""
+    CREATE VIEW IF NOT EXISTS ml_primary_labels AS
+    SELECT CASE WHEN json_extract(l.payload,'$.complete')=1 THEN l.rowid ELSE coalesce((SELECT r.rowid FROM ml_labels r WHERE r.snapshot_id=l.snapshot_id AND r.policy='prints-recovered-v1' AND json_extract(r.payload,'$.complete')=1 AND json_extract(r.payload,'$.outcome_policy')='prints-v1' AND json_extract(r.payload,'$.certificate.status')='VERIFIED'),l.rowid) END AS rowid,
+      CASE WHEN json_extract(l.payload,'$.complete')=1 THEN l.available_ms ELSE coalesce((SELECT r.available_ms FROM ml_labels r WHERE r.snapshot_id=l.snapshot_id AND r.policy='prints-recovered-v1' AND json_extract(r.payload,'$.complete')=1 AND json_extract(r.payload,'$.outcome_policy')='prints-v1' AND json_extract(r.payload,'$.certificate.status')='VERIFIED'),l.available_ms) END AS available_ms,
+      CASE WHEN json_extract(l.payload,'$.complete')=1 THEN l.payload ELSE coalesce((SELECT r.payload FROM ml_labels r WHERE r.snapshot_id=l.snapshot_id AND r.policy='prints-recovered-v1' AND json_extract(r.payload,'$.complete')=1 AND json_extract(r.payload,'$.outcome_policy')='prints-v1' AND json_extract(r.payload,'$.certificate.status')='VERIFIED'),l.payload) END AS payload,
+      l.snapshot_id,'prints-v1' AS policy FROM ml_labels l WHERE l.policy='prints-v1';
+    """)
+    db.commit()
+
 
 class FeatureStore:
     def __init__(self, store):
@@ -201,10 +212,11 @@ class FeatureStore:
         if confirmation_policy is not None:
             where.append("json_extract(s.payload,'$.signal.evidence.confirmation_policy')=?")
             filters.append(confirmation_policy)
+        label_table = "ml_primary_labels" if policy == "prints-v1" else "ml_labels"
         query = (
             "SELECT s.id,s.payload,l.available_ms,l.payload,"
             "coalesce(c.candidate_identity,s.signal_id),s.decision_ms "
-            "FROM ml_snapshots s JOIN ml_labels l ON l.snapshot_id=s.id "
+            f"FROM ml_snapshots s JOIN {label_table} l ON l.snapshot_id=s.id "
             "LEFT JOIN candidate_identities c ON c.signal_id=s.signal_id WHERE " + " AND ".join(where)
         )
         result, seen, cursor = [], set(), None

@@ -1,6 +1,14 @@
 # Primary outcome completeness
 
-This report describes the strict recorded-print track. A laptop shutdown can
+This report audits the original recorded-print labels. The trainer can now recover
+an incomplete Binance label from a verified original-venue aggregate-trade path
+under the same primary simulation target. That additive result joins the effective
+primary dataset without overwriting the original label. Inspect
+`primary_trade_recovery` in `bybit-flow ml status` and see
+[primary recovery](ML_RESEARCH.md#primary-trade-history-recovery). The forensic
+counts below continue to describe original local evidence.
+
+A laptop shutdown can
 exclude a `prints-v1` outcome while the same setup has a complete, separately
 identified `monitored-ohlc-v1` outcome recovered from exchange candles. Inspect
 `monitored_trainability` and `monitored_backfill` in `bybit-flow ml status` for
@@ -55,7 +63,8 @@ use UTC decision dates. Source, horizon and pre/post-epoch summaries are separat
 Completion is complete **stored** outcomes divided by mature decisions with known
 eligible coverage. Open horizons and unknown historical eligibility are excluded
 from that denominator and reported explicitly. A reconstructed result does not
-become training data.
+become training data merely by running this read-only audit; the separate recovery
+worker must verify and materialize the complete original-venue trade path.
 
 Raw decoding is limited to candidate windows and shared across candidates, with
 hard limits of 1,500 segments, 3 million envelopes and 384 MB of compressed data
