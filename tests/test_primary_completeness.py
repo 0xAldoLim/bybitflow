@@ -448,3 +448,75 @@ def test_drop_attribution_is_scoped_to_venue_symbol_interval(settings, signal, d
     recorder._gap("native/binance/ws/publicTrade.TESTUSDT", "TESTUSDT", 7000, "RECORDER_BACKPRESSURE")
     assert recorder.gaps[("binance", "TESTUSDT")]["source"] == "binance"
     store.close()
+
+
+def test_readiness_pages_match_original_counts_without_temporary_sort(settings):
+    from bybit_flow.ml import SCHEMA_VERSION
+
+    store = Store(settings.data_dir)
+    with store.db:
+        for i in range(1057):
+            ident, signal_id = f"snapshot-{1056 - i:04}", f"signal-{i}"
+            source = ("binance", "bybit", "okx")[i % 3]
+            eligible = (0, 1, None)[(i // 7) % 3]
+            payload = json.dumps(
+                dict(source=source, primary_ml_eligibility=dict(eligible=eligible), padding="x" * 2048)
+            )
+            store.db.execute(
+                "INSERT INTO ml_snapshots VALUES(?,?,?,?,?,?)",
+                (ident, signal_id, "decision", i // 3 + 1, SCHEMA_VERSION, payload),
+            )
+            store.db.execute(
+                "INSERT INTO candidate_identities VALUES(?,?,?,?,?)",
+                (signal_id, "fixture", f"economic-{i // 4}", f"signal-{(i // 4) * 4}", i // 3 + 1),
+            )
+            if i % 5 == 0:
+                store.db.execute(
+                    "INSERT INTO ml_labels VALUES(?,?,?,?)",
+                    (ident, "prints-v1", 5000, '{"complete":true}'),
+                )
+        for ident, stage, schema, at in [
+            ("generation", "generation", SCHEMA_VERSION, 0),
+            ("old-schema", "decision", "candidate-v19", 0),
+            ("future", "decision", SCHEMA_VERSION, 10001),
+        ]:
+            store.db.execute(
+                "INSERT INTO ml_snapshots VALUES(?,?,?,?,?,?)",
+                (ident, ident, stage, at, schema, '{"source":"binance"}'),
+            )
+    # Keep the old window query as an independent oracle for first-row semantics.
+    reference = store.db.execute(
+        "WITH ranked AS (SELECT s.id,json_extract(s.payload,'$.source') AS source,"
+        "coalesce(c.candidate_identity,s.signal_id) AS identity,"
+        "json_extract(s.payload,'$.primary_ml_eligibility.eligible') AS eligible,"
+        "row_number() OVER(PARTITION BY coalesce(c.candidate_identity,s.signal_id) ORDER BY s.decision_ms,s.id) AS rn "
+        "FROM ml_snapshots s LEFT JOIN candidate_identities c ON c.signal_id=s.signal_id "
+        "WHERE s.stage='decision' AND s.schema_version=? AND s.decision_ms<=?) "
+        "SELECT r.source,r.identity,r.eligible,coalesce(json_extract(l.payload,'$.complete'),0) "
+        "FROM ranked r LEFT JOIN ml_labels l ON l.snapshot_id=r.id AND l.policy='prints-v1' WHERE r.rn=1",
+        (SCHEMA_VERSION, 10000),
+    ).fetchall()
+    store.put("primary_data_quality", {"binance": {"status": "HEALTHY", "forensic": True}})
+    queries = []
+    store.db.set_trace_callback(queries.append)
+    cache_readiness(store, 10000)
+    store.db.set_trace_callback(None)
+    cached = store.get("primary_data_quality")
+    assert cached["binance"]["forensic"] is True and cached["binance"]["status"] == "HEALTHY"
+    for source in ("binance", "bybit", "okx"):
+        rows = [r for r in reference if r[0] == source]
+        assert cached[source]["prospective_readiness"] == dict(
+            current_schema_decisions=len(rows),
+            primary_ml_eligible_decisions=sum(r[2] == 1 for r in rows),
+            complete_eligible_outcomes=sum(r[2] == 1 and bool(r[3]) for r in rows),
+            ineligible_decisions=sum(r[2] == 0 for r in rows),
+            historical_eligibility_unmeasured=sum(r[2] is None for r in rows),
+            at_ms=10000,
+        )
+    pages = [q for q in queries if q.startswith("SELECT s.decision_ms")]
+    assert len(pages) == 3
+    for query in pages:
+        assert "LIMIT 500" in query
+        plan = [r[3] for r in store.db.execute("EXPLAIN QUERY PLAN " + query)]
+        assert not any("TEMP B-TREE" in step for step in plan)
+    store.close()

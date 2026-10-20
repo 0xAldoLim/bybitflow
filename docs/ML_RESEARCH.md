@@ -450,3 +450,7 @@ exposes cached canonical counts separately from physical recording counts.
 Informational totals across venues cannot satisfy a source-specific 500-outcome
 minimum. A model's immutable manifest separately identifies the training,
 calibration, validation and holdout periods actually used.
+
+Readiness diagnostics process chronological scalar pages and preserve the earliest
+snapshot per economic candidate. They do not sort full feature payloads in temporary
+storage, change training eligibility, or replay recordings on dashboard requests.

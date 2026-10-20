@@ -860,32 +860,63 @@ def cache_report(store, report):
 def cache_readiness(store, asof_ms=None):
     """Worker-only scalar counts; status never replays raw or scans decisions."""
     asof = asof_ms if asof_ms is not None else now_ms()
-    rows = store.db.execute(
-        "WITH ranked AS (SELECT s.id,json_extract(s.payload,'$.source') AS source,"
-        "coalesce(c.candidate_identity,s.signal_id) AS identity,"
-        "json_extract(s.payload,'$.primary_ml_eligibility.eligible') AS eligible,"
-        "row_number() OVER(PARTITION BY coalesce(c.candidate_identity,s.signal_id) ORDER BY s.decision_ms,s.id) AS rn "
-        "FROM ml_snapshots s LEFT JOIN candidate_identities c ON c.signal_id=s.signal_id "
-        "WHERE s.stage='decision' AND s.schema_version=? AND s.decision_ms<=?) "
-        "SELECT r.source,r.identity,r.eligible,coalesce(json_extract(l.payload,'$.complete'),0) "
-        "FROM ranked r LEFT JOIN ml_labels l ON l.snapshot_id=r.id AND l.policy='prints-v1' WHERE r.rn=1",
-        (SCHEMA_VERSION, asof),
-    ).fetchall()
+    counts = {
+        source: dict.fromkeys(
+            (
+                "current_schema_decisions",
+                "primary_ml_eligible_decisions",
+                "complete_eligible_outcomes",
+                "ineligible_decisions",
+                "historical_eligibility_unmeasured",
+            ),
+            0,
+        )
+        | dict(at_ms=asof)
+        for source in SOURCES
+    }
+    # A window-function sort can spill full snapshot payloads into /tmp before
+    # extracting JSON scalars. Read chronological scalar pages through the
+    # existing index instead, retaining the same earliest row per identity.
+    seen, cursor = set(), None
+    while True:
+        page = " AND (s.decision_ms,s.id)>(?,?)" if cursor else ""
+        params = [SCHEMA_VERSION, asof] + (list(cursor) if cursor else [])
+        rows = store.db.execute(
+            "SELECT s.decision_ms,s.id,json_extract(s.payload,'$.source'),"
+            "coalesce(c.candidate_identity,s.signal_id),"
+            "json_extract(s.payload,'$.primary_ml_eligibility.eligible'),"
+            "coalesce(json_extract(l.payload,'$.complete'),0) "
+            "FROM ml_snapshots s INDEXED BY ml_snapshot_stage_time "
+            "LEFT JOIN candidate_identities c ON c.signal_id=s.signal_id "
+            "LEFT JOIN ml_labels l ON l.snapshot_id=s.id AND l.policy='prints-v1' "
+            "WHERE s.stage='decision' AND s.schema_version=? AND s.decision_ms<=?"
+            + page
+            + " ORDER BY s.decision_ms,s.id LIMIT 500",
+            params,
+        ).fetchall()
+        if not rows:
+            break
+        for decision, ident, source, identity, eligible, complete in rows:
+            cursor = (decision, ident)
+            if identity in seen:
+                continue
+            seen.add(identity)
+            if source not in counts:
+                continue
+            bucket = counts[source]
+            bucket["current_schema_decisions"] += 1
+            bucket["primary_ml_eligible_decisions"] += eligible == 1
+            bucket["complete_eligible_outcomes"] += eligible == 1 and bool(complete)
+            bucket["ineligible_decisions"] += eligible == 0
+            bucket["historical_eligibility_unmeasured"] += eligible is None
+        if len(rows) < 500:
+            break
     cached = store.get("primary_data_quality", {})
     for source in SOURCES:
-        selected = [r for r in rows if r[0] == source]
-        counts = dict(
-            current_schema_decisions=len({r[1] for r in selected}),
-            primary_ml_eligible_decisions=len({r[1] for r in selected if r[2] == 1}),
-            complete_eligible_outcomes=len({r[1] for r in selected if r[2] == 1 and r[3]}),
-            ineligible_decisions=len({r[1] for r in selected if r[2] == 0}),
-            historical_eligibility_unmeasured=len({r[1] for r in selected if r[2] is None}),
-            at_ms=asof,
-        )
         detail = cached.setdefault(
             source, dict(source=source, status="AWAITING_FORENSIC_AUDIT", last_audit_ms=None)
         )
-        detail["prospective_readiness"] = counts
+        detail["prospective_readiness"] = counts[source]
     store.put("primary_data_quality", cached)
 
 
