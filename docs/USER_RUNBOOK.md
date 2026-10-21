@@ -1,8 +1,9 @@
 # Operator guide
 
-Use the [README](../README.md) for installation and everyday CMD commands. This
-guide explains configuration, recovery, and the limits of the recorded evidence.
-Commands assume the terminal is in the repository folder, with Docker running.
+Use the [README](../README.md) for installation and everyday commands. This
+guide covers local and remote installations, configuration, recovery and the
+limits of recorded evidence. Run Compose commands from the repository directory
+with Docker running; shell-specific instructions are labeled.
 
 ## Configuration
 
@@ -22,6 +23,7 @@ edit selected settings without replacing credentials or their data budget.
 | `FLOW_EXECUTION_WINDOW_SECONDS` | Complete flow window; default 900, set 60 for minute confirmation |
 | `FLOW_SPREAD_BUCKET_SECONDS=60` / `FLOW_SPREAD_WINDOW_MINUTES=30` | Minute-spread baseline; included in `.env.example` |
 | `FLOW_ML_ENABLED=true` | Enable labeling, training, and compatible inference in the ML worker/desk |
+| `FLOW_ML_PRINT_RECOVERY_ENABLED` | Automatic verified Binance primary trade-history recovery; default true when ML is enabled |
 | `FLOW_ML_TWO_STAGE=true` | Optional sequence collection and two-stage research; default false |
 | `FLOW_ML_FILTER_RESEARCH=false` | Keep ML abstention/acceptance from filtering research signals |
 | `FLOW_MAX_STORAGE_GB` | Application-data budget in decimal GB; default 10 |
@@ -52,14 +54,18 @@ cached runtime state; a healthy probe alone does not establish continuity for
 every selected symbol. Check required active feeds, recorder health, heartbeat,
 storage, and observation times.
 
-Laptop downtime does not discard saved setups. After `docker compose --profile ml
-up -d`, lifecycle monitoring checks the missing interval against the original
-exchange's historical candles. The trainer independently records eligible
-`monitored-ohlc-v1` outcomes without requiring continuous local trade recording.
-Check `monitored_backfill` and `monitored_trainability` in ML status. Missing
-history is retried, and ambiguous paths stay excluded. Notifications are sent
-after the application returns; nothing runs or sends alerts while the laptop
-is shut down. See [monitored learning](ML_RESEARCH.md#monitored-setups-and-laptop-downtime).
+Host downtime does not discard saved setups. After
+`docker compose --profile ml up -d`, lifecycle monitoring checks the missing
+interval against the original exchange's historical candles. The trainer can
+recover eligible `monitored-ohlc-v1` outcomes without continuous local recording.
+For Binance, verified aggregate-trade history can also recover eligible primary
+outcomes under the original fill/cost rules. Inspect `monitored_backfill`,
+`monitored_trainability` and `primary_trade_recovery` in ML status.
+
+Missing history is retried, and ambiguous or unverifiable paths stay excluded.
+Saved progress resumes after startup. No collection or notifications occur while
+the host or services are stopped. See
+[outcome recovery](ML_RESEARCH.md#monitored-setups-and-laptop-downtime).
 
 In `auto` or `multi` source mode, an unavailable live primary feed is retried
 first. After two minutes of failure, the scanner probes other supported venues
@@ -80,6 +86,36 @@ posts **BYBITFLOW CONNECTION TEST / NOT A TRADE SIGNAL** to the signals webhook.
 It does not test the monitoring webhook. The optional `test-signal` command sends
 an explicitly synthetic pipeline/format test. Neither test is a real opportunity
 or an ML outcome; neither proves profitable performance.
+
+## Record the build commit
+
+To include the source commit in build metadata, set `FLOW_CODE_COMMIT` before
+building. Choose the command for the active shell.
+
+**Windows CMD:**
+
+```bat
+for /f %i in ('git rev-parse HEAD') do set FLOW_CODE_COMMIT=%i
+```
+
+Use `%%i` instead of `%i` inside a batch file.
+
+**PowerShell:**
+
+```powershell
+$env:FLOW_CODE_COMMIT = (git rev-parse HEAD).Trim()
+```
+
+**Linux/macOS shell:**
+
+```sh
+export FLOW_CODE_COMMIT=$(git rev-parse HEAD)
+```
+
+Then build with `docker compose --profile ml up -d --build`, omitting the ML
+profile when it is not used. Without this build argument, the commit is reported
+as `unknown`. Version, schema and research hashes are still recorded. An existing
+immutable cutover marker retains its original metadata across upgrades.
 
 ## Multi-horizon research
 
@@ -312,7 +348,9 @@ See [Microsoft's Windows Time documentation](https://learn.microsoft.com/en-us/w
 
 ### Disk full or application storage limit
 
-Check both physical free space and the application budget:
+Check both physical free space and the application budget. Use the host storage
+settings on desktop systems or `df -h` on Linux/macOS to inspect free filesystem
+space. Docker and application usage are reported separately:
 
 ```bat
 docker system df
@@ -500,7 +538,9 @@ delivery receipts and preserves the maturity epoch. See [ML deployment](ML_RESEA
 
 ## Backups
 
-For an online metadata backup, choose a new filename:
+For an online metadata backup, choose a new filename. The destination needs
+enough free space for a full database copy. The example writes into the
+application volume and consumes its storage budget; review available space first:
 
 ```bat
 docker compose exec desk bybit-flow backup /app/data/research-backup-YYYYMMDD-HHMM.sqlite

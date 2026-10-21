@@ -5,8 +5,8 @@ is for contributors working on the scanner, models or interface.
 
 ## Development environment
 
-Use Python 3.12 or 3.13. Create a virtual environment and install the pinned
-development and ML dependencies:
+Use Python 3.12 or 3.13 and Node.js for JavaScript syntax checks. Create a
+virtual environment and install the pinned development and ML dependencies:
 
 In Windows CMD:
 
@@ -33,8 +33,10 @@ directly from `src/bybit_flow/static`.
 
 ## Change requirements
 
-Before pushing directly to `main`, run `python scripts/verify.py` in the active
-development environment. It stops on the first failed offline check.
+Before submitting changes, run `python scripts/verify.py` in the active
+development environment. It runs lint, formatting, JavaScript syntax, diff and
+test checks, stopping on the first failure. Node.js is required for the
+JavaScript syntax check.
 
 - Preserve source identity, event time, receipt time, and recording integrity.
 - Keep setup quality, research model ranking, and validated probability distinct.
@@ -46,5 +48,7 @@ development environment. It stops on the first failed offline check.
   transcripts and duplicate milestone summaries.
 
 Pull requests should explain the affected behavior, the change, and verification.
-Documentation and interface copy should use neutral terminology for operators,
-researchers, and contributors.
+Documentation and interface copy should address operators, researchers and
+contributors. Use portable paths, label shell-specific commands and distinguish
+defaults from optional examples. Keep private machine details and individual
+installation state out of public setup instructions.

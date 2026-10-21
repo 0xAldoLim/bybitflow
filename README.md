@@ -1,116 +1,55 @@
-# BybitFlow 2.1.2
+# BybitFlow
 
-BybitFlow monitors public crypto perpetual-market data and sends confirmed research
-setups to Discord. Cards include LONG or SHORT, quality grade, entry zone, stop
-loss, TP1, TP2, entry deadline, and holding horizon. It does not place orders or
-read trading-account fills. Quality scores and ML rankings are not validated win
-probabilities.
+**Crypto perpetual-market research with a local dashboard and Discord alerts.**
 
-The application includes a local dashboard, recorded order-flow evidence,
-independent setup monitoring, managed recording retention, and a background ML
-worker. Binance, Bybit, and OKX REST and WebSocket adapters are implemented.
-Automatic source selection uses one working primary venue; ML outcomes remain
-separate by source.
+BybitFlow monitors public Binance, Bybit and OKX market data. Confirmed LONG
+and SHORT setup cards include an entry zone, stop loss, TP1, TP2, an entry
+deadline and a holding horizon. The application records market evidence,
+monitors published setups and supports optional machine-learning research.
 
-New setups use `candidate-v20` and the `bybitflow-v21-evidence-1` score profile:
-location, confirmed mechanism, after-cost trade offer, and an evidence-confidence
-cap. This is a versioned research rubric, not a measured improvement in returns.
-Existing setups keep their original plans, scores, deadlines, source, and lifecycle.
-Historical learning records and models remain available under their stored schema.
-See the [score guide](docs/SCORING.md) and [v1 comparison](docs/v2/BYBITFLOW_V1_TO_V2_GAP_ANALYSIS.md).
+BybitFlow does not place orders or read trading-account fills. Quality scores
+and model rankings are research measures, not validated win probabilities.
 
-Version 2.1 introduced frozen pre-trigger references, two-close breakout acceptance,
-range reclaim checks, persistent context for pullbacks, executable entry-quality
-checks and relative liquidity stress with recovery hysteresis. Target-path
-friction uses observed volume concentration instead of simply counting levels.
-The score weights remain 30% location, 45% mechanism and 25% trade offer.
-Existing v2 plans retain their original `bybitflow-v2-evidence-1` interpretation.
-Rejected new-policy candidates remain in research storage for hypothetical
-outcome comparisons; they do not produce Discord setup cards.
+[Get started](#first-time-setup) | [Start and stop](#start-stop-and-check-status) |
+[Troubleshooting](#troubleshooting) | [Release notes](docs/RELEASE_NOTES.md)
 
-Version 2.1.1 assigns `trade-validity-v21.1` only to new opportunities. Entry
-checks distinguish chasing, adverse zone breaks, crossed stops/targets, expired
-windows, stale quotes, unknown/invalid costs and deteriorated net reward:risk.
-References freeze before the event; range reclaims may complete within three
-setup bars, and accepted breakouts may retest within four. These are predeclared
-research hypotheses whose forward effectiveness is unknown. Existing v21 plans
-keep their original validity semantics and lifecycle.
+## Features
 
-Version 2.1.2 adds prospective research measurements: the first fresh executable
-ask for a LONG or bid for a SHORT is frozen once, then compared with later
-execution estimates under the existing cost model. Relative volume compares
-completed bars with previous comparable UTC sessions, including 15-minute
-setups. A bounded journal observes duplicate and potentially distinct later
-structural events without generating another plan or Discord card. Scores,
-strategy thresholds and `trade-validity-v21.1` production rules remain unchanged.
-These measurements are **UNPROVEN / FORWARD TESTING**.
+- Public REST and WebSocket adapters with automatic primary-venue selection
+  or a fixed venue.
+- Intraday and swing setup research with executed-flow confirmation.
+- Separate Discord destinations for setup cards and monitoring notices.
+- An authenticated local dashboard with feed, clock, storage and delivery diagnostics.
+- Bounded recording and managed retention that preserve protected evidence,
+  setup plans, training labels and model artifacts.
+- Optional source-specific ML collection, outcome recovery and automatic training
+  when data requirements are met.
 
-Recording cleanup now verifies archive health, protects actual active/unresolved
-consumers and leases, and can replace mixed packs with verified retained members.
-Permanent snapshots, labels, exported datasets, models and Discord receipts are
-preserved. Canonical per-source training counts, sequence counts and eligible
-identity digests are checked before and after cleanup. Safely releasing raw tape
-after a final label does not remove the derived training candidate.
-Cleanup freezes both causal time and the existing snapshot/label insertion
-boundaries, so historical labels arriving during cleanup do not trigger a false
-data-loss alarm. Missing original records still stop cleanup. The recorder waits
-for independent maintenance at the storage limit and retries its pending batch;
-archive verification does not run inside its bounded writer process.
+Extended-swing setups and some measurements remain research-only. See
+[feature status](docs/STATUS.md) for supported behavior and limitations.
 
-Inspect or plan cleanup from the repository directory:
+## Requirements
 
-```bat
-docker compose exec desk bybit-flow storage status
-docker compose exec desk bybit-flow storage cleanup --dry-run --force
-```
+Install Git and Docker with the Compose plugin. Use Linux containers through
+Docker Desktop, or Docker Engine with Compose on a Linux host. Public exchange
+REST and WebSocket endpoints must be reachable from the containers.
 
-`storage cleanup --force` executes that eligibility policy even below the usual
-85% pressure trigger; it never overrides active, unresolved, leased or unknown
-protection. Automatic cleanup retains the existing recent-data floor and targets
-65% usage when sufficient eligible raw data exists. Permanent records may keep
-usage above that target. Archive health and compact tombstones explain deletions;
-`ml/maintenance` contains pre/post eligibility and artifact verification reports.
+Discord delivery requires permission to create two channel webhooks. No exchange
+trading keys or paid chart subscription are required.
 
-Pullback ordinal, completed-bar trigger, ID/NR4 compression, comparable-session
-volume and spread/depth stress variants are diagnostics, not additional score
-weights. The joint liquidity production rule remains unchanged. Rejected
-opportunities are counted uniquely in the audit, with separate sole/shared reason
-groups and leave-one-filter-out diagnostics. Shared groups must not be added as
-independent avoided losses. Cost stress and candle-close markouts are hypothetical
-research measurements; unsupported execution or extrema remain unknown. See the
-[hypothesis ledger](docs/V211_HYPOTHESES.md).
-
-Inspect delivered outcomes and filter counterfactuals with:
-
-```bat
-docker compose exec desk bybit-flow research trade-quality --days 30
-docker compose exec desk bybit-flow research trade-quality --days 30 --source binance --horizon CORE_INTRADAY --json
-```
-
-The bounded audit separates prints and monitored OHLC outcomes, reports missing
-measurements as unknown, and does not treat candle touches as verified account
-fills. [The v2.1 audit](docs/V21_RESEARCH_AUDIT.md) describes evidence, limits,
-policy definitions and changes. These rules have no demonstrated post-change edge.
-
-## Quick navigation
-
-- [First-time setup](#first-time-setup)
-- [Start, stop, and check status](#start-stop-and-check-status)
-- [Understand Discord cards](#understand-discord-cards)
-- [ML collection and training](#ml-collection-and-training)
-- [Storage and cleanup](#storage-and-cleanup)
-- [Troubleshooting](#troubleshooting)
-- [Updates and backups](#updates-and-backups)
-- [Reference guides](#reference-guides)
+The default limits are 4 GB/two CPUs for the desk and 2 GB/one CPU for the optional
+trainer. Docker and the operating system need additional resources. Begin with
+the default eight deep subscriptions and measure resource use before increasing
+them. Continuous collection requires an awake host and a running Docker engine.
 
 ## First-time setup
 
-Install Git and Docker Desktop on Windows, or Docker Engine with the Compose plugin
-on Linux. Docker Desktop must use Linux containers. Keep the host awake and allow
-access to public exchange endpoints. No exchange trading keys or paid chart
-subscription are required. Discord delivery needs two channel webhooks.
+### 1. Clone and configure
 
-In Windows **Command Prompt (CMD)**, clone into a folder of your choice:
+Choose any working directory. No particular parent folder or development tool
+is required.
+
+**Windows Command Prompt (CMD):**
 
 ```bat
 git clone https://github.com/0xAldoLim/bybitflow.git
@@ -119,319 +58,279 @@ if not exist .env copy .env.example .env
 notepad .env
 ```
 
-For an existing checkout, enter its folder instead:
+**Windows PowerShell:**
 
-```bat
-cd /d "C:\path\to\bybitflow"
+```powershell
+git clone https://github.com/0xAldoLim/bybitflow.git
+Set-Location bybitflow
+if (-not (Test-Path -LiteralPath .env)) { Copy-Item .env.example .env }
+notepad .env
 ```
 
-Replace the example path with your own repository location. On Linux or macOS, use
-`cd /path/to/bybitflow` and copy `.env.example` to `.env` only if `.env` does not exist.
-The Docker commands below work on either platform.
+**Linux or macOS shell:**
 
-Set a long private password and full Discord webhook URLs in `.env`:
+```sh
+git clone https://github.com/0xAldoLim/bybitflow.git
+cd bybitflow
+test -e .env || cp .env.example .env
+```
+
+Open `.env` in a text editor. For an existing checkout, enter its directory and
+preserve the existing configuration instead of replacing it with the example.
+Run subsequent Compose commands from the repository directory.
+
+### 2. Set dashboard access and Discord destinations
+
+Create two Discord webhooks: one for signals and setup lifecycle results, and
+one for monitoring paused/resumed notices. Set these values in `.env`:
 
 ```dotenv
 FLOW_ADMIN_TOKEN=replace-with-a-long-random-password
-FLOW_RESEARCH_WEBHOOK=https://discord.com/api/webhooks/REPLACE_WITH_SIGNALS_WEBHOOK
-FLOW_MONITORING_WEBHOOK=https://discord.com/api/webhooks/REPLACE_WITH_MONITORING_WEBHOOK
+FLOW_RESEARCH_WEBHOOK=https://discord.com/api/webhooks/SIGNALS_ID/SIGNALS_TOKEN
+FLOW_MONITORING_WEBHOOK=https://discord.com/api/webhooks/MONITORING_ID/MONITORING_TOKEN
 FLOW_SCAN_ENABLED=true
 FLOW_RESEARCH_ALERTS=true
-FLOW_EXECUTION_WINDOW_SECONDS=60
-FLOW_SPREAD_BUCKET_SECONDS=60
-FLOW_SPREAD_WINDOW_MINUTES=30
-FLOW_ML_ENABLED=true
-FLOW_ML_FILTER_RESEARCH=false
-FLOW_RECORDING_RETENTION_ENABLED=true
-FLOW_MAX_STORAGE_GB=10
 ```
 
-The webhook values are placeholders. These settings enable all-grade confirmed
-research alerts and minute-by-minute flow confirmation. The shipped example keeps
-research delivery disabled and uses a 900-second confirmation window until you
-change it. Two-stage ML defaults to `FLOW_ML_TWO_STAGE=false` and is optional.
+Replace every placeholder with the actual password or full webhook URL. Keep
+`.env` private; webhook URLs are credentials. The dashboard username is `research`.
 
-`FLOW_DEEP_SYMBOLS` defaults to 8 and supports up to 30 deep subscriptions. The
-[top-30 configuration example](examples/ml-top30.env) contains a dated watchlist;
-unsupported or ineligible pairs are not guaranteed a subscription. Size storage
-for available disk and collection volume. The 10 GB example limits application
-data, not total Docker disk usage.
+The shipped `.env.example` enables scanning and ML but leaves Discord alerts
+disabled until configured. It uses a 900-second executed-flow confirmation window
+and minute-spread observations over a rolling 30-minute window.
+`FLOW_EXECUTION_WINDOW_SECONDS=60` is an optional setting for minute-by-minute
+confirmation; other qualification requirements still apply.
 
-Keep `.env` private and preserve existing credentials on upgrades. The older
-`FLOW_DISCORD_WEBHOOK` is not the destination for setup delivery.
+The application-data budget defaults to `FLOW_MAX_STORAGE_GB=10`, in decimal GB.
+Choose a budget that fits available disk and collection volume. It does not cap
+Docker images, build cache or Docker/WSL virtual-disk allocation.
+See the [configuration reference](docs/USER_RUNBOOK.md#configuration) for other settings.
 
-Build and start:
+### 3. Build and start
 
-```bat
+For the dashboard, scanner and ML worker:
+
+```sh
 docker compose --profile ml up -d --build
+docker compose --profile ml ps
 ```
 
-The first build downloads application and training dependencies, including CPU-only
-PyTorch in the trainer image. Open [the dashboard](http://127.0.0.1:8000), sign in
-as `research`, and use your `FLOW_ADMIN_TOKEN` as the password.
+The first build downloads application and training dependencies, including
+CPU-only PyTorch for the trainer image. ML is optional: use
+`docker compose up -d --build` to start only the default services.
 
-For a build with its Git commit recorded in the immutable v2 cutover marker,
-run this before the build in CMD:
+Open [the local dashboard](http://127.0.0.1:8000), sign in as `research` and use
+`FLOW_ADMIN_TOKEN` as the password. The listener is local to the host by default.
+For remote deployment and capacity planning, see [operations](docs/OPERATIONS.md).
 
-```bat
-for /f %i in ('git rev-parse HEAD') do set FLOW_CODE_COMMIT=%i
-docker compose --profile ml up -d --build
+### 4. Verify the installation
+
+```sh
+docker compose exec desk bybit-flow doctor
+docker compose exec desk bybit-flow signals status
+docker compose exec trainer bybit-flow ml status
 ```
 
-Use `%%i` inside a `.bat` file. In PowerShell, use
-`$env:FLOW_CODE_COMMIT = git rev-parse HEAD`; in a POSIX shell, use
-`export FLOW_CODE_COMMIT=$(git rev-parse HEAD)`. A Docker build without this value
-records `unknown` for the commit; version, schema, and research hashes are still
-recorded. Restarting never replaces the original cutover marker.
+The last command requires the ML worker. Check feed coverage, recording health
+and observation times; a running container does not establish fresh evidence
+for every selected market.
+
+To test the signals webhook:
+
+```sh
+docker compose exec desk bybit-flow test-discord
+```
+
+This posts **BYBITFLOW CONNECTION TEST / NOT A TRADE SIGNAL**. It does not test the
+separate monitoring webhook or generate a real setup.
 
 ## Start, stop, and check status
 
-Run from the repository folder with Docker running:
+Run these commands from the repository directory with Docker running. They work
+in CMD, PowerShell and Linux/macOS shells.
 
 | Action | Command |
 |---|---|
-| Start or resume scanner and ML worker | `docker compose --profile ml up -d` |
+| Start or resume scanner and dashboard | `docker compose up -d` |
+| Start or resume with the ML worker | `docker compose --profile ml up -d` |
 | Stop services and preserve data | `docker compose --profile ml stop` |
 | Check containers | `docker compose --profile ml ps` |
-| Check application version and immutable cutover | `docker compose exec desk bybit-flow version` |
-| Check feeds, recorder, and runtime diagnostics | `docker compose exec desk bybit-flow doctor` |
-| Inspect signal admission and delivery counters | `docker compose exec desk bybit-flow signals status` |
-| Inspect ML readiness, models, and heartbeat | `docker compose exec trainer bybit-flow ml status` |
+| Follow recent logs; Ctrl+C exits log viewing | `docker compose --profile ml logs --tail 100 -f` |
+| Check version and deployment metadata | `docker compose exec desk bybit-flow version` |
+| Check feeds, recording and diagnostics | `docker compose exec desk bybit-flow doctor` |
+| Inspect signal qualification and delivery | `docker compose exec desk bybit-flow signals status` |
+| Inspect ML readiness and worker status | `docker compose exec trainer bybit-flow ml status` |
 | Inspect storage and retention | `docker compose exec desk bybit-flow storage status` |
-| View recent logs | `docker compose --profile ml logs --tail 100` |
 
-For JSON diagnostics, use `bybit-flow doctor --json`. Closing CMD or the browser
-does not stop containers. Docker and the host must stay running. Containers use
-`restart: unless-stopped`; this does not prevent host sleep or ensure Docker
-Desktop starts after a reboot.
+Closing the terminal or browser does not stop containers. Host sleep, shutdown
+and an unavailable Docker engine interrupt collection. The restart policy resumes
+eligible containers when Docker starts; it does not prevent sleep or restart
+services deliberately stopped with Compose.
 
-Configuration is read at startup. Apply `.env` changes with
-`docker compose --profile ml up -d`; a plain `restart` does not load changed
-container environment values. Repeated restarts reset live flow continuity and
-can prolong warm-up.
+Apply `.env` changes with `docker compose --profile ml up -d`; omit
+`--profile ml` when operating without the trainer. A plain container
+restart does not reload changed environment values. Repeated restarts can prolong
+flow warm-up.
 
 ## Understand Discord cards
 
 | Destination | Messages |
 |---|---|
-| `FLOW_RESEARCH_WEBHOOK` | New setups, related/conflicting setup context, entry expiry, withdrawal, targets, and other setup lifecycle results |
+| `FLOW_RESEARCH_WEBHOOK` | New setups, related setup context, entry expiry, withdrawal, targets and other setup lifecycle results |
 | `FLOW_MONITORING_WEBHOOK` | Monitoring paused and monitoring resumed notices |
 
-Terminal results edit the original delivered setup card, retaining entry, stop,
-targets, and first-posted time. Check earlier cards for updated status. Monitoring
-notices are deduplicated by outage episode. An internal setup cannot send any
-user-facing lifecycle update without its own successful initial delivery and
-message ID in the durable outbox. Mentioning a child setup inside another card
-does not establish its initial delivery.
+Terminal results edit the original setup card, preserving its plan and first-posted
+time. Each setup needs its own successfully delivered initial card before it can
+produce lifecycle updates. Grouped or suppressed notifications do not merge the
+underlying setups or change their independent monitoring.
 
-Temporary feed loss pauses monitoring rather than proving a stop or target.
-Recovery requires historical catch-up and fresh live coverage. Each setup keeps
-its original plan and lifecycle even when related notifications are grouped or
-suppressed.
+Temporary feed loss pauses monitoring; it does not establish a stop or target.
+Monitoring resumes after historical catch-up and fresh coverage are available.
 
-| Horizon | Expected holding | Delivery |
+| Horizon | Expected holding period | Publication |
 |---|---|---|
-| Short intraday | 15 minutes–2 hours | Confirmed research setups |
-| Core intraday | 1–4 hours | Confirmed research setups |
-| Swing | 4–48 hours | Confirmed research setups |
-| Extended swing | 2–7 days | Shadow research; no initial Discord setup |
+| Short intraday | 15 minutes-2 hours | Confirmed research setup |
+| Core intraday | 1-4 hours | Confirmed research setup |
+| Swing | 4-48 hours | Confirmed research setup |
+| Extended swing | 2-7 days | Shadow research; no initial Discord setup |
 
-The entry deadline is separate from the holding deadline. A 60-second confirmation
-window does not mean a one-minute holding period. Implemented grade bands are
-**SSS 95+, SS 90+, S 85+, A 75+, B 65+, C 50+, D 35+, E 20+, F below 20**.
-Every grade must still pass structure, flow, liquidity, freshness, entry, risk,
-and applicable production gates.
+The entry deadline is separate from the holding deadline. A short confirmation
+window does not imply a short holding period. Grades range from SSS to F; every
+grade must pass the applicable structure, flow, liquidity, freshness, entry and
+risk checks. See [scoring](docs/SCORING.md) and the
+[horizon guide](docs/USER_RUNBOOK.md#multi-horizon-research).
 
-New v2 cards include a compact evidence explanation. Strong aggression without
-price response is not automatically conviction; missing data adds no favorable
-credit. Relative trade-size buckets identify reported print size, never traders.
-
-At a tracking deadline, a reliable original-venue price and observed entry can
-support a paper profit/loss estimate before TP1. Missing evidence leaves the result
-unknown. Late research observations never turn an expired setup into a historical
-win. The Paper journal records an account close separately.
-
-There is no guaranteed alert interval. Minute-spread qualification usually needs
-12–15 minutes of uninterrupted quotes after subscription; discovery, cold candle
-loading, and feed gaps can add time. A healthy scanner can reject every current
-setup. See the [horizon and lifecycle guide](docs/USER_RUNBOOK.md#multi-horizon-research).
+There is no fixed alert schedule. With the example minute-spread configuration,
+initial qualification needs at least 12 valid minute observations and 80% coverage.
+Clock corrections, missing quotes, discovery and candle-history loading can extend
+warm-up. A healthy scanner can also reject all current opportunities.
 
 ## ML collection and training
 
-| Track | Evidence | Authority |
+ML is optional research functionality. It does not automatically change strategy
+rules, lower signal thresholds or promote models. The example keeps
+`FLOW_ML_FILTER_RESEARCH=false`, so ML abstention does not block otherwise
+qualified alerts.
+
+| Track | Evidence | Use |
 |---|---|---|
-| Primary | Current `candidate-v20` decisions with complete `prints-v1` outcomes from local or verified historical trades | Preferred compatible model; promotion requires independent admission checks |
-| Monitored | Current `candidate-v20` features with `monitored-ohlc-v1` setup outcomes recovered from original-exchange candles | Advisory model with full current features; hypothetical fills, no production filtering |
-| Bootstrap | `bootstrap-core-v1` features with `ohlc-path-v1` historical one-minute candle outcomes | Advisory OHLC-proxy challenger; promotion and production filtering disabled |
+| Primary | Current `candidate-v20` decisions and complete local or verified historical trade paths | Preferred compatible model, subject to admission and promotion checks |
+| Monitored | Current decision features and original-venue one-minute candle outcomes | Advisory research with separate OHLC-proxy provenance |
+| Bootstrap | Supported historical feature projection and original-venue candle outcomes | Advisory research with separate schema and OHLC-proxy provenance |
 
-The trainer also attempts **primary trade-history recovery** after interruptions.
-For Binance decisions, it replays the original exchange's aggregate trades with
-the same frozen entry window, latency, volume participation, costs and exit rules
-as local recording. Only a verified consecutive trade sequence can supply a
-complete outcome. Recoveries join the primary pool with explicit provenance;
-existing complete labels and decision features remain unchanged. A shutdown can
-pause replay, which resumes from saved progress. Unverifiable paths stay excluded.
+Downtime does not erase saved plans or learning records. The trainer can recover
+eligible candle outcomes after services resume. For Binance, it can also recover
+consecutive aggregate trades and replay the same primary entry, participation,
+cost and exit rules. Existing complete labels remain unchanged. Progress is saved;
+missing, ambiguous or unverifiable evidence remains excluded.
 
-This runs automatically with the ML worker. Inspect `primary_trade_recovery` in
-`docker compose exec trainer bybit-flow ml status`. Recent trades use the public
-API; older trades use checksummed official daily archives. Recovery uses bounded
-work batches and a 128 MB archive cache within the configured data cap. Bybit/OKX
-primary historical replay and archives exceeding that cache limit are not
-supported. Candle recovery remains a separate, lower-resolution track.
+Primary historical trade replay currently supports Binance only and uses a
+bounded 128 MB archive cache. Bybit/OKX primary trade replay and larger archives
+are not supported by that recovery path. Candle recovery remains a separate track.
 
-The laptop does **not** need to stay on throughout a position for monitored
-learning. On restart, saved setups retain their original plans and lifecycle
-monitoring catches up from the original exchange's closed one-minute candles.
-The trainer independently reconstructs the price path and records stop, TP1, or
-time-exit outcomes under `monitored-ohlc-v1`, even when the strict print label is
-incomplete. Missing history is retried; ambiguous ordering and unfilled plans
-are excluded. A recorded entry-zone price touch or historical zone intersection
-represents a hypothetical fill, not proof of a trade in an account. Original
-entry deadlines and holding deadlines are preserved.
+Each track needs **500 complete unique outcomes per source**, plus compatible
+features, valid chronological partitions and adequate class coverage. Millions
+of recorded events are not millions of training examples. Readiness refreshes
+every 15 minutes; eligible training starts automatically on a worker loop.
 
-Restart Docker and run `docker compose --profile ml up -d` when returning to the
-laptop. Recovery and learning resume automatically; new alerts and notifications
-can only be sent while the services are running. Inspect `monitored_trainability`
-and `monitored_backfill` in `docker compose exec trainer bybit-flow ml status`.
-
-Each track needs **500 complete unique outcomes per source**. Millions of exchange
-events, repeated evaluations, incomplete paths, and manual journal entries do not
-meet that requirement. A positive label means simulated net R above zero after
-assumed costs, not a verified account win.
-
-V10 recovery continues and its snapshots, labels, and models are preserved.
-V10 outcomes do not count toward the v20 minimum, and incompatible v1/bootstrap
-models abstain on new v20 setups. New setups retain deterministic authority while
-their own compatible models mature. The primary track requires a verified complete
-trade path, obtained locally or through supported historical recovery. Monitored
-candle recovery retains its separate fidelity.
-
-The baseline compares Logistic Regression and LightGBM. With
-`FLOW_ML_TWO_STAGE=true`, the primary sequence pipeline can compare LightGBM,
-Random Forest, and LSTM, followed by Logistic Regression, SVM, and Random Forest
-probabilities. It needs 500 complete outcomes with 16 compatible prior observations
-each. Below that threshold it attempts the tabular baseline. XGBoost is not installed.
-
-Training preserves chronological partitions, a four-hour embargo, at least
-200 training / 100 calibration / 100 validation / 100 untouched holdout outcomes,
-and both classes in training and calibration. `adaptive-causal-v2` refines only
-pathological V1 allocations using timing and counts, with a V1 fallback. Previously
-consumed holdouts cannot become unseen evidence again.
-
-Readiness refreshes every 15 minutes. The first eligible fit is dispatched on the
-next worker loop; later fits require 50 new usable outcomes, seven days, or a manual
-cycle, and must still satisfy readiness. Status reports partition/class blockers,
-compatibility abstentions, models, and heartbeat. Collection does not guarantee
-immediate fitting or a prediction on every setup. With `FLOW_ML_FILTER_RESEARCH=false`,
-ML abstention does not block otherwise qualified alerts; bootstrap can never filter them.
-Monitored models also remain advisory and cannot filter alerts. A compatible
-primary model takes priority, followed by a monitored model, then bootstrap.
-
-The verified deployment workflow creates an immutable maturity epoch. Keep feature
-definitions, gates, strategy rules, score weights, labels, partition policy, and
-ML minimums fixed while outcomes mature, except for correctness, safety, exchange
-API, or severe runtime/storage repairs. There is no automatic strategy tuning or
-model promotion. See [ML research](docs/ML_RESEARCH.md).
+The baseline compares Logistic Regression and LightGBM. Optional two-stage research
+uses LightGBM, Random Forest and LSTM, followed by Logistic Regression, SVM and
+Random Forest probabilities. Model compatibility, holdout and promotion checks
+remain in force. See [ML research](docs/ML_RESEARCH.md) for algorithms, limitations
+and recovery status fields.
 
 ## Storage and cleanup
 
-Docker stores recordings, SQLite history, snapshots, labels, datasets, and models
-in the persistent `research-data` volume. `FLOW_MAX_STORAGE_GB` defaults to
-**10 decimal GB** and may differ in an existing installation. It excludes Docker
-images, build cache, and Docker/WSL virtual-disk allocation.
+Application data lives in the persistent `research-data` Docker volume. Stopping
+services preserves it. Managed retention releases eligible raw recordings while
+keeping setup plans, snapshots, labels, datasets, model artifacts and delivery
+receipts. Active setups, unresolved outcomes and replay leases protect required
+evidence.
 
-Retention preserves permanent ML records and protected evidence. Routine worker
-cleanup releases finalized, unprotected raw data after its retention floor; it
-does not wait for every future model fit. Active plans, unresolved primary outcomes,
-checkpoints, and replay leases prevent unsafe deletion. Raw cleanup keeps learned
-model artifacts, but deleted raw history cannot be replayed again.
+Preview cleanup before running it manually:
 
-Inspect the plan before manual cleanup:
-
-```bat
+```sh
 docker compose exec desk bybit-flow storage status
 docker compose exec desk bybit-flow storage cleanup --dry-run
 docker compose exec desk bybit-flow storage cleanup
-docker compose exec desk bybit-flow storage compact
 ```
 
-Manual cleanup can report no deletion below the pressure threshold. Maturity health
-shows healthy below 80%, warning at 80–90%, pressure at 90–95%, and training/backfill
-backpressure at 95% or above. Maintenance separately starts packing at 70% and safe
-pressure pruning at 85%. If protected or permanent data fills the budget, recording
-can stop rather than delete it. See [managed storage](docs/USER_RUNBOOK.md#managed-storage).
+Cleanup may find no eligible data to remove. Permanent records continue to grow
+and require capacity planning. If protected data fills the budget, recording can
+pause rather than delete it. Deleted raw history cannot be replayed again.
+
+Do not use `docker compose down -v` to stop the application: it deletes the saved
+volume. See [managed storage](docs/USER_RUNBOOK.md#managed-storage) for retention,
+compaction and Docker disk-space guidance.
 
 ## Troubleshooting
 
-Start with `docker compose --profile ml ps`, `doctor`, and recent logs. A running
-container does not prove every selected market has fresh evidence.
+Start with container status, `doctor` and recent logs.
 
-| Symptom | First action |
+| Symptom | What to check |
 |---|---|
-| Clock skew, future events, or timestamp errors | Open Windows **Settings → Time & language → Date & time**, enable automatic time, choose the correct time zone, and select **Sync now**. Run `doctor` again. |
-| Dashboard unavailable | Start Docker Desktop, run `docker compose --profile ml up -d`, and inspect `ps` and logs. Use `http://127.0.0.1:8000`; sign in as `research` with `FLOW_ADMIN_TOKEN`. |
-| Docker engine or socket initialization error | Confirm Linux-container mode and check `docker info`. For the specific inaccessible `engine.sock` / `dockerInference` error, see the [runtime-socket repair](docs/USER_RUNBOOK.md#docker-engine-unavailable-or-socket-initialization-failure). |
-| Disk full or recording-budget error | Check Windows free space, `docker system df`, and application `storage status`. Preview managed cleanup; preserve the database, models, protected recordings, and volume. |
-| No Discord setups | Check alert settings, `signals status`, feed freshness, warm-up, gate rejections, and webhook results. There is no fixed signal schedule. |
-| Pending confirmation | Required executed-flow/entry checks have not passed. Missing or interrupted flow cannot be replaced by a higher score. |
-| Monitoring paused | Restore source/recording coverage and let catch-up finish. The original plan remains monitored internally. |
-| ML collecting or abstaining | Inspect unique outcomes, class counts, unseen holdout shortage, compatibility, storage backpressure, and heartbeat in `ml status`. Do not weaken checks to force fitting. |
-| Browser exchange access works, but feeds fail | Test REST and WebSocket access inside the container; browser DNS/proxy behavior can differ. Keep certificate verification enabled. |
-| Downtime after sleep or reboot | Keep the host awake, start Docker Desktop, and resume Compose. Closing the browser is harmless; sleep interrupts collection. |
+| Measured clock drift or future timestamps | Synchronize the host clock. On Windows, use **Settings > Time & language > Date & time > Sync now**, then run `doctor` again. |
+| Clock check delayed, unavailable or interrupted | Check exchange connectivity and latency. These messages do not establish drift; repeated synchronization does not repair a network timeout. |
+| Dashboard unavailable | Confirm Docker is running, resume Compose, check logs and open `http://127.0.0.1:8000`. |
+| Dashboard sign-in fails | Use username `research` and the configured `FLOW_ADMIN_TOKEN`. Recreate services after environment changes. |
+| Docker engine or socket error | Run `docker info` first. See the [socket-error guide](docs/USER_RUNBOOK.md#docker-engine-unavailable-or-socket-initialization-failure) for the specific Windows runtime-socket error. |
+| Disk full or recording-budget warning | Check host free space, `docker system df` and application storage status. Preview managed cleanup and preserve protected evidence. |
+| No new Discord setups | Check alert configuration, warm-up, feed coverage, qualification reasons and delivery status. A connection test does not qualify a trade. |
+| Spread history rebuilding | Allow valid quotes to accumulate. The example configuration requires 12 minute observations and 80% coverage. |
+| Pending confirmation | Required flow or entry evidence has not passed; a higher score cannot replace it. |
+| Monitoring paused | Restore source/recording coverage and allow catch-up. The saved plan remains internally monitored. |
+| ML collecting or abstaining | Inspect outcomes, schema/source compatibility, partitions, unseen holdouts, storage and heartbeat in `ml status`. |
+| Exchange website works but feeds fail | Test container access; browser DNS/proxy behavior can differ. Keep TLS verification enabled. |
+| Downtime after sleep or reboot | Start Docker, resume Compose and check recovery. Continuous monitoring requires an awake host. |
 
-Test actual connections:
+Test public exchange connections with:
 
-```bat
+```sh
 docker compose exec desk bybit-flow test-market --exchange binance
 docker compose exec desk bybit-flow test-market --exchange bybit
 docker compose exec desk bybit-flow test-market --exchange okx
-docker compose exec desk bybit-flow test-discord
 ```
 
-`test-discord` posts **BYBITFLOW CONNECTION TEST / NOT A TRADE SIGNAL** to the
-signals webhook. It does not verify the separate monitoring destination or qualify
-a market setup. Detailed [troubleshooting](docs/USER_RUNBOOK.md#troubleshooting)
-includes administrator CMD clock commands, cache cleanup, sleep recovery, and
-project-local encrypted DNS. See [Microsoft's clock settings guide](https://support.microsoft.com/en-us/windows/experience/personalization/set-time-date-and-time-zone-settings-in-windows)
-and [Docker's troubleshooting guide](https://docs.docker.com/desktop/troubleshoot-and-support/troubleshoot/).
+See [operator troubleshooting](docs/USER_RUNBOOK.md#troubleshooting) for clock
+synchronization, free-space checks, DNS and Docker recovery. For a bug report,
+include the application version, redacted diagnostics and relevant log timestamps.
+Never include `.env`, passwords or webhook tokens.
 
 ## Updates and backups
 
-Create a uniquely named metadata backup before updating:
+Back up before updating. The `backup` command copies SQLite metadata, not the
+entire volume, and requires enough free space for another database copy. A full
+backup must include recordings and model files, with credentials protected
+separately. Follow the [backup guide](docs/USER_RUNBOOK.md#backups).
 
-```bat
-docker compose exec desk bybit-flow backup /app/data/research-backup-YYYYMMDD-HHMM.sqlite
-docker compose cp desk:/app/data/research-backup-YYYYMMDD-HHMM.sqlite ./research-backup-YYYYMMDD-HHMM.sqlite
-```
+After a verified backup, update from the repository directory:
 
-Replace `YYYYMMDD-HHMM` with the actual backup time. This backs up SQLite metadata,
-not recordings or model files. A complete archive needs the entire stopped volume
-and a separately protected copy of `.env`; see the [backup guide](docs/USER_RUNBOOK.md#backups).
-
-For an ordinary update:
-
-```bat
-docker compose --profile ml stop
+```sh
 git pull --ff-only origin main
 docker compose --profile ml up -d --build
 docker compose exec desk bybit-flow doctor
 docker compose exec trainer bybit-flow ml status
 ```
 
-If Git reports local changes or a failed pull, resolve that before rebuilding.
-For CI-gated ML deployment and continuity auditing, use the
-[deployment workflow](docs/ML_RESEARCH.md#storage-and-replay-checkpoints).
-Stop/update commands preserve the volume and original active plans. Do not use
-`docker compose down -v`: it removes the saved data volume.
+Resolve a failed pull before rebuilding. Updating briefly interrupts changed
+services but preserves the volume and original active plans. Keep the Compose
+project name and volume mapping consistent. The ML status command requires the
+trainer; omit `--profile ml` from the update command when operating without it.
+See [build provenance](docs/USER_RUNBOOK.md#record-the-build-commit) and the
+[advanced deployment guide](docs/ML_RESEARCH.md#storage-and-replay-checkpoints).
 
-## Reference guides
+## Documentation and contributing
 
-- [Operator guide](docs/USER_RUNBOOK.md): configuration, horizons, troubleshooting, and backups.
-- [ML research](docs/ML_RESEARCH.md): labels, algorithms, partitions, readiness, and maturity policy.
-- [Primary completeness](docs/PRIMARY_COMPLETENESS.md): coverage forensics, eligibility, and completion rates.
-- [Scoring](docs/SCORING.md): grade bands and evidence rubric.
+- [Operator guide](docs/USER_RUNBOOK.md): configuration, recovery and troubleshooting.
+- [ML research](docs/ML_RESEARCH.md): labeling, training and evidence requirements.
+- [Scoring](docs/SCORING.md): grade bands and evidence interpretation.
 - [Asset facts](docs/ASSET_FACTS.md): sourced research and instrument selection.
-- [Operations](docs/OPERATIONS.md): deployment, retention, and delivery semantics.
+- [Operations](docs/OPERATIONS.md): deployment, delivery and data lifecycle.
 - [Architecture](docs/SELF_HOSTED_ORDERFLOW.md) and [exchange adapters](docs/MULTI_EXCHANGE.md).
+- [Primary completeness](docs/PRIMARY_COMPLETENESS.md): coverage forensics.
+- [Release notes](docs/RELEASE_NOTES.md): implementation history and research limits.
 - [Contributing](CONTRIBUTING.md): development setup and verification.
-- [Verification records](docs/AUTONOMY_VERIFICATION.md): dated test evidence and limitations; use live diagnostics for current runtime state.
+- [Verification records](docs/AUTONOMY_VERIFICATION.md): dated evidence, not current deployment health.
+
+BybitFlow is distributed under the [MIT license](LICENSE). Exchange data and
+third-party dependencies remain subject to their respective terms and licenses.

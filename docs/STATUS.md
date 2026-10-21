@@ -11,7 +11,10 @@
 - Optional ML collection, challenger training, ranking, drift checks, and guarded promotion.
 - Durable primary replay checkpoints and safe release of already-consumed ML evidence.
 - Source-specific historical OHLC bootstrap labels and advisory-only challengers.
-- Current-feature monitored learning recovers original-venue price paths after laptop downtime, independently of strict print continuity.
+- Verified Binance aggregate-trade recovery for incomplete current-schema primary
+  outcomes, retaining original decisions, complete labels and fill/cost rules.
+- Current-feature monitored learning recovers original-venue price paths after
+  host downtime, independently of strict print continuity.
 - Authenticated local dashboard, diagnostics, backup, and retention planning.
 - Historical TradingView records remain readable; new chart-event ingestion is retired.
 

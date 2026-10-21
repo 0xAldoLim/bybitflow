@@ -52,9 +52,10 @@ Routine retention can release finalized, unprotected raw evidence while keeping
 snapshots, labels, datasets, models, plans, manifests, and audit hashes. Active
 setups, unresolved primary outcomes, durable checkpoints, and reader leases protect
 their required ranges. Raw data cannot be replayed after deletion. If protected or
-permanent data alone fills the budget, recording can stop explicitly. Do not erase
-evidence or repeatedly raise the cap to hide a retention failure. An external
-quota can enforce a stricter physical ceiling than the application's budget.
+permanent data alone fills the budget, recording can stop explicitly. Review
+protected ranges, worker progress and capacity before changing a storage budget.
+Preserve evidence when resolving retention failures. An external quota
+can enforce a stricter physical ceiling than the application's budget.
 
 SQLite and file writes are not one atomic transaction. A crash can leave orphan
 files; unmanifested or unverified files are not research evidence. Inspect integrity
@@ -64,8 +65,10 @@ preview, cleanup, and compaction commands.
 ## Backups and migrations
 
 `bybit-flow backup NEW_PATH.sqlite` uses SQLite's online backup API for consistent
-metadata and refuses to overwrite an existing backup. It does not copy recordings,
-packs, datasets, or model files. Archive the stopped volume for a full backup, and
+metadata and refuses to overwrite an existing backup. Budget enough destination
+space for the full database; a backup inside the application volume counts
+toward its data budget. It does not copy recordings, packs, datasets, or model
+files. Archive the stopped volume for a full backup, and
 protect credentials separately. Verify hashes and restore into a new volume with
 scanning/notifications disabled before replacing the live installation.
 
