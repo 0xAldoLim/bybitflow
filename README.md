@@ -41,6 +41,8 @@ The default limits are 4 GB/two CPUs for the desk and 2 GB/one CPU for the optio
 trainer. Docker and the operating system need additional resources. Begin with
 the default eight deep subscriptions and measure resource use before increasing
 them. Continuous collection requires an awake host and a running Docker engine.
+The [memory audit](docs/MEMORY_AUDIT.md) explains application memory, file cache
+and the limits of the controlled 30-market benchmark.
 
 ## First-time setup
 

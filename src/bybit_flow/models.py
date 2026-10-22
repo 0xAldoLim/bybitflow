@@ -1,11 +1,40 @@
 from dataclasses import dataclass
 from decimal import Decimal
+from functools import lru_cache
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, computed_field
 
 D = Decimal
 DAY = 86_400_000
+
+# Cache exact wire representations, not rounded/equal numeric values. The key
+# length and entry count bound cache ownership independently of tape population.
+TRADE_DECIMAL_CACHE_SIZE = 8192
+
+
+class _UncacheableTradeDecimal(Exception):
+    pass
+
+
+@lru_cache(maxsize=TRADE_DECIMAL_CACHE_SIZE)
+def _trade_decimal_text(value):
+    result = D(value)
+    if not result.is_finite():
+        # Non-finite/malformed inputs must still exercise the caller's current
+        # Decimal context, including flags and traps, on every construction.
+        raise _UncacheableTradeDecimal
+    return result
+
+
+def trade_decimal(value):
+    """Share immutable finite wire scalars without changing Decimal semantics."""
+    if type(value) is str and len(value) <= 64:
+        try:
+            return _trade_decimal_text(value)
+        except _UncacheableTradeDecimal:
+            pass
+    return D(value)
 
 
 @dataclass(frozen=True, slots=True)

@@ -17,7 +17,7 @@ import httpx
 from websockets.asyncio.client import connect
 
 from .ingestion import Bybit, parse_eligible_metadata
-from .models import DAY, Candle, Instrument, Trade
+from .models import DAY, Candle, Instrument, Trade, trade_decimal
 from .storage import now_ms
 
 VENUES = ("binance", "bybit", "okx")
@@ -140,14 +140,22 @@ def trade_from_wire(venue, row, receipt, instrument=None):
             receipt,
             str(row["a"]),
             "Sell" if row["m"] else "Buy",
-            D(row["p"]),
-            D(row["q"]),
+            trade_decimal(row["p"]),
+            trade_decimal(row["q"]),
             venue,
             row["s"],
         )
     if venue == "bybit":
         return Trade(
-            row["s"], int(row["T"]), receipt, row["i"], row["S"], D(row["p"]), D(row["v"]), venue, row["s"]
+            row["s"],
+            int(row["T"]),
+            receipt,
+            row["i"],
+            row["S"],
+            trade_decimal(row["p"]),
+            trade_decimal(row["v"]),
+            venue,
+            row["s"],
         )
     if venue == "okx" and instrument and row["instId"] == instrument.exchange_symbol:
         return Trade(
@@ -156,8 +164,8 @@ def trade_from_wire(venue, row, receipt, instrument=None):
             receipt,
             row["tradeId"],
             {"buy": "Buy", "sell": "Sell"}[row["side"]],
-            D(row["px"]),
-            D(row["sz"]) * instrument.contract_multiplier,
+            trade_decimal(row["px"]),
+            trade_decimal(row["sz"]) * instrument.contract_multiplier,
             venue,
             row["instId"],
         )

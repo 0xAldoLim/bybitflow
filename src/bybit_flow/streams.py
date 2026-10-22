@@ -8,7 +8,7 @@ from decimal import Decimal
 
 import websockets
 
-from .models import Trade
+from .models import Trade, trade_decimal
 from .orderflow import LIQUIDITY_FRAME_LIMIT, Book, Tape
 from .storage import now_ms
 
@@ -123,7 +123,15 @@ class Streams:
                 if t.get("BT", False):
                     continue
                 self.tapes[symbol].add(
-                    Trade(symbol, int(t["T"]), receipt, t["i"], t["S"], Decimal(t["p"]), Decimal(t["v"]))
+                    Trade(
+                        symbol,
+                        int(t["T"]),
+                        receipt,
+                        t["i"],
+                        t["S"],
+                        trade_decimal(t["p"]),
+                        trade_decimal(t["v"]),
+                    )
                 )
         elif topic.startswith("allLiquidation."):
             rows = msg["data"] if isinstance(msg["data"], list) else [msg["data"]]

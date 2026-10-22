@@ -311,3 +311,48 @@ async def test_unfilled_setup_is_not_a_recovered_loss(settings, signal):
     assert result == "NO_FILL"
     assert not fs.dataset(now_ms(), source="binance", schema_version=SCHEMA_VERSION)
     store.close()
+
+
+async def test_archive_pages_stream_bounded_rows_and_resume_without_loading_full_csv(settings, monkeypatch):
+    store = Store(settings.data_dir)
+    provider = BinanceHistory(store, settings)
+    decision = 2 * 86400000 + 12 * 3600000
+    day = str(datetime.fromtimestamp(decision / 1000, UTC).date())
+    path = settings.data_dir / f"TESTUSDT-aggTrades-{day}.zip"
+    with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        with archive.open(path.stem + ".csv", "w") as output:
+            for i in range(3001):
+                output.write(f"{i},100.00,1.000,{i},{i},{decision + i},false\n".encode())
+    checksum = hashlib.sha256(path.read_bytes()).hexdigest()
+
+    async def archive(*args):
+        return path, checksum
+
+    original_read = zipfile.ZipExtFile.read
+    original_line = zipfile.ZipExtFile.readline
+    reads = []
+
+    def bounded_read(self, n=-1):
+        assert 0 <= n <= 1048576
+        return original_read(self, n)
+
+    def bounded_line(self, n=-1):
+        reads.append(n)
+        assert n == 4097
+        return original_line(self, n)
+
+    monkeypatch.setattr(provider, "archive", archive)
+    monkeypatch.setattr(zipfile.ZipExtFile, "read", bounded_read)
+    monkeypatch.setattr(zipfile.ZipExtFile, "readline", bounded_line)
+    row = dict(decision_ms=decision, signal=dict(symbol="TESTUSDT"))
+    try:
+        first = await provider.archive_page(row, {}, dict(requests=0), decision + 3 * 86400000)
+        assert len(first["trades"]) == 1000
+        state = dict(last_id=999, last_event_ms=decision + 999, archive=first["cursor"])
+        second = await provider.archive_page(row, state, dict(requests=0), decision + 3 * 86400000)
+        assert [r["a"] for r in second["trades"]] == list(range(1000, 2000))
+        assert all(r["_archive"]["sha256"] == checksum for r in second["trades"])
+        assert reads
+    finally:
+        await provider.close()
+        store.close()

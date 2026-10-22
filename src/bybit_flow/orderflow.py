@@ -1,7 +1,7 @@
 """Executed-trade footprint and visible-book support. No inferred hidden orders."""
 
 from bisect import bisect_left
-from collections import OrderedDict, defaultdict, deque
+from collections import defaultdict, deque
 from decimal import ROUND_FLOOR, Decimal
 from statistics import median
 
@@ -336,7 +336,7 @@ def footprint(trades, tick, atr, book=None):
 class Tape:
     def __init__(self, max_trades=200_000, *, source=None, symbol=None):
         self.trades = deque(maxlen=max_trades)
-        self.ids = OrderedDict()
+        self.ids = {}
         self.coverage_start = 0
         self.last_event = self.last_receipt = 0
         self.source, self.symbol = source, symbol
@@ -370,7 +370,8 @@ class Tape:
             self.coverage_start = max(self.coverage_start, self.trades[0].event_ms + 1)
         self.ids[t.trade_id] = None
         if len(self.ids) > self.trades.maxlen:
-            self.ids.popitem(last=False)
+            # The deque already owns the exact FIFO order.
+            self.ids.pop(self.trades[0].trade_id)
         self.trades.append(t)
         if self.event_features:
             self.event_features.add(t)
