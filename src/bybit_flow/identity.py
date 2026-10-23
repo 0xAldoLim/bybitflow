@@ -26,8 +26,21 @@ def fingerprint(signal):
         thesis=signal.setup_thesis_id,
         prices=[price(x) for x in (signal.entry, *signal.zone, signal.stop, signal.tp1, signal.tp2)],
     )
+    if e.get("production_policies", {}).get("trade_quality") == "trade-validity-v22":
+        # Multiple recognizers of identical executable geometry are one visible
+        # opportunity. Every setup ID still retains its own lifecycle.
+        plan = dict(
+            version="alert-fingerprint-v22",
+            source=signal.source,
+            symbol=signal.symbol,
+            direction=signal.direction,
+            horizon=signal.horizon_profile,
+            trigger=e.get("frozen_structure", {}).get("event_start_ms", e.get("trigger_bar_end")),
+            prices=[price(x) for x in (signal.entry, signal.stop, signal.tp1)],
+        )
     return (
-        "alert-fingerprint-v1:"
+        plan["version"]
+        + ":"
         + hashlib.sha256(json.dumps(plan, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     )
 
@@ -140,10 +153,39 @@ def relationship(a, b):
     overlap = max(a.zone[0], b.zone[0]) <= min(a.zone[1], b.zone[1])
     if not (overlap or abs(a.entry - b.entry) <= 0.25 * risk) or abs(a.stop - b.stop) > 0.25 * risk:
         return "MATERIALLY_DIFFERENT_PLAN"
-    return "STRONGER_REPLACEMENT" if a.quality >= b.quality + 5 else "CONFIRMING_HORIZON"
+    new_rubric = any(
+        s.evidence.get("production_policies", {}).get("trade_quality") == "trade-validity-v22" for s in (a, b)
+    )
+    same_rubric = not new_rubric or a.evidence.get("score_profile") == b.evidence.get("score_profile")
+    return "STRONGER_REPLACEMENT" if same_rubric and a.quality >= b.quality + 5 else "CONFIRMING_HORIZON"
 
 
-def claim(store, signal, at_ms):
+def same_v22_execution_event(a, b):
+    """Cross-policy comparison without rewriting historical fingerprints."""
+    if a.evidence.get("production_policies", {}).get("trade_quality") != "trade-validity-v22":
+        return False
+    if any(getattr(a, k) != getattr(b, k) for k in ("source", "symbol", "direction", "horizon_profile")):
+        return False
+    event_a = a.evidence.get("frozen_structure", {}).get("event_start_ms")
+    event_b = b.evidence.get("frozen_structure", {}).get("event_start_ms")
+    same_event = (
+        event_a is not None
+        and event_a == event_b
+        or a.evidence.get("trigger_bar_end") is not None
+        and a.evidence.get("trigger_bar_end") == b.evidence.get("trigger_bar_end")
+    )
+    tick = Decimal(str(a.evidence.get("price_tick") or "0.00000001"))
+    return bool(
+        same_event
+        and all(
+            (Decimal(str(getattr(a, k))) / tick).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
+            == (Decimal(str(getattr(b, k))) / tick).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
+            for k in ("entry", "stop", "tp1")
+        )
+    )
+
+
+def claim(store, signal, at_ms, *, retry_unattempted=False):
     from .models import Signal
 
     fp = fingerprint(signal)
@@ -159,18 +201,37 @@ def claim(store, signal, at_ms):
             (signal.symbol,),
         ).fetchall()
         cluster, relation, primary = "cluster:" + signal.id, "MATERIALLY_DIFFERENT_PLAN", None
+        economic_duplicate = False
         for row in members:
             other = Signal.model_validate_json(row[1])
             if other.id == signal.id:
                 continue
+            if same_v22_execution_event(signal, other):
+                prior = store.db.execute(
+                    "SELECT 1 FROM initial_alert_claims WHERE signal_id=? AND "
+                    "delivery_status IN ('sent','uncertain','sending') LIMIT 1",
+                    (other.id,),
+                ).fetchone()
+                if prior:
+                    economic_duplicate = True
             rel = relationship(signal, other)
-            if rel != "MATERIALLY_DIFFERENT_PLAN":
+            if rel != "MATERIALLY_DIFFERENT_PLAN" and primary is None:
                 cluster, relation, primary = row[0], rel, other
-                break
+                if (
+                    signal.evidence.get("production_policies", {}).get("trade_quality")
+                    != "trade-validity-v22"
+                ):
+                    break
         inserted = store.db.execute(
-            "INSERT OR IGNORE INTO initial_alert_claims VALUES(?,?,?,?,?,?)",
-            (fp, signal.id, cluster, at_ms, "sending", None),
+            "INSERT OR IGNORE INTO initial_alert_claims SELECT ?,?,?,?,?,? WHERE ?",
+            (fp, signal.id, cluster, at_ms, "sending", None, not economic_duplicate),
         ).rowcount
+        if not inserted and retry_unattempted and store.get("v22_http_dispatched:" + signal.id) is False:
+            inserted = store.db.execute(
+                "UPDATE initial_alert_claims SET delivery_status='sending' WHERE fingerprint=? "
+                "AND signal_id=? AND delivery_status LIKE 'blocked:%'",
+                (fp, signal.id),
+            ).rowcount
         status = "sending" if inserted else "duplicate-plan-suppressed"
         cur = store.db.execute(
             "INSERT INTO real_delivery_attempts(at_ms,signal_id,symbol,horizon,fingerprint,status,relationship) VALUES(?,?,?,?,?,?,?)",

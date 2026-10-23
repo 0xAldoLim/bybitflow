@@ -1,11 +1,31 @@
 # Release notes
 
-Implementation notes for the 2.1.x series. These describe shipped behavior,
+Implementation notes by release. These describe source behavior,
 not the health or deployed version of any particular installation. Use
 `docker compose exec desk bybit-flow version` for version metadata and
 runtime diagnostics for current health.
 
-## Evidence, entry quality and research measurements
+## 2.2.0 — setup quality and trade construction
+
+New opportunities use `trade-validity-v22` and `bybitflow-v22-setup-1`.
+One Setup Score combines Evidence and Tradeability, with a bottleneck and
+confidence cap. Bounded quote-event OFI, price-response assessment, historical
+horizon movement capacity, execution targets and stop viability expose why a
+trade may work and what limits it. Mandatory validity and configured grade
+options remain separate; no daily quota or top-N delivery restriction is added.
+
+Initial Discord delivery rechecks the executable quote and freezes the exact
+assessment. Current deterioration is separate from the published score.
+Old v21/v21.1 setups continue under their original semantics and lifecycle.
+ML stays `candidate-v20` with unchanged source-specific 500-outcome/sequence
+minimums and authority. Fixed forward exit research remains outside primary ML.
+These are research-grounded assumptions, not validated profitability.
+See [v2.2 definitions and limitations](V22_SETUP_QUALITY.md).
+The [verification record](V22_VERIFICATION.md) reports an unfavorable partial
+selection replay and missing historical inputs; this release makes no measured
+profitability claim.
+
+## 2.1.x — evidence, entry quality and research measurements
 
 New setups use `candidate-v20` and the `bybitflow-v21-evidence-1` score profile:
 location, confirmed mechanism, after-cost trade offer, and an evidence-confidence

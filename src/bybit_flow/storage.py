@@ -103,6 +103,9 @@ class Store:
         from .path_research import migrate as migrate_paths
 
         migrate_paths(self)
+        from .setup_research import migrate as migrate_setup_paths
+
+        migrate_setup_paths(self)
         if self.get("horizon_counts") is None:
             counts = dict(
                 self.db.execute(
@@ -146,12 +149,16 @@ class Store:
             from .v2 import preserve
 
             preserve(signal, json.loads(old[1]), self.get("bybitflow_v2_cutover"))
+            from .setup_freeze import preserve as preserve_published
+
+            preserve_published(self, signal, json.loads(old[1]))
 
         # Capture before lifecycle overwrites; both accepted and rejected decisions survive.
         features = FeatureStore(self)
         features.capture(signal, max(now_ms(), signal.created_ms), "generation")
         if signal.evidence.get("score_components") or (
-            signal.evidence.get("v21_counterfactual") and "cost_per_base" in signal.risk
+            (signal.evidence.get("v21_counterfactual") or signal.evidence.get("v22_counterfactual"))
+            and "cost_per_base" in signal.risk
         ):
             features.capture(signal, max(now_ms(), signal.created_ms), "decision")
         if old:
@@ -232,6 +239,10 @@ class Store:
             from .path_research import register
 
             register(self, signal, now_ms())
+            from .setup_research import register as register_setup_paths
+
+            register_setup_paths(self, signal, now_ms())
+            register_setup_paths(self, signal, now_ms(), stage="delivery")
         start(self, signal, now_ms())
 
     def monitor(self, signal):
@@ -241,6 +252,9 @@ class Store:
         saved = self.db.execute("SELECT payload FROM signals WHERE id=?", (signal.id,)).fetchone()
         if saved:
             preserve(signal, json.loads(saved[0]), self.get("bybitflow_v2_cutover"))
+            from .setup_freeze import preserve as preserve_published
+
+            preserve_published(self, signal, json.loads(saved[0]))
         with self.db:
             self.db.execute(
                 "UPDATE signals SET payload=? WHERE id=? AND state=?",

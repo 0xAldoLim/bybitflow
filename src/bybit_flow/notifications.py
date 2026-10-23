@@ -27,6 +27,13 @@ def embed(signal, dashboard_url):
     if terminal and monitoring_event in {"paused", "resumed"}:
         monitoring_event = None
     monitoring_update = monitoring_event in {"paused", "resumed", "ended"}
+    if not terminal and not monitoring_update:
+        from .quality_v22 import enabled
+
+        if enabled(s):
+            from .setup_presentation import embed as setup_embed
+
+            return setup_embed(s, dashboard_url)
 
     status = {
         "CONFIRMED": "NEW SETUP",
@@ -348,6 +355,7 @@ class Notifier:
     def __init__(self, settings, store, transport=None):
 
         self.settings, self.store, self.transport = settings, store, transport
+        self.prepare_initial = self.finalize_initial = self.guard_initial = None
 
     def was_initially_delivered(self, signal_id, channel):
         row = self.store.db.execute(
@@ -555,6 +563,15 @@ class Notifier:
         blocked = self.initial_delivery_block(signal.id, signal)
         if blocked:
             return blocked
+        from .quality_v22 import enabled as v22_enabled
+
+        is_v22 = v22_enabled(signal)
+        if is_v22:
+            if not self.prepare_initial or not self.finalize_initial:
+                return "blocked:v22-live-check-unavailable"
+            blocked = await self.prepare_initial(signal)
+            if blocked:
+                return blocked
 
         from .identity import claim
         from .macro import state as macro_state
@@ -566,7 +583,11 @@ class Notifier:
 
         emit(self.store, "alert_claim_attempts", now_ms(), signal=signal, key="claim-attempt:" + signal.id)
 
-        claimed = claim(self.store, signal, now_ms())
+        claimed = (
+            claim(self.store, signal, now_ms(), retry_unattempted=True)
+            if is_v22
+            else claim(self.store, signal, now_ms())
+        )
 
         emit(
             self.store,
@@ -588,7 +609,21 @@ class Notifier:
                 signal, primary, relation, self.settings.dashboard_url, claimed["cluster_id"]
             )
 
-        status = await self.deliver(key, signal.id, payload, secret, initial_signal=signal)
+        def payload_factory():
+            if primary is not None:
+                return related_embed(
+                    signal, primary, relation, self.settings.dashboard_url, claimed["cluster_id"]
+                )
+            return embed(signal, self.settings.dashboard_url)
+
+        status = await self.deliver(
+            key,
+            signal.id,
+            payload,
+            secret,
+            initial_signal=signal,
+            payload_factory=payload_factory if is_v22 else None,
+        )
         self.was_initially_delivered(signal.id, key.split(":", 1)[0])
         if status == "sent":
             with self.store.db:
@@ -638,7 +673,7 @@ class Notifier:
 
         return await self.deliver("connection-test:" + event_id, None, payload, secret)
 
-    async def deliver(self, key, signal_id, payload, secret, *, initial_signal=None):
+    async def deliver(self, key, signal_id, payload, secret, *, initial_signal=None, payload_factory=None):
 
         channel = key.split(":", 1)[0]
         if signal_id is not None and channel in {"research", "validated"} and not key.endswith(":initial"):
@@ -650,7 +685,14 @@ class Notifier:
         if u.scheme != "https" or u.hostname != "discord.com" or not u.path.startswith("/api/webhooks/"):
             raise ValueError("Expected official Discord HTTPS webhook")
 
-        if self.store.db.execute("SELECT 1 FROM outbox WHERE key=?", (key,)).fetchone():
+        existing = self.store.db.execute("SELECT status FROM outbox WHERE key=?", (key,)).fetchone()
+        safe_retry = bool(
+            payload_factory
+            and existing
+            and existing[0].startswith("blocked:")
+            and self.store.get("v22_http_dispatched:" + signal_id) is False
+        )
+        if existing and not safe_retry:
             return "already-attempted"
 
         real_initial = signal_id is not None and key.endswith(":initial")
@@ -660,13 +702,21 @@ class Notifier:
                 return blocked
 
         with self.store.db:
-            claimed = self.store.db.execute(
-                "INSERT OR IGNORE INTO outbox VALUES(?,?,?,?,?,?)",
-                (key, signal_id, "sending", json.dumps(payload), None, now_ms()),
-            ).rowcount
+            if safe_retry:
+                claimed = self.store.db.execute(
+                    "UPDATE outbox SET status='sending',payload=?,updated_ms=? WHERE key=? AND status LIKE 'blocked:%'",
+                    (json.dumps(payload), now_ms(), key),
+                ).rowcount
+            else:
+                claimed = self.store.db.execute(
+                    "INSERT OR IGNORE INTO outbox VALUES(?,?,?,?,?,?)",
+                    (key, signal_id, "sending", json.dumps(payload), None, now_ms()),
+                ).rowcount
 
         if not claimed:
             return "already-attempted"
+        if payload_factory:
+            self.store.put("v22_http_dispatched:" + signal_id, False)
 
         # Discord has no atomic idempotency key. An ambiguous network failure is NOT retried:
 
@@ -684,29 +734,54 @@ class Notifier:
                 # Claiming, SQLite contention and client setup can consume the entry window.
                 # Re-read durable lifecycle state immediately before dispatching an initial.
                 blocked = self.initial_delivery_block(signal_id, initial_signal) if real_initial else None
+                if not blocked and payload_factory:
+                    blocked = self.finalize_initial(initial_signal)
+                    if not blocked:
+                        payload = payload_factory()
+                        # Persist the full observed snapshot before HTTP dispatch;
+                        # the immutable outbox holds the exact card sent.
+                        self.store.monitor(initial_signal)
+                        with self.store.db:
+                            self.store.db.execute(
+                                "UPDATE outbox SET payload=? WHERE key=?", (json.dumps(payload), key)
+                            )
+                    blocked = blocked or self.initial_delivery_block(signal_id, initial_signal)
+                    if not blocked and self.guard_initial:
+                        blocked = self.guard_initial(initial_signal)
                 if blocked:
                     status = blocked
                     transport_detail["category"] = "BLOCKED"
                 else:
                     if real_initial:
                         emit(self.store, "discord_http_attempts", now_ms(), key="http:" + key)
-                    http_attempted = True
-                    # HTTPX's timeout is per phase. Bound initial connect/write/read together.
-                    async with asyncio.timeout(INITIAL_REQUEST_TIMEOUT if real_initial else None):
-                        response = await client.post(secret, params={"wait": "true"}, json=payload)
-
-                    transport_detail.update(http_status=response.status_code, category="HTTP")
-
-                    if response.status_code == 429:
-                        status = "rate-limited"
-
-                    elif response.is_success:
-                        result = response.json()
-                        status, message_id = "sent", result.get("id")
-                        discord_channel_id = result.get("channel_id")
-
+                    if payload_factory:
+                        self.store.put("v22_http_dispatched:" + signal_id, True)
+                    # Durable accounting can also contend on SQLite. Do not send
+                    # a stale snapshot merely because the earlier guard passed.
+                    blocked = (
+                        self.initial_delivery_block(signal_id, initial_signal)
+                        or (self.guard_initial(initial_signal) if self.guard_initial else None)
+                        if payload_factory
+                        else None
+                    )
+                    if blocked:
+                        self.store.put("v22_http_dispatched:" + signal_id, False)
+                        status = blocked
+                        transport_detail["category"] = "BLOCKED"
                     else:
-                        status = "rejected"
+                        http_attempted = True
+                        # HTTPX's timeout is per phase. Bound the full request.
+                        async with asyncio.timeout(INITIAL_REQUEST_TIMEOUT if real_initial else None):
+                            response = await client.post(secret, params={"wait": "true"}, json=payload)
+                        transport_detail.update(http_status=response.status_code, category="HTTP")
+                        if response.status_code == 429:
+                            status = "rate-limited"
+                        elif response.is_success:
+                            result = response.json()
+                            status, message_id = "sent", result.get("id")
+                            discord_channel_id = result.get("channel_id")
+                        else:
+                            status = "rejected"
 
         except (httpx.TransportError, TimeoutError) as exc:
             # Store a category only: exception messages can contain webhook secrets.
@@ -765,6 +840,49 @@ class Notifier:
 
         return status
 
+    async def send_deterioration(self, signal, episode_ms):
+        if signal.state != "ALERTED":
+            return "blocked:terminal-or-unpublished"
+        current_state = self.store.db.execute("SELECT state FROM signals WHERE id=?", (signal.id,)).fetchone()
+        if not current_state or current_state[0] != "ALERTED":
+            return "blocked:terminal-or-unpublished"
+        channel = next(
+            (c for c in ("research", "validated") if self.was_initially_delivered(signal.id, c)), None
+        )
+        if channel is None:
+            return "blocked:no-visible-initial"
+        secret = self.settings.research_webhook.get_secret_value()
+        if not secret:
+            return "dry-run"
+        current = signal.coverage.get("v22_current", {})
+        payload = dict(
+            allowed_mentions=dict(parse=[]),
+            embeds=[
+                dict(
+                    title=f"SETUP DETERIORATING · {signal.symbol} {signal.direction}",
+                    description="Update only · no new entry · original plan remains independently monitored",
+                    color=0xE6A23C,
+                    timestamp=iso(now_ms()),
+                    fields=[
+                        dict(
+                            name="Observed change",
+                            value=current.get("reason", "Sustained adverse response"),
+                            inline=False,
+                        ),
+                        dict(
+                            name="Original plan",
+                            value=f"Entry {signal.entry:g} · stop {signal.stop:g} · target {signal.tp1:g}",
+                            inline=False,
+                        ),
+                    ],
+                    footer=dict(text=f"{signal.id} · No account position or fill is assumed"),
+                )
+            ],
+        )
+        return await self.deliver(
+            f"{channel}:{signal.id}:deteriorating:{episode_ms}", signal.id, payload, secret
+        )
+
     async def send_public(self, signal, update=False):
         if not update and signal.evidence.get("delivery_policy") == "REDUNDANT_OPPORTUNITY":
             return "blocked:REDUNDANT_OPPORTUNITY"
@@ -793,7 +911,9 @@ class Notifier:
         elif not delivery_eligible(signal, self.settings, self.store):
             return "blocked: no validated deployment model"
 
-        if not update:
+        from .quality_v22 import enabled as v22_enabled
+
+        if not update and not v22_enabled(signal):
             recent = self.store.db.execute(
                 "SELECT 1 FROM outbox o JOIN signals s ON s.id=o.signal_id WHERE s.symbol=? "
                 "AND o.updated_ms>? AND o.status IN ('sent','uncertain','sending') LIMIT 1",

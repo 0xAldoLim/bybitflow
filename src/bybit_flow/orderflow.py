@@ -29,6 +29,8 @@ class Book:
         self.pressure_samples = deque(maxlen=120)
         self.ofi_epoch = getattr(self, "ofi_epoch", 0) + 1
         self.ofi_buckets = deque(maxlen=120)
+        self.event_ofi_epoch = getattr(self, "event_ofi_epoch", 0) + 1
+        self.event_ofi_start_ms = self.event_ofi_last_ms = 0
 
     def apply(self, message, receipt_ms):
         d = message["data"]

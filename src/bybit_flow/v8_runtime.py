@@ -264,6 +264,12 @@ def decorate_signal(scanner, signal, context, decision_ms, *, rank_opportunities
         source,
         baseline=[r for r in priors if r.get("available_ms", decision_ms) <= decision_ms - 60_000],
     )
+    from .quality_v22 import enabled as v22_enabled
+
+    if v22_enabled(signal):
+        signal.evidence["event_ofi"] = ofi.event_assess(
+            scanner.streams.books.get(signal.symbol), decision_ms, source, signal.symbol, signal.direction
+        )
     bars = context.get("m15", [])
     anchors = {
         "setup_trigger": dict(
@@ -297,6 +303,12 @@ def decorate_signal(scanner, signal, context, decision_ms, *, rank_opportunities
 
 
 def rank_signal(scanner, signal, decision_ms):
+    from .quality_v22 import enabled
+
+    if enabled(signal):
+        from .setup_ranking import rank_signal as rank_v22
+
+        return rank_v22(scanner, signal, decision_ms)
     source = signal.source
     active = [
         row

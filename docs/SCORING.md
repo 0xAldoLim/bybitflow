@@ -1,4 +1,4 @@
-# Evidence scores and qualification
+# Setup Score and qualification
 
 Quality is a deterministic evidence score, not a calibrated win probability or
 a daily percentile rank. The implemented `scoring.tier` bands are:
@@ -21,9 +21,33 @@ Mandatory structure, liquidity, coverage, freshness, entry, risk, and applicable
 production gates still apply. A rejected setup is not made eligible by its score;
 the scorer marks its raw tier F and final qualification REJECTED.
 
-## Version 2 rubric
+## Current v2.2 rubric
 
-Existing v2 `candidate-v20` plans use `bybitflow-v2-evidence-1`. New v2.1
+New opportunities use `trade-validity-v22` and `bybitflow-v22-setup-1`.
+The public headline is **Setup Score**, a deterministic quality assessment.
+Evidence and Tradeability are internal supporting diagnostics:
+
+```text
+E = .30 Location + .25 Structure + .30 Mechanism + .15 Context
+T = .30 FollowThrough + .30 TargetReachability + .20 StopGeometry + .20 Execution
+base = .55 E + .45 T
+raw = .75 base + .25 min(E, T)
+SetupScore = round(min(raw, EvidenceConfidenceCap), 1)
+```
+
+Unknown components remain explicitly unknown and earn no invented favorable
+credit. Gates remain separate from scores. Final delivery uses the current
+executable quote and a frozen delivery snapshot. Existing grade bands and alert
+options are unchanged; ranking never imposes a daily quota or top-N cap.
+
+These are **RESEARCH-GROUNDED ASSUMPTIONS**, not fitted or proven alpha.
+See [the full v2.2 definitions](V22_SETUP_QUALITY.md) for OFI, response,
+capacity quantiles, target selection, stop viability, confidence and limitations.
+Older setups retain their original score profile and lifecycle.
+
+## Historical v2 / v2.1 rubric
+
+Existing v2 `candidate-v20` plans use `bybitflow-v2-evidence-1`. The v2.1
 plans use `bybitflow-v21-evidence-1` with the same weights, weakest-dimension
 penalty and confidence cap. The versioned path component uses observed volume
 concentration and obstacle strength instead of counting barrier references.

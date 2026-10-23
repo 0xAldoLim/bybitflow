@@ -334,7 +334,15 @@ def create_app(settings=None):
         if not r:
             raise HTTPException(404, "Unknown signal")
         signal = Signal.model_validate_json(r[0])
-        return {"signal": signal, "discord_preview": embed(signal, settings.dashboard_url)}
+        result = {"signal": signal, "discord_preview": embed(signal, settings.dashboard_url)}
+        if signal.evidence.get("production_policies", {}).get("trade_quality") == "trade-validity-v22":
+            rows = request.app.state.store.db.execute(
+                "SELECT payload FROM setup_path_labels WHERE signal_id IN (?,?)", (ident, ident + ":delivery")
+            ).fetchall()
+            result["setup_exit_research"] = (
+                [json.loads(row[0]) for row in rows] if rows else dict(state="PENDING", research_only=True)
+            )
+        return result
 
     @app.get("/api/settings")
     async def config():

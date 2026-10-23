@@ -26,14 +26,12 @@ def candidates(
     context_bars, setup_bars, execution_bars = [
         [b for b in bars if b.end <= asof] for bars in (context_bars, setup_bars, execution_bars)
     ]
-    if (
-        quality_policy == "trade-validity-v21.1"
-        and min(map(len, (context_bars, setup_bars, execution_bars))) < 60
-    ):
+    modern = quality_policy in {"trade-validity-v21.1", "trade-validity-v22"}
+    if modern and min(map(len, (context_bars, setup_bars, execution_bars))) < 60:
         return []
     from . import quality_v21, quality_v211
 
-    quality_module = quality_v211 if quality_policy == quality_v211.POLICY else quality_v21
+    quality_module = quality_v211 if modern else quality_v21
     context_features, setup_features, execution_features = [
         candle_features(b, asof) for b in (context_bars, setup_bars, execution_bars)
     ]
@@ -43,7 +41,7 @@ def candidates(
         context_features["previous_regime"] = candle_features(context_bars[:-1], context_bars[-1].start)[
             "regime"
         ]
-    if quality_policy == quality_v211.POLICY:
+    if modern:
         context_features["trend_qualification"] = quality_v211.trend_qualification(context_bars, asof)
     last, prior = setup_bars[-1], setup_bars[-2]
     atr = setup_features["atr"]
@@ -93,17 +91,13 @@ def candidates(
                     context_features,
                     setup_features,
                     asof,
-                    **(
-                        {"core_bars": setup_bars}
-                        if quality_policy == quality_v211.POLICY and horizon == "CORE_INTRADAY"
-                        else {}
-                    ),
+                    **({"core_bars": setup_bars} if modern and horizon == "CORE_INTRADAY" else {}),
                 )
                 level = structure["frozen_reference"]
-                if quality_policy == quality_v211.POLICY and structural_observations is not None:
+                if modern and structural_observations is not None:
                     structural_observations.append(dict(family=family, direction=direction, **structure))
                 if (
-                    quality_policy == quality_v211.POLICY
+                    modern
                     and structural_observations is not None
                     and family in {"range_rejection", "breakout_retest"}
                 ):
@@ -136,7 +130,7 @@ def candidates(
                                     observed=later,
                                 )
                             )
-                if quality_policy == quality_v211.POLICY and not structure["candidate_event"]:
+                if modern and not structure["candidate_event"]:
                     continue
             repaired_breakout = bool(
                 structure
@@ -156,13 +150,7 @@ def candidates(
                 continue
             sign = 1 if long else -1
             entry = execution_bars[-1].close
-            extreme = (
-                structure["event_extreme"]
-                if quality_policy == quality_v211.POLICY
-                else last.low
-                if long
-                else last.high
-            )
+            extreme = structure["event_extreme"] if modern else last.low if long else last.high
             stop = min(extreme, level) - 0.15 * atr if long else max(extreme, level) + 0.15 * atr
             stop_plan = None
             if horizon in {"SHORT_INTRADAY", "CORE_INTRADAY"}:
@@ -215,10 +203,10 @@ def candidates(
             )
             slot = execution_bars[-1].end if execution_window_ms == 900_000 else asof // 60_000 * 60_000
             if quality_policy:
-                version += ":" + quality_module.POLICY
+                version += ":" + (str(quality_policy) if modern else quality_module.POLICY)
                 slot = structure.get("event_start_ms", last.end)
             ident = hashlib.sha256(
-                f"{instrument.symbol}|{direction}|{family}|{slot if quality_policy == quality_v211.POLICY else last.end}|{slot}|{version}".encode()
+                f"{instrument.symbol}|{direction}|{family}|{slot if modern else last.end}|{slot}|{version}".encode()
             ).hexdigest()[:20]
             plans.append(
                 Signal(
@@ -280,10 +268,12 @@ def candidates(
                 )
             )
     for signal in plans:
-        if quality_policy == quality_v211.POLICY:
+        if modern:
             signal.evidence["research_instrumentation"] = "research-observations-v212"
         if quality_policy:
-            signal.evidence["production_policies"]["trade_quality"] = quality_module.POLICY
+            signal.evidence["production_policies"]["trade_quality"] = (
+                str(quality_policy) if modern else quality_module.POLICY
+            )
             quality_module.counterfactual(signal, signal.evidence["frozen_structure"]["reasons"], asof)
         if horizon:
             signal.version += ":production-v2:flow-score-v2:lifecycle-v62:cross-venue-flow-substitution-v1"

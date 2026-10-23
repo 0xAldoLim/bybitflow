@@ -44,6 +44,12 @@ class Scanner:
         )
         self.source_ready = settings.market_source not in {"auto", "multi"}
         self.notifier = Notifier(settings, store)
+        from .setup_runtime import Runtime as SetupRuntime
+
+        self.setup_runtime = SetupRuntime(self)
+        self.notifier.prepare_initial = self.setup_runtime.prepare_delivery
+        self.notifier.finalize_initial = self.setup_runtime.finalize_delivery
+        self.notifier.guard_initial = self.setup_runtime.dispatch_guard
         self.context = {}
         self.reconcile_pending = {s["id"] for s in store.active_signals() if s["source"] != "tradingview"}
         self.candle_cache = {}
@@ -459,6 +465,11 @@ class Scanner:
         checked = now_ms()
         book = initial_book or self.streams.books.get(instrument.symbol)
         derivatives = self.context.get(instrument.symbol, {}).get("derivatives", {})
+        from .quality_v22 import prepare_generation
+
+        prepare_generation(
+            signal, bars, checked, self.settings, instrument, book, derivatives.get("funding_rate")
+        )
         capture_initial(signal, book, self.settings, checked, instrument, derivatives.get("funding_rate"))
         if bars:
             remember_volume(self.store, instrument.exchange, instrument.symbol, bars[-1].interval, bars, now)
@@ -513,7 +524,7 @@ class Scanner:
             structural_targets=True,
             volume_profile=self.generation_profile(instrument, setup_bars, evaluated),
             horizon="CORE_INTRADAY",
-            quality_policy="trade-validity-v21.1",
+            quality_policy="trade-validity-v22",
             structural_observations=observations,
         )
         self.remember_structures(instrument, "CORE_INTRADAY", observations, evaluated)
@@ -578,7 +589,7 @@ class Scanner:
                 structural_targets=True,
                 volume_profile=self.generation_profile(instrument, bars[1], now),
                 horizon=name,
-                quality_policy="trade-validity-v21.1",
+                quality_policy="trade-validity-v22",
                 structural_observations=observations,
             )
             self.remember_structures(instrument, name, observations, now)
@@ -713,8 +724,9 @@ class Scanner:
     def entry_ready(self, signal, book, now):
         from . import quality_v211
         from .production import entry_position
+        from .quality_v22 import enabled as v22_enabled
 
-        if quality_v211.enabled(signal):
+        if quality_v211.enabled(signal) or v22_enabled(signal):
             price = (
                 float(min(book.asks) if signal.direction == "LONG" else max(book.bids))
                 if book.asks and book.bids
@@ -749,11 +761,13 @@ class Scanner:
 
     def apply_trade_quality(self, signal, book, original_now):
         from .quality import apply
-        from .quality_v211 import enabled
 
         # Live books advance while flow workers yield. Execution is observed
         # now, independently of the original completed flow-window timestamp.
-        checked_ms = now_ms() if enabled(signal) else original_now
+        from .quality_v22 import enabled as v22_enabled
+        from .quality_v211 import enabled
+
+        checked_ms = now_ms() if enabled(signal) or v22_enabled(signal) else original_now
         liquidity = self.store.get(f"liquidity-v21:{signal.source}:{signal.symbol}", {})
         if not 0 <= checked_ms - liquidity.get("at_ms", 0) <= 120000:
             liquidity = {}
@@ -1710,6 +1724,10 @@ class Scanner:
                 s.coverage.pop("pause_notice_sent", None)
         if s.state not in TERMINAL and not reasons:
             s.coverage["last_trustworthy_ms"] = now
+            if s.evidence.get("production_policies", {}).get("trade_quality") == "trade-validity-v22":
+                await self.setup_runtime.observe_health(
+                    s, observed, bf, observation["coverage_complete"], book, now_ms()
+                )
         self.store.signal(s, s.invalidation if s.state in TERMINAL else "Monitoring active")
         if s.state in TERMINAL:
             await self.notifier.send_research(s, update=True)
@@ -2049,7 +2067,11 @@ class Scanner:
             s.gates.extend(normal_spread["reasons"])
             if not flow_ok and not production_v2:
                 s.gates.append("executed order flow did not confirm family trigger")
-            from .quality_v211 import enabled as new_quality
+            from .quality_v22 import enabled as v22_enabled
+            from .quality_v211 import enabled as quality_v211_enabled
+
+            def new_quality(signal):
+                return quality_v211_enabled(signal) or v22_enabled(signal)
 
             if now - end > 900_000 and not new_quality(s):
                 s.gates.append("execution trigger expired")
@@ -2460,25 +2482,31 @@ class Scanner:
                         finally:
                             if api is not self.api:
                                 await api.close()
-                    from .path_research import advance_batch as advance_paths
+                    from .setup_research import advance_mixed_batch
 
+                    # Oldest due market across both research policies; neither
+                    # queue may starve the other. This bounds research I/O only.
                     path_rows = self.store.db.execute(
-                        "SELECT signal_id,source,symbol,cursor_ms FROM swing_path_jobs WHERE next_ms<=? ORDER BY next_ms LIMIT 50",
-                        (now_ms(),),
+                        "SELECT signal_id,source,symbol,cursor_ms,kind FROM ("
+                        "SELECT signal_id,source,symbol,cursor_ms,next_ms,'swing' AS kind "
+                        "FROM swing_path_jobs WHERE next_ms<=? UNION ALL "
+                        "SELECT signal_id,source,symbol,cursor_ms,next_ms,'v22' AS kind "
+                        "FROM setup_path_jobs WHERE next_ms<=?) ORDER BY next_ms LIMIT 50",
+                        (now_ms(), now_ms()),
                     ).fetchall()
                     path_groups = defaultdict(list)
-                    for ident, source, symbol, cursor in path_rows:
-                        path_groups[(source, symbol)].append((ident, cursor))
+                    for ident, source, symbol, cursor, kind in path_rows:
+                        path_groups[(source, symbol)].append((ident, cursor, kind))
                     for (source, symbol), group in list(path_groups.items())[:5]:
                         api = self.api if source == self.exchange else VenueAPI(source, self.settings)
                         try:
                             bars = await api.candles(
-                                symbol, "1", now_ms(), limit=300, start=min(cursor for _, cursor in group)
+                                symbol, "1", now_ms(), limit=300, start=min(cursor for _, cursor, _ in group)
                             )
                             await asyncio.to_thread(
-                                advance_paths,
+                                advance_mixed_batch,
                                 self.settings.data_dir,
-                                [ident for ident, _ in group],
+                                [(ident, kind) for ident, _, kind in group],
                                 bars,
                                 now_ms(),
                             )

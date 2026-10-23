@@ -3,9 +3,18 @@
 **Crypto perpetual-market research with a local dashboard and Discord alerts.**
 
 BybitFlow monitors public Binance, Bybit and OKX market data. Confirmed LONG
-and SHORT setup cards include an entry zone, stop loss, TP1, TP2, an entry
+and SHORT setup cards include an entry zone, stop loss, target, an entry
 deadline and a holding horizon. The application records market evidence,
 monitors published setups and supports optional machine-learning research.
+
+Version 2.2 adds one Setup Score, price-response diagnostics, horizon-based
+target reachability, stop viability and a fresh execution check before Discord
+delivery. Cards distinguish the execution target from the structural objective.
+Ranking and shared market exposure are informational; every distinct valid
+opportunity may be sent. There is no daily signal quota or top-N alert cap.
+See the [v2.2 assumptions and limitations](docs/V22_SETUP_QUALITY.md).
+The [fixed retrospective comparison](docs/V22_VERIFICATION.md) does not establish
+improved profitability; full target-construction performance remains unmeasured.
 
 BybitFlow does not place orders or read trading-account fills. Quality scores
 and model rankings are research measures, not validated win probabilities.
@@ -18,6 +27,8 @@ and model rankings are research measures, not validated win probabilities.
 - Public REST and WebSocket adapters with automatic primary-venue selection
   or a fixed venue.
 - Intraday and swing setup research with executed-flow confirmation.
+- Bounded quote-event OFI and price-response assessment, with explicit unknown states.
+- Versioned execution-target selection and immutable delivery snapshots.
 - Separate Discord destinations for setup cards and monitoring notices.
 - An authenticated local dashboard with feed, clock, storage and delivery diagnostics.
 - Bounded recording and managed retention that preserve protected evidence,

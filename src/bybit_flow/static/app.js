@@ -79,6 +79,30 @@ function signalTable(rows) {
         "No setup currently meets the data, confirmation, and risk requirements.",
       );
 }
+function setupAssessment(s, research) {
+  const e = s.evidence || {}, v = e.v22;
+  if (!v) return "";
+  const snap = e.delivery_execution_snapshot || {}, target = e.target_reachability || {};
+  const stop = e.stop_viability || {}, flow = e.impact_efficiency || {};
+  const current = s.coverage?.v22_current;
+  const components = [
+    ...Object.entries(v.evidence?.components || {}),
+    ...Object.entries(v.tradeability?.components || {}),
+  ];
+  return panel("Setup Score · v2.2",
+    `<p><strong>${number(v.setup_score, 1)} / 100 · ${escape(s.raw_tier)}</strong> · Deterministic setup quality, not a win probability.</p>` +
+    `<p>Target ${number(s.tp1, 8)} · structural objective ${number(e.structural_tp1, 8)} · reachability ${escape(target.state || "UNKNOWN")} · stop ${escape(stop.state || "UNKNOWN")}</p>` +
+    `<p>Flow response ${escape(flow.state || "UNKNOWN")} · OFI ${escape(e.event_ofi?.state || "UNAVAILABLE")}</p>` +
+    table(["Supporting component", "Score", "Evidence state"], components.map(([name, r]) => [
+      escape(name.replaceAll("_", " ")), r.score == null ? "Unknown" : number(r.score, 1),
+      escape(r.state || "UNKNOWN"),
+    ])) +
+    `<p><strong>Strengths:</strong> ${escape((v.strengths || []).join("; ") || "No strong component recorded")}</p>` +
+    `<p><strong>Limiting factors:</strong> ${escape((v.weaknesses || []).join("; ") || "Market conditions can change")}</p>` +
+    (current ? `<p><strong>Current monitoring:</strong> ${escape(current.state)} · ${escape(current.reason || "")}. The published score and plan remain frozen.</p>` : "") +
+    `<details><summary>Frozen delivery quote and assessment</summary>${json(snap)}</details>` +
+    `<details><summary>Fixed exit research · no production authority</summary>${json(research || {state: "PENDING"})}</details>`);
+}
 function watchTable(rows) {
   return rows.length
     ? table(
@@ -447,7 +471,7 @@ async function render() {
         panel("Fundamental context", json(m.fundamentals)) +
         panel("Depth observations", json({ fresh: m.book_fresh, ...m.book }));
     } else if (page === "signal") {
-      const { signal: s } = await api("signals/" + encodeURIComponent(id));
+      const { signal: s, setup_exit_research: exitResearch } = await api("signals/" + encodeURIComponent(id));
       const observation = await api("observations/" + encodeURIComponent(id));
       const f = s.evidence.flow || {};
       const expiryMark = s.state === "EXPIRED" && s.coverage?.tracking_end ? s.evidence?.expiry_mark : null;
@@ -456,18 +480,20 @@ async function render() {
           `${s.symbol} · ${s.direction} · ${s.final_tier}`,
           `<p>${escape(s.horizon_profile || "LEGACY")} · ${escape(s.entry_session || "Legacy session not recorded")} · ${escape(s.version)}</p><p>${escape(s.reason)}</p>` +
             table(
-              ["Entry zone", "Stop", "TP1 / TP2", "Quality / probability"],
+              ["Entry zone", "Stop", "TP1 / TP2", s.evidence.v22 ? "Setup Score" : "Quality / probability"],
               [
                 [
                   `${number(s.zone[0], 8)} – ${number(s.zone[1], 8)}`,
                   number(s.stop, 8),
                   `${number(s.tp1, 8)} / ${number(s.tp2, 8)}`,
-                  `${number(s.quality)} / ${s.validation_status === "validated" && s.calibrated_probability != null ? number(s.calibrated_probability * 100, 1) + "%" : "Uncalibrated"}`,
+                  s.evidence.v22 ? `${number(s.quality)} / 100` :
+                    `${number(s.quality)} / ${s.validation_status === "validated" && s.calibrated_probability != null ? number(s.calibrated_probability * 100, 1) + "%" : "Uncalibrated"}`,
                 ],
               ],
             ) +
             `<p class="muted">${escape(s.invalidation)}</p>`,
         ) +
+        setupAssessment(s, exitResearch) +
         `<div class="grid2">` +
         panel("Executed footprint", profile(f.profile), "Window profile; not a full session") +
         panel("Cumulative volume delta", lineChart(f.cvd_path || []), "Base units · execution window") +

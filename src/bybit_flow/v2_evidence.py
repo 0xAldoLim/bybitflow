@@ -304,6 +304,12 @@ def combine(location_score, mechanism_score, offer_score, confidence):
 
 
 def score(signal, flow_confirmed, now):
+    from .quality_v22 import enabled as v22_enabled
+
+    if v22_enabled(signal):
+        from .setup_scoring import score as score_v22
+
+        return score_v22(signal, flow_confirmed, now)
     from .quality import enabled
     from .quality_v21 import SCORE_PROFILE as QUALITY_SCORE_PROFILE
 

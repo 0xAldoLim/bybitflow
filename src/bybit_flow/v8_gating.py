@@ -280,7 +280,7 @@ def evaluate(signal, asof_ms, settings, *, disabled=None, active=(), portfolio=N
                     and evidence.get(
                         "entry_quality_acceptable"
                         if evidence.get("production_policies", {}).get("trade_quality")
-                        == "trade-validity-v21.1"
+                        in {"trade-validity-v21.1", "trade-validity-v22"}
                         else "entry_not_chased"
                     )
                     is True
@@ -327,7 +327,10 @@ def evaluate(signal, asof_ms, settings, *, disabled=None, active=(), portfolio=N
                 else 0
             )
             capacity_used = fresh_portfolio and exposure >= 0.9 * settings.correlated_risk_limit
-            if capacity_used:
+            if (
+                capacity_used
+                and evidence.get("production_policies", {}).get("trade_quality") != "trade-validity-v22"
+            ):
                 for other in active:
                     if (
                         other["id"] in value.get("related_ids", [])

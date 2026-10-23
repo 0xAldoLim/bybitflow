@@ -59,10 +59,10 @@ def evaluate(row, current, bars, source, asof_ms, materialized_ms=None):
         observed_entry=entry,
         until_ms=deadline(row),
     )
-    if (
-        row["signal"].get("evidence", {}).get("production_policies", {}).get("trade_quality")
-        == "trade-validity-v21.1"
-    ):
+    if row["signal"].get("evidence", {}).get("production_policies", {}).get("trade_quality") in {
+        "trade-validity-v21.1",
+        "trade-validity-v22",
+    }:
         result["research_path"] = research_path(row, result, bars, asof_ms)
     return result | dict(
         policy=POLICY,

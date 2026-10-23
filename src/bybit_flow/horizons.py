@@ -83,6 +83,11 @@ def assign(signal, name):
 
         if enabled(signal):
             signal.evidence["production_policies"]["scoring"] = QUALITY_SCORE_PROFILE
+        from .quality_v22 import SCORE_PROFILE as CURRENT_SCORE_PROFILE
+        from .quality_v22 import enabled as v22_enabled
+
+        if v22_enabled(signal):
+            signal.evidence["production_policies"]["scoring"] = CURRENT_SCORE_PROFILE
     # Only candidates created by this policy receive V8 production confirmation gates.
     signal.evidence["confirmation_policy"] = "v8-production-gating-v1"
     signal.version += ":horizons-v1:" + name + ":hardening-v1:autonomy-v1:flow-quality-v1"

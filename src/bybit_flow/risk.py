@@ -113,7 +113,10 @@ def evaluate_risk(signal, instrument, settings, book, portfolio=None, funding_ra
     elif impact["impact_bps"] > settings.slippage_bps + settings.max_spread_bps / 2:
         reasons.append("estimated entry impact exceeds cost allowance")
     result.update(impact=impact, accepted=not reasons, reasons=reasons)
-    if signal.evidence.get("production_policies", {}).get("trade_quality") == "trade-validity-v21.1":
+    if signal.evidence.get("production_policies", {}).get("trade_quality") in {
+        "trade-validity-v21.1",
+        "trade-validity-v22",
+    }:
         result["cost_components"] = execution_cost(
             entry, stop, signal.tp1, settings.taker_fee_bps, settings.slippage_bps, funding_bps
         )
