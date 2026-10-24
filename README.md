@@ -157,6 +157,20 @@ docker compose exec desk bybit-flow test-discord
 This posts **BYBITFLOW CONNECTION TEST / NOT A TRADE SIGNAL**. It does not test the
 separate monitoring webhook or generate a real setup.
 
+Discord endpoint connectivity is checked automatically using read-only requests,
+usually every five minutes. Connection failures retry with backoff; Discord rate
+limits are respected. These checks do not send cards or change delivery receipts.
+An earlier unconfirmed delivery remains in history even after connectivity returns.
+A reachable endpoint does not prove that the earlier card arrived or that writes
+are permitted; rejected and rate-limited writes remain visible until a later
+confirmed write succeeds.
+
+Storage warnings distinguish usage near the configured budget from recording
+being stopped. Automatic safe retention preserves the database, models and
+protected evidence. A failed maintenance cycle is reported separately and retries
+automatically. Retention cannot guarantee indefinite recording when permanent or
+protected data fills the configured budget; the limit is never expanded silently.
+
 ## Start, stop, and check status
 
 Run these commands from the repository directory with Docker running. They work

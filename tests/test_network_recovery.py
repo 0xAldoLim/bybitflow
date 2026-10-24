@@ -199,3 +199,22 @@ async def test_clock_network_failure_retries_quickly_without_retaining_false_dri
         )
     finally:
         store.close()
+
+
+def test_failure_origin_is_recorded_without_secret_exception_text():
+    import logging
+
+    from bybit_flow.observability import JsonFormatter
+
+    try:
+        raise ValueError("https://discord.com/api/webhooks/123/SECRET")
+    except ValueError as exc:
+        state = failure_health({}, exc, 2000, 60)
+    assert "test_failure_origin_is_recorded_without_secret_exception_text" in state["location"]
+    assert state["error_category"] == "DATA_VALIDATION"
+    record = logging.LogRecord("bybit_flow.scanner", logging.WARNING, __file__, 1, "scan_failed", (), None)
+    for key in ("error_type", "error_category", "location"):
+        setattr(record, key, state[key])
+    result = JsonFormatter().format(record)
+    assert "SECRET" not in result and "https://" not in result
+    assert state["location"] in result and "DATA_VALIDATION" in result

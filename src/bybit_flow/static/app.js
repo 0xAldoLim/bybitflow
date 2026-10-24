@@ -235,7 +235,7 @@ async function render() {
       const delivery = await api("delivery");
       const funnel = await api("funnel");
       const { transport_health, ...initialDelivery } = delivery;
-      body = funnelPanel(funnel) + panel("Real signal delivery", json(initialDelivery), "Initial cards only; excludes tests and lifecycle updates") + panel("Discord transport history", json(transport_health), "Last request per destination; successful edits do not confirm earlier uncertain cards") + panel("Lifecycle journal", signalTable(data.signals), "Research alerts; no order execution");
+      body = funnelPanel(funnel) + panel("Real signal delivery", json(initialDelivery), "Initial cards only; excludes tests and lifecycle updates") + panel("Discord transport history", json(transport_health), "Latest writes and read-only connectivity checks; neither a successful edit nor a GET confirms an earlier uncertain card") + panel("Lifecycle journal", signalTable(data.signals), "Research alerts; no order execution");
     }
     else if (page === "ml") {
       const ml = await api("ml"),

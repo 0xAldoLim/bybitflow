@@ -2415,7 +2415,9 @@ class Scanner:
                 await self.streams.select(self.pending_symbols(), retain_selected=True)
                 self.status["live_feed_preserved"] = preserve_feed
                 self.store.put("scanner", self.status)
-                log.warning("scan_failed", extra={"error_type": type(exc).__name__})
+                log.warning(
+                    "scan_failed", extra={k: health[k] for k in ("error_type", "error_category", "location")}
+                )
                 # A transient outage should not suspend collection for a full scan interval.
                 delay = min(delay, 60)
             await asyncio.sleep(delay)
@@ -2611,6 +2613,9 @@ class Scanner:
         start_task("v8_context_ev", self.context_ev_loop)
         start_task("v8_research", self.v8_loop)
         start_task("storage", self.storage_loop)
+        from .discord_health import monitor as monitor_discord
+
+        start_task("discord_health", lambda: monitor_discord(self.settings, self.store))
         if self.settings.scan_enabled:
             start_task("clock", self.clock_loop)
             if self.settings.macro_news_enabled:

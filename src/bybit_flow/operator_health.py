@@ -139,13 +139,28 @@ def warnings(settings, store, scanner, recorder, now):
             severity="error",
         )
     storage = store.get("storage_status", {})
+    maintenance = store.get("storage_health", {})
+    if maintenance.get("error_type"):
+        add(
+            "STORAGE_MAINTENANCE",
+            "Automatic storage maintenance interrupted",
+            "The latest safe-retention cycle failed; protected evidence remains preserved.",
+            "Maintenance retries automatically. Check service logs if this persists; do not delete the database, models or protected setup history.",
+            severity="error",
+            at_ms=maintenance.get("at_ms"),
+        )
     usage = storage.get("usage_percent", 0)
     if isinstance(usage, (int, float)) and usage >= 90:
         add(
             "STORAGE_PRESSURE",
             "Recording storage nearly full",
             f"{usage:.1f}% of the configured storage budget is in use.",
-            "Check safe retention and free disk space. Do not delete the database, models or active setup history.",
+            (
+                "Automatic safe retention is enabled and retries on its normal schedule. "
+                if storage.get("retention_enabled")
+                else "Check safe retention and free disk space. "
+            )
+            + "The database, models and protected evidence remain preserved; a storage warning does not mean recording has stopped. Check Recording health for its actual state.",
             severity="error" if usage >= 100 else "warning",
             at_ms=storage.get("at_ms"),
         )
@@ -260,14 +275,47 @@ def warnings(settings, store, scanner, recorder, now):
             severity="error",
             at_ms=confirmation.get("last_error_ms"),
         )
-    for destination, transport in transport_health(store)["destinations"].items():
-        if transport.get("status") in FAILED:
+    discord = transport_health(store, settings, now)
+    for destination, check in discord["reachability"].items():
+        if not check["fresh"]:
             add(
-                "DISCORD_DELIVERY",
-                "Discord delivery problem",
-                f"The last {destination} request ({transport.get('method', 'POST')}) did not have a confirmed successful receipt.",
-                "Check this destination's webhook and connectivity. See Signals for delivery history. An uncertain initial card is not automatically resent.",
+                "DISCORD_CONNECTIVITY_UNKNOWN",
+                "Discord connectivity check outdated",
+                f"The last read-only {destination} check is no longer recent enough to establish current reachability.",
+                "Checks retry independently of market scans and honor rate-limit cooldowns. Check service logs if they stop refreshing.",
+                at_ms=check.get("at_ms"),
+            )
+        if check["fresh"] and check.get("state") != "AVAILABLE":
+            add(
+                "DISCORD_CONNECTIVITY",
+                "Discord connectivity check failed",
+                f"The {destination} webhook could not be verified by a read-only check ({check.get('category')}; HTTP {check.get('http_status') or 'unavailable'}).",
+                "Checks retry automatically with backoff and respect rate limits. Verify the webhook if access remains denied. No test cards or uncertain messages are automatically resent.",
                 severity="error",
+                at_ms=check.get("at_ms"),
+            )
+    for destination, transport in discord["destinations"].items():
+        if transport.get("status") in FAILED:
+            check = discord["reachability"].get(destination, {})
+            checked_later = check.get("fresh") and check.get("at_ms", 0) > transport.get("at_ms", 0)
+            recovered_connection = (
+                checked_later
+                and check.get("state") == "AVAILABLE"
+                and transport.get("status") == "uncertain"
+                and transport.get("category") in {"TIMEOUT", "CONNECTION_ERROR"}
+            )
+            add(
+                "DISCORD_DELIVERY_HISTORY" if recovered_connection else "DISCORD_DELIVERY",
+                "Earlier Discord delivery remains unconfirmed"
+                if recovered_connection
+                else "Discord delivery problem",
+                (
+                    f"The {destination} endpoint is reachable now, but its earlier {transport.get('method', 'POST')} has no confirmed receipt. This does not establish a current connection outage or successful message delivery."
+                    if recovered_connection
+                    else f"The last {destination} request ({transport.get('method', 'POST')}) did not have a confirmed successful receipt."
+                ),
+                "See Signals for delivery history. Reachability cannot confirm a previous message or prove write permission. Uncertain cards are not automatically resent.",
+                severity="warning" if recovered_connection else "error",
                 at_ms=transport.get("at_ms"),
             )
     return result

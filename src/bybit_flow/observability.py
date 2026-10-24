@@ -12,7 +12,7 @@ class JsonFormatter(logging.Formatter):
             "event": record.getMessage(),
             "created_ms": int(record.created * 1000),
         }
-        for key in ("symbol", "error_type"):
+        for key in ("symbol", "error_type", "error_category", "location"):
             if hasattr(record, key):
                 row[key] = getattr(record, key)
         return json.dumps(row)

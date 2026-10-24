@@ -3,6 +3,8 @@
 import asyncio
 import socket
 import ssl
+import traceback
+from pathlib import Path
 
 import httpx
 
@@ -46,9 +48,12 @@ def failure_health(previous, exc, at_ms, retry_seconds):
     last_success = previous.get("last_success_ms")
     if last_success is None and (previous.get("state") == "HEALTHY" or previous.get("status") == "observed"):
         last_success = previous.get("at_ms")
+    frames = traceback.extract_tb(exc.__traceback__)
+    origin = frames[-1] if frames else None
     return dict(
         at_ms=at_ms,
         state="DEGRADED",
+        location=f"{Path(origin.filename).name}:{origin.name}:{origin.lineno}" if origin else None,
         error_type=type(exc).__name__,
         error_category=error_category(exc),
         last_error_ms=at_ms,

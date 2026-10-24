@@ -142,7 +142,7 @@ def create_app(settings=None):
         from .identity import delivery_status
 
         store = request.app.state.store
-        return delivery_status(store) | dict(transport_health=transport_health(store))
+        return delivery_status(store) | dict(transport_health=transport_health(store, settings))
 
     @app.get("/api/horizons")
     async def horizon_research(request: Request):

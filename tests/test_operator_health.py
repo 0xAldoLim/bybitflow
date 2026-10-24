@@ -259,3 +259,19 @@ def test_claimed_selection_with_missing_live_subscriptions_is_visible(settings):
         }
     finally:
         store.close()
+
+
+def test_storage_maintenance_failure_is_visible_and_clears_after_success(settings):
+    settings, store, scanner, recorder, now = context(settings)
+    try:
+        store.put("storage_status", dict(usage_percent=91, retention_enabled=True, at_ms=now))
+        store.put("storage_health", dict(error_type="OperationalError", at_ms=now))
+        result = warnings(settings, store, scanner, recorder, now)
+        assert {w["code"] for w in result} == {"STORAGE_PRESSURE", "STORAGE_MAINTENANCE"}
+        assert recorder.healthy  # A maintenance diagnostic cannot stop recording or release evidence.
+        store.put("storage_health", dict(state="NORMAL", at_ms=now + 1))
+        result = warnings(settings, store, scanner, recorder, now + 1)
+        assert [w["code"] for w in result] == ["STORAGE_PRESSURE"]
+        assert "Automatic safe retention" in result[0]["action"]
+    finally:
+        store.close()
