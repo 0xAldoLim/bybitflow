@@ -378,3 +378,31 @@ async def test_long_history_resumes_cached_chunks_instead_of_redownloading(setti
     assert len(result) == 961 and calls.count(0) == 1
     assert state["cache_hits"] == 1
     store.close()
+
+
+async def test_recovered_swing_stops_fetching_once_original_outcome_is_proven(settings, signal, monkeypatch):
+    store = Store(settings.data_dir)
+    s = plan(signal)
+    ident = FeatureStore(store).capture(s, 121_000, "decision")
+    frozen = store.db.execute("SELECT payload FROM ml_snapshots WHERE id=?", (ident,)).fetchone()[0]
+    row = dict(id=ident, **json.loads(frozen))
+    touch(s)
+    store.signal(s)  # The original live lifecycle has not seen the offline stop.
+    asof = s.holding_deadline_ms + 60_000
+    monkeypatch.setattr("bybit_flow.ml.monitored.now_ms", lambda: asof)
+    full = [bar(t, low=94 if t == 180_000 else 98) for t in range(120_000, s.holding_deadline_ms, 60_000)]
+    calls = []
+
+    async def history(self, market, symbol, start, end, state, **kwargs):
+        calls.append((start, end))
+        return [b for b in full if start <= b.start < end]
+
+    monkeypatch.setattr("bybit_flow.ml.monitored.CandleCache.get", history)
+    result = await backfill(store, settings, "binance", market=SimpleNamespace(name="binance"))
+    assert result["complete"] == 1 and len(calls) == 1
+    label = dataset(store, "binance", asof)[0]["label"]
+    assert label == evaluate(row, s.model_dump(), full, "binance", asof, asof)
+    assert label["classification"] == "loss" and label["outcome"] == "STOP"
+    assert calls[0][1] < s.holding_deadline_ms
+    assert store.db.execute("SELECT payload FROM ml_snapshots WHERE id=?", (ident,)).fetchone()[0] == frozen
+    store.close()

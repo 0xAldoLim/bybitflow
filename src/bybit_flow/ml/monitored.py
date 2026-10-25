@@ -218,7 +218,7 @@ def save_attempt(store, row, status, reason=None, *, retry=True):
     )
 
 
-async def path_history(cache, market, symbol, start, end, state):
+async def path_history(cache, market, symbol, start, end, state, *, stop_when=None):
     """Cache completed chunks so a long offline path resumes after a work deadline."""
     result = []
     for cursor in range(start, end, 480 * MINUTE):
@@ -230,6 +230,8 @@ async def path_history(cache, market, symbol, start, end, state):
         result.extend(bars)
         if len(bars) != (stop - cursor) // MINUTE:
             break  # Missing history remains explicit; never bridge an unknown interval.
+        if stop_when is not None and stop_when(result):
+            break  # A proven exit or no-entry result needs no later price history.
     return result
 
 
@@ -306,7 +308,18 @@ async def _backfill(store, settings, source, limit, market):
                 continue
             try:
                 async with asyncio.timeout(max(0.001, budget_end - time.monotonic())):
-                    bars = await path_history(cache, market, row["signal"]["symbol"], start, end, state)
+                    bars = await path_history(
+                        cache,
+                        market,
+                        row["signal"]["symbol"],
+                        start,
+                        end,
+                        state,
+                        stop_when=lambda collected: (
+                            evaluate(row, row["current"], collected, source, asof, now_ms())["outcome"]
+                            != "INCOMPLETE"
+                        ),
+                    )
                 outcome = evaluate(row, row["current"], bars, source, asof, now_ms())
             except (ValueError, PermissionError, RuntimeError, httpx.HTTPError, TimeoutError) as exc:
                 from .cli import LiveRecordingPressure

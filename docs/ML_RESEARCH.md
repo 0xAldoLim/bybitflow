@@ -129,8 +129,10 @@ restarts. Unattempted work proceeds before previously retried paths, so an old
 unavailable interval cannot monopolize every batch. Invalid immutable plans are
 recorded as explicit `INVALID_FROZEN_PLAN` exclusions without requesting history.
 For long outages, completed eight-hour candle chunks are cached individually;
-interrupted recovery resumes from those chunks. Optional work has a 45-second
-batch budget and yields to recorder pressure. These scheduling limits do not
+interrupted recovery resumes from those chunks. Once the original evaluation
+establishes an exit, no-entry or ambiguous result, later chunks are unnecessary
+and are not downloaded. A swing that stopped early does not need its entire
+remaining holding horizon downloaded. Optional work has a 45-second batch budget and yields to recorder pressure. These scheduling limits do not
 shorten a setup's frozen holding period or relax outcome evidence requirements.
 
 The trainer refreshes monitored recovery and readiness every 15 minutes, subject
