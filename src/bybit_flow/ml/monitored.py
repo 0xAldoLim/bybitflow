@@ -295,13 +295,8 @@ async def _backfill(store, settings, source, limit, market):
             entry = observed_entry(row, row["current"])
             start = (entry["at_ms"] if entry else row["decision_ms"]) // MINUTE * MINUTE
             end = min(asof, deadline(row)) // MINUTE * MINUTE
-            terminal = row["current"].get("evidence", {}).get("terminal_event", {}).get("effective_ms")
-            if (
-                row["current"].get("evidence", {}).get("primary_outcome") in {"STOP", "TARGET", "UNCLEAR"}
-                and type(terminal) is int
-                and terminal > row["decision_ms"]
-            ):
-                end = min(end, (terminal + MINUTE - 1) // MINUTE * MINUTE)
+            # Lifecycle markers select work early; only the frozen ML evaluator
+            # can establish its entry/exit and stop fetching the original path.
             if end <= start:
                 save_attempt(store, row, "PENDING", "No closed historical candle yet")
                 state["pending"] += 1

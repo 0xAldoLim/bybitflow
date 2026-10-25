@@ -134,6 +134,10 @@ establishes an exit, no-entry or ambiguous result, later chunks are unnecessary
 and are not downloaded. A swing that stopped early does not need its entire
 remaining holding horizon downloaded. Optional work has a 45-second batch budget and yields to recorder pressure. These scheduling limits do not
 shorten a setup's frozen holding period or relax outcome evidence requirements.
+A lifecycle terminal marker can schedule recovery early, but does not truncate
+the frozen ML entry window. The existing hypothetical evaluator independently
+establishes entry and exit from that original path. Its counterfactual result
+can differ from the live lifecycle state; neither is rewritten to match the other.
 
 The trainer refreshes monitored recovery and readiness every 15 minutes, subject
 to the existing disk budget and bounded REST/cache limits. Labels retain candle

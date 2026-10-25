@@ -406,3 +406,49 @@ async def test_recovered_swing_stops_fetching_once_original_outcome_is_proven(se
     assert calls[0][1] < s.holding_deadline_ms
     assert store.db.execute("SELECT payload FROM ml_snapshots WHERE id=?", (ident,)).fetchone()[0] == frozen
     store.close()
+
+
+@pytest.mark.parametrize("entered,outcome", [(False, "NO_ENTRY"), (True, "TARGET")])
+async def test_lifecycle_marker_cannot_truncate_frozen_ml_entry_window(
+    settings, signal, monkeypatch, entered, outcome
+):
+    store = Store(settings.data_dir)
+    s = plan(signal)
+    ident = FeatureStore(store).capture(s, 121_000, "decision")
+    frozen = store.db.execute("SELECT payload FROM ml_snapshots WHERE id=?", (ident,)).fetchone()[0]
+    row = dict(id=ident, **json.loads(frozen))
+    s.state = "INVALIDATED"
+    s.evidence.update(primary_outcome="STOP", terminal_event=dict(effective_ms=150_000))
+    store.signal(s)
+    original_current = store.db.execute("SELECT payload FROM signals WHERE id=?", (s.id,)).fetchone()[0]
+    asof = s.holding_deadline_ms + 60_000
+    monkeypatch.setattr("bybit_flow.ml.monitored.now_ms", lambda: asof)
+    full = []
+    for at in range(120_000, s.holding_deadline_ms, 60_000):
+        if entered and at == 180_000:
+            full.append(bar(at))
+        elif entered and at == 240_000:
+            full.append(bar(at, high=116))
+        else:
+            full.append(bar(at, opening=96, high=98, low=94, close=96))
+    calls = []
+
+    async def history(self, market, symbol, start, end, state, **kwargs):
+        calls.append((start, end))
+        return [b for b in full if start <= b.start < end]
+
+    monkeypatch.setattr("bybit_flow.ml.monitored.CandleCache.get", history)
+    result = await backfill(store, settings, "binance", market=SimpleNamespace(name="binance"))
+    label = json.loads(
+        store.db.execute(
+            "SELECT payload FROM ml_labels WHERE snapshot_id=? AND policy=?", (ident, POLICY)
+        ).fetchone()[0]
+    )
+    assert label == evaluate(row, s.model_dump(), full, "binance", asof, asof)
+    assert label["outcome"] == outcome
+    assert result["complete"] == int(entered) and result["excluded"] == int(not entered)
+    assert len(calls) == 1
+    assert (
+        store.db.execute("SELECT payload FROM signals WHERE id=?", (s.id,)).fetchone()[0] == original_current
+    )
+    store.close()
