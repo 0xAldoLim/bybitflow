@@ -248,8 +248,10 @@ qualified alerts.
 Downtime does not erase saved plans or learning records. The trainer can recover
 eligible candle outcomes after services resume. For Binance, it can also recover
 consecutive aggregate trades and replay the same primary entry, participation,
-cost and exit rules. Existing complete labels remain unchanged. Progress is saved;
-missing, ambiguous or unverifiable evidence remains excluded.
+cost and exit rules. Existing complete labels and decision-time flow features remain
+unchanged. Recovery saves progress and durable retry times, so an unavailable old
+path cannot block newer setups or longer horizons. Missing history is retried;
+invalid frozen plans, ambiguous ordering and unverifiable outcomes remain excluded.
 
 Primary historical trade replay currently supports Binance only and uses a
 bounded 128 MB archive cache. Bybit/OKX primary trade replay and larger archives

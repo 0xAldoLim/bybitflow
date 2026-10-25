@@ -35,7 +35,7 @@ class History:
         return dict(trades=self.pages.pop(0) if self.pages else [])
 
 
-def candidate(settings, signal, complete=False):
+def candidate(settings, signal, complete=False, local_ready=True):
     store = Store(settings.data_dir)
     signal.source = "binance"
     signal.feature_schema_version = SCHEMA_VERSION
@@ -46,7 +46,10 @@ def candidate(settings, signal, complete=False):
             trade_stale_ms=15000,
             markets={
                 "binance:TESTUSDT": dict(
-                    subscribed=True, coverage_start_ms=800, last_trade_ms=900, subscription_start_ms=800
+                    subscribed=local_ready,
+                    coverage_start_ms=800,
+                    last_trade_ms=900,
+                    subscription_start_ms=800,
                 )
             },
         ),
@@ -356,3 +359,19 @@ async def test_archive_pages_stream_bounded_rows_and_resume_without_loading_full
     finally:
         await provider.close()
         store.close()
+
+
+async def test_local_diagnostic_failure_does_not_preclude_verified_historical_outcome(settings, signal):
+    store, fs, ident, snapshot, old, records = candidate(settings, signal, local_ready=False)
+    assert snapshot["primary_ml_eligibility"]["eligible"] is False
+    original = store.db.execute("SELECT payload FROM ml_snapshots WHERE id=?", (ident,)).fetchone()[0]
+    assert ident in pending(store, now_ms())
+    assert await recover_one(store, settings, ident, History([records]), dict(requests=0), 1) == "VERIFIED"
+    row = fs.dataset(now_ms(), source="binance", schema_version=SCHEMA_VERSION)[0]
+    assert row["label"]["certificate"]["local_predecision_eligible"] is False
+    assert row["label"]["certificate"]["feature_snapshot_reconstructed"] is False
+    validate_recovered(row)
+    assert row["values"] == snapshot["values"] and row["feature_metadata"] == snapshot["feature_metadata"]
+    assert store.db.execute("SELECT payload FROM ml_snapshots WHERE id=?", (ident,)).fetchone()[0] == original
+    assert read_dataset(fs.write_dataset([row]))[0]["id"] == ident
+    store.close()

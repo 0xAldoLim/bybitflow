@@ -95,7 +95,10 @@ allowlist. It requires an acknowledged subscription and at least one fresh valid
 the existing continuity contract has no such duration. Publication lag can make
 a decision diagnostically ineligible. That does not suppress its trading setup or
 its internal monitoring. Ineligible decisions are not counted as later recorder
-failures. Old snapshot payloads are not modified; their eligibility is derived
+failures. This diagnostic is not an admission gate for certified historical
+trade recovery: an original-venue sequence can independently prove a complete
+primary outcome while preserving the original failed diagnostic and frozen
+features. Old snapshot payloads are not modified; their eligibility is derived
 only when historical evidence can establish it.
 
 New recorder envelopes retain `observed_receipt_ms` when a proven one-millisecond

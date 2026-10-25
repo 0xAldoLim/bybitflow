@@ -60,7 +60,11 @@ def validate_recovered(row):
 
 
 def pending(store, asof, limit=3):
-    """One current-schema opportunity per identity, using bounded scalar pages."""
+    """One frozen opportunity per identity; outcome proof is independent of a local diagnostic.
+
+    A missed local subscription acknowledgement cannot preclude certified replay
+    from original-venue trades. Features stay frozen; certificate checks stay intact.
+    """
     seen, candidates, cursor = set(), [], None
     while True:
         page = " AND (s.decision_ms,s.id)>(?,?)" if cursor else ""
@@ -89,14 +93,13 @@ def pending(store, asof, limit=3):
             state = json.loads(raw) if raw else {}
             if (
                 source != "binance"
-                or eligible != 1
                 or kind != "incomplete"
                 or recovered
                 or state.get("status") == "NO_FILL"
                 or state.get("retry_after_ms", 0) > asof
             ):
                 continue
-            candidates.append((not bool(quantity), state.get("last_attempt_ms", 0), -decision, ident))
+            candidates.append((state.get("last_attempt_ms", 0), not bool(quantity), -decision, ident))
         if len(rows) < 500:
             break
     return [r[-1] for r in sorted(candidates)[:limit]]
@@ -191,7 +194,6 @@ async def recover_one(store, settings, ident, provider, metrics, page_budget=12,
     if (
         snapshot["schema_version"] != SCHEMA_VERSION
         or snapshot["source"] != "binance"
-        or not snapshot.get("primary_ml_eligibility", {}).get("eligible")
         or original.get("classification") != "incomplete"
     ):
         return "INELIGIBLE"
@@ -281,6 +283,8 @@ async def recover_one(store, settings, ident, provider, metrics, page_budget=12,
                 source="binance",
                 snapshot_id=ident,
                 simulation=SIMULATION,
+                local_predecision_eligible=snapshot.get("primary_ml_eligibility", {}).get("eligible"),
+                feature_snapshot_reconstructed=False,
                 original_label_sha256=digest(original),
                 first_id=state["first_id"],
                 last_id=state["last_id"],

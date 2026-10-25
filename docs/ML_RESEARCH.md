@@ -80,6 +80,11 @@ recovery time. The effective primary dataset uses that certified result only
 when the original `prints-v1` label is incomplete; existing complete labels
 always take precedence. Training validates the certificate and records label
 provenance. The primary outcome target and all admission thresholds are unchanged.
+A failed local pre-decision coverage diagnostic does not prevent this certified
+recovery: the historical sequence must independently prove the same outcome.
+The certificate retains that diagnostic and explicitly records that the original
+feature snapshot was not reconstructed. Recovery never invents missing order flow
+or replaces decision-time features with later observations.
 
 The first implementation supports Binance aggregate trades, matching the live
 `aggTrade` stream. Recent paths use REST; older paths use SHA-256 checked official
@@ -118,6 +123,15 @@ Both are hypothetical fills, not verified account executions. A partial entry
 candle with an exit touch, or a candle touching both stop and TP1, is ambiguous
 and excluded. Missing public history or a still-open path is retried rather
 than permanently labeled incomplete. Unfilled setups are excluded, not losses.
+
+Recovery keeps durable per-setup attempt times and bounded retry delays across
+restarts. Unattempted work proceeds before previously retried paths, so an old
+unavailable interval cannot monopolize every batch. Invalid immutable plans are
+recorded as explicit `INVALID_FROZEN_PLAN` exclusions without requesting history.
+For long outages, completed eight-hour candle chunks are cached individually;
+interrupted recovery resumes from those chunks. Optional work has a 45-second
+batch budget and yields to recorder pressure. These scheduling limits do not
+shorten a setup's frozen holding period or relax outcome evidence requirements.
 
 The trainer refreshes monitored recovery and readiness every 15 minutes, subject
 to the existing disk budget and bounded REST/cache limits. Labels retain candle

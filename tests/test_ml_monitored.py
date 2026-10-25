@@ -3,6 +3,7 @@ from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+import httpx
 import pytest
 
 from bybit_flow.lifecycle import advance_trades
@@ -141,7 +142,8 @@ async def test_restart_retries_gap_then_trains_on_recovered_loss_and_keeps_print
     FeatureStore(store).label(
         ident, dict(policy="prints-v1", complete=False, classification="incomplete", net_r=None), 140_000
     )
-    monkeypatch.setattr("bybit_flow.ml.monitored.now_ms", lambda: 300_000)
+    clock = [300_000]
+    monkeypatch.setattr("bybit_flow.ml.monitored.now_ms", lambda: clock[0])
     market = SimpleNamespace(name="binance")
     calls = []
 
@@ -156,11 +158,14 @@ async def test_restart_retries_gap_then_trains_on_recovered_loss_and_keeps_print
     assert not store.db.execute("SELECT 1 FROM ml_labels WHERE policy=?", (POLICY,)).fetchone()
     store.close()
     store = Store(settings.data_dir)
+    assert (await backfill(store, settings, "binance", market=market))["complete"] == 0
+    assert len(calls) == 1  # Restarting the worker cannot reset the durable retry cooldown.
+    clock[0] = 600_001
     assert (await backfill(store, settings, "binance", market=market))["complete"] == 1
-    rows = dataset(store, "binance", 300_000)
+    rows = dataset(store, "binance", clock[0])
     assert len(rows) == 1 and rows[0]["id"] == ident
     assert rows[0]["label"]["classification"] == "loss"
-    assert rows[0]["label_available_ms"] == 300_000
+    assert rows[0]["label_available_ms"] == 600_001
     path = FeatureStore(store).write_dataset(rows)
     assert read_dataset(path, track="monitored")[0]["id"] == ident
     with pytest.raises(ValueError, match="label policies"):
@@ -170,7 +175,7 @@ async def test_restart_retries_gap_then_trains_on_recovered_loss_and_keeps_print
         json.loads(store.db.execute("SELECT payload FROM signals WHERE id=?", (s.id,)).fetchone()[0])
         == original_plan
     )
-    assert not pending(store, "binance", 300_000)
+    assert not pending(store, "binance", clock[0])
     assert (await backfill(store, settings, "binance", market=market))["complete"] == 0
     assert len(calls) == 2
     store.close()
@@ -268,4 +273,108 @@ def test_monitored_priority_and_promotion_barrier(settings, signal):
             (primary["id"], 90_000, canonical(primary), digest(primary)),
         )
     assert select_compatible(registry, signal, row, 120_000)[0]["id"] == primary["id"]
+    store.close()
+
+
+def queued(store, signal, name, *, invalid=False, horizon="SWING"):
+    s = plan(signal, horizon)
+    s.id, s.symbol = name, name.upper() + "USDT"
+    if invalid:
+        s.zone = (110, 112)  # An invalid frozen plan cannot become an invented trade.
+    ident = FeatureStore(store).capture(s, 121_000, "decision")
+    if not invalid:
+        touch(s)
+    s.state = "INVALIDATED"
+    s.evidence.update(primary_outcome="STOP", terminal_event=dict(effective_ms=240_000))
+    store.signal(s)
+    return ident, s
+
+
+async def test_invalid_old_batch_no_longer_starves_newer_interrupted_swing(settings, signal, monkeypatch):
+    store = Store(settings.data_dir)
+    first, _ = queued(store, signal, "badone", invalid=True)
+    second, _ = queued(store, signal, "badtwo", invalid=True)
+    good, s = queued(store, signal, "goodswing")
+    original = store.db.execute("SELECT payload FROM ml_snapshots WHERE id=?", (good,)).fetchone()[0]
+    monkeypatch.setattr("bybit_flow.ml.monitored.now_ms", lambda: 300_000)
+    calls = []
+
+    async def history(self, market, symbol, start, end, state, **kwargs):
+        calls.append(symbol)
+        return [bar(120_000), bar(180_000, low=94)]
+
+    monkeypatch.setattr("bybit_flow.ml.monitored.CandleCache.get", history)
+    market = SimpleNamespace(name="binance")
+    # Process all three to prove invalid inputs do not consume REST or block a good long setup.
+    result = await backfill(store, settings, "binance", limit=3, market=market)
+    assert result["excluded"] == 2 and result["complete"] == 1
+    assert calls == [s.symbol]
+    assert len(dataset(store, "binance", 300_000)) == 1
+    assert store.db.execute("SELECT payload FROM ml_snapshots WHERE id=?", (good,)).fetchone()[0] == original
+    assert not pending(store, "binance", 300_000)
+    for ident in (first, second):
+        label = json.loads(
+            store.db.execute(
+                "SELECT payload FROM ml_labels WHERE snapshot_id=? AND policy=?", (ident, POLICY)
+            ).fetchone()[0]
+        )
+        assert not label["complete"] and label["outcome"] == "INVALID_FROZEN_PLAN"
+    store.close()
+
+
+async def test_unavailable_old_history_yields_to_other_horizons_and_retries_after_restart(
+    settings, signal, monkeypatch
+):
+    store = Store(settings.data_dir)
+    old, old_signal = queued(store, signal, "missing", horizon="SWING")
+    new, new_signal = queued(store, signal, "fresh", horizon="SHORT_INTRADAY")
+    clock = [300_000]
+    monkeypatch.setattr("bybit_flow.ml.monitored.now_ms", lambda: clock[0])
+    # Make one old row due first without mutating its immutable feature payload.
+    from bybit_flow.ml.monitored import save_attempt
+
+    save_attempt(
+        store, {"id": new, "source": "binance", "signal": new_signal.model_dump()}, "PENDING", retry=False
+    )
+    calls = []
+
+    async def history(self, market, symbol, start, end, state, **kwargs):
+        calls.append(symbol)
+        return [] if symbol == old_signal.symbol else [bar(120_000), bar(180_000, low=94)]
+
+    monkeypatch.setattr("bybit_flow.ml.monitored.CandleCache.get", history)
+    market = SimpleNamespace(name="binance")
+    assert (await backfill(store, settings, "binance", limit=1, market=market))["pending"] == 1
+    store.close()
+    store = Store(settings.data_dir)
+    assert (await backfill(store, settings, "binance", limit=1, market=market))["complete"] == 1
+    assert calls == [old_signal.symbol, new_signal.symbol]
+    assert not pending(store, "binance", clock[0])
+    clock[0] += 300_001
+    assert [r["id"] for r in pending(store, "binance", clock[0])] == [old]
+    store.close()
+
+
+async def test_long_history_resumes_cached_chunks_instead_of_redownloading(settings, monkeypatch):
+    from bybit_flow.ml.monitored import path_history
+
+    store = Store(settings.data_dir)
+    cache = CandleCache(store, POLICY)
+    calls, fail = [], [True]
+    monkeypatch.setattr("bybit_flow.ml.bootstrap.asyncio.sleep", AsyncMock())
+
+    async def candles(symbol, timeframe, end, *, limit, start):
+        calls.append(start)
+        if start == 480 * 60_000 and fail[0]:
+            raise httpx.ReadTimeout("fixture")
+        return [bar(t) for t in range(start, end, 60_000)]
+
+    market = SimpleNamespace(name="binance", candles=candles)
+    state = dict(requests=0, cache_hits=0, cached_ranges=0)
+    with pytest.raises(httpx.ReadTimeout):
+        await path_history(cache, market, "TESTUSDT", 0, 961 * 60_000, state)
+    fail[0] = False
+    result = await path_history(cache, market, "TESTUSDT", 0, 961 * 60_000, state)
+    assert len(result) == 961 and calls.count(0) == 1
+    assert state["cache_hits"] == 1
     store.close()

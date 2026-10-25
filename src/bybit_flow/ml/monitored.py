@@ -4,8 +4,10 @@ Full current decision features are retained. Price touches imply hypothetical
 fills, never account executions. Prints labels and setup lifecycles stay intact.
 """
 
+import asyncio
 import json
 import math
+import time
 
 import httpx
 
@@ -138,7 +140,7 @@ def research_path(row, outcome, bars, asof):
 
 
 def pending(store, source, asof_ms, limit=100):
-    """Mature or terminal current decisions; canonical identities are sampled once."""
+    """Fair durable retries; a broken old path cannot starve later horizons."""
     first = {}
     for ident, identity in store.db.execute(
         "SELECT s.id,coalesce(c.candidate_identity,s.signal_id) FROM ml_snapshots s "
@@ -147,12 +149,21 @@ def pending(store, source, asof_ms, limit=100):
     ).fetchall():
         first.setdefault(identity, ident)
     canonical = set(first.values())
-    result, cursor = [], None
-    while len(result) < limit:
+    delivered = {
+        r[0]
+        for r in store.db.execute(
+            "SELECT signal_id FROM outbox WHERE key LIKE '%:initial' AND status='sent'"
+        ).fetchall()
+    }
+    candidates, cursor = [], None
+    while True:
         page = " AND (s.decision_ms,s.id)>(?,?)" if cursor else ""
+        # Sort only compact scalars in Python, never full feature payloads in SQLite.
         rows = store.db.execute(
-            "SELECT s.id,s.payload,p.payload,s.decision_ms FROM ml_snapshots s "
-            "JOIN signals p ON p.id=s.signal_id WHERE s.stage='decision' AND s.schema_version IN ('candidate-v10',?) "
+            "SELECT s.id,s.decision_ms,k.payload,s.signal_id FROM ml_snapshots s "
+            "JOIN signals p ON p.id=s.signal_id "
+            "LEFT JOIN kv k ON k.key='monitored_recovery_attempt:'||s.id "
+            "WHERE s.stage='decision' AND s.schema_version IN ('candidate-v10',?) "
             "AND json_extract(s.payload,'$.source')=? AND s.decision_ms<? "
             "AND ((p.state IN ('INVALIDATED','EXPIRED','RESOLVED') AND "
             "json_extract(p.payload,'$.evidence.primary_outcome') IN ('STOP','TARGET','UNCLEAR')) OR "
@@ -161,20 +172,64 @@ def pending(store, source, asof_ms, limit=100):
             "coalesce(json_extract(s.payload,'$.signal.expected_hold_max'),240)*60000)<=?) "
             "AND NOT EXISTS(SELECT 1 FROM ml_labels l WHERE l.snapshot_id=s.id AND l.policy=?)"
             + page
-            + " ORDER BY s.decision_ms,s.id LIMIT 100",
+            + " ORDER BY s.decision_ms,s.id LIMIT 500",
             [SCHEMA_VERSION, source, asof_ms, asof_ms, POLICY] + (list(cursor) if cursor else []),
         ).fetchall()
         if not rows:
             break
-        for ident, payload, current, decision in rows:
+        for ident, decision, raw, signal_id in rows:
             cursor = (decision, ident)
             if ident not in canonical:
                 continue
-            result.append(dict(id=ident, **json.loads(payload), current=json.loads(current)))
-            if len(result) == limit:
-                break
-        if len(rows) < 100:
+            attempt = json.loads(raw) if raw else {}
+            if attempt.get("retry_after_ms", 0) > asof_ms:
+                continue
+            candidates.append(
+                (attempt.get("last_attempt_ms", 0), signal_id not in delivered, decision, ident)
+            )
+        if len(rows) < 500:
             break
+    result = []
+    for *_, ident in sorted(candidates)[:limit]:
+        row = store.db.execute(
+            "SELECT s.payload,p.payload FROM ml_snapshots s JOIN signals p ON p.id=s.signal_id WHERE s.id=?",
+            (ident,),
+        ).fetchone()
+        result.append(dict(id=ident, **json.loads(row[0]), current=json.loads(row[1])))
+    return result
+
+
+def save_attempt(store, row, status, reason=None, *, retry=True):
+    now = now_ms()
+    key = "monitored_recovery_attempt:" + row["id"]
+    previous = store.get(key, {})
+    attempts = previous.get("attempts", 0) + 1
+    store.put(
+        key,
+        dict(
+            source=row["source"],
+            horizon=row["signal"].get("horizon_profile"),
+            status=status,
+            reason=reason,
+            last_attempt_ms=now,
+            attempts=attempts,
+            retry_after_ms=now + min(3_600_000, 300_000 * 2 ** min(attempts - 1, 4)) if retry else 0,
+        ),
+    )
+
+
+async def path_history(cache, market, symbol, start, end, state):
+    """Cache completed chunks so a long offline path resumes after a work deadline."""
+    result = []
+    for cursor in range(start, end, 480 * MINUTE):
+        from .cli import prioritize_live_recording
+
+        prioritize_live_recording(cache.store)
+        stop = min(end, cursor + 480 * MINUTE)
+        bars = await cache.get(market, symbol, cursor, stop, state, require_complete=True)
+        result.extend(bars)
+        if len(bars) != (stop - cursor) // MINUTE:
+            break  # Missing history remains explicit; never bridge an unknown interval.
     return result
 
 
@@ -219,10 +274,22 @@ async def _backfill(store, settings, source, limit, market):
     try:
         if market.name != source:
             raise ValueError("Recovery market does not match frozen venue")
+        budget_end = time.monotonic() + 45
         for row in rows:
+            if time.monotonic() >= budget_end:
+                state.update(status="DEFERRED_BUDGET")
+                break
             if directory_bytes(store.root) >= settings.max_storage_gb * 1e9 * 0.95:
                 state.update(status="STORAGE_BACKPRESSURE")
                 break
+            # Immutable invalid plans are explicit exclusions, not endless history retries.
+            initial = evaluate(row, row["current"], [], source, asof, now_ms())
+            if initial["reason"] == "Frozen plan or cost assumptions unavailable":
+                initial.update(outcome="INVALID_FROZEN_PLAN", recovery_status="UNRECOVERABLE_FROZEN_INPUTS")
+                FeatureStore(store).label(row["id"], initial, max(asof, now_ms()))
+                save_attempt(store, row, "EXCLUDED", initial["reason"], retry=False)
+                state["excluded"] += 1
+                continue
             entry = observed_entry(row, row["current"])
             start = (entry["at_ms"] if entry else row["decision_ms"]) // MINUTE * MINUTE
             end = min(asof, deadline(row)) // MINUTE * MINUTE
@@ -234,16 +301,31 @@ async def _backfill(store, settings, source, limit, market):
             ):
                 end = min(end, (terminal + MINUTE - 1) // MINUTE * MINUTE)
             if end <= start:
+                save_attempt(store, row, "PENDING", "No closed historical candle yet")
                 state["pending"] += 1
                 continue
-            bars = await cache.get(market, row["signal"]["symbol"], start, end, state, require_complete=True)
-            outcome = evaluate(row, row["current"], bars, source, asof, now_ms())
+            try:
+                async with asyncio.timeout(max(0.001, budget_end - time.monotonic())):
+                    bars = await path_history(cache, market, row["signal"]["symbol"], start, end, state)
+                outcome = evaluate(row, row["current"], bars, source, asof, now_ms())
+            except (ValueError, PermissionError, RuntimeError, httpx.HTTPError, TimeoutError) as exc:
+                from .cli import LiveRecordingPressure
+
+                if isinstance(exc, LiveRecordingPressure):
+                    raise
+                save_attempt(store, row, "DEFERRED", type(exc).__name__)
+                state["pending"] += 1
+                state["last_error_type"] = type(exc).__name__
+                continue
             if outcome["outcome"] == "INCOMPLETE":
-                # Public history outages and active paths are retried, not frozen.
+                save_attempt(store, row, "PENDING", outcome["reason"])
                 state["pending"] += 1
                 continue
             available = max(outcome["event_available_ms"], outcome["materialized_ms"])
             FeatureStore(store).label(row["id"], outcome, available)
+            save_attempt(
+                store, row, "COMPLETE" if outcome["complete"] else "EXCLUDED", outcome["reason"], retry=False
+            )
             state["complete" if outcome["complete"] else "excluded"] += 1
             state["last_snapshot_id"] = row["id"]
             store.put(key, state)
