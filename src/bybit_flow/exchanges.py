@@ -9,7 +9,6 @@ All quantities handed to strategy/risk/Book are base units, including OKX contra
 import asyncio
 import json
 import math
-import re
 from decimal import Decimal as D
 from typing import Protocol
 
@@ -63,7 +62,10 @@ class PublicMarket(Protocol):
 
 
 def symbol_id(symbol, venue):
-    if not re.fullmatch(r"[A-Z0-9]{2,25}USDT", symbol):
+    base = symbol[:-4] if isinstance(symbol, str) and symbol.endswith("USDT") else ""
+    # Venue metadata includes single-letter and non-Latin bases. Preserve the
+    # exact identity while continuing to reject separators, controls and aliases.
+    if not 1 <= len(base) <= 25 or not base.isalnum() or base != base.upper():
         raise ValueError("Expected canonical USDT perpetual symbol")
     return symbol[:-4] + "-USDT-SWAP" if venue == "okx" else symbol
 

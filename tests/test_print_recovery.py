@@ -375,3 +375,15 @@ async def test_local_diagnostic_failure_does_not_preclude_verified_historical_ou
     assert store.db.execute("SELECT payload FROM ml_snapshots WHERE id=?", (ident,)).fetchone()[0] == original
     assert read_dataset(fs.write_dataset([row]))[0]["id"] == ident
     store.close()
+
+
+@pytest.mark.parametrize("symbol", ["SUSDT", "\u9f99\u867eUSDT"])
+async def test_valid_venue_symbols_can_recover_into_primary_dataset(settings, signal, symbol):
+    signal.symbol = symbol
+    store, fs, ident, snapshot, old, records = candidate(settings, signal)
+    assert await recover_one(store, settings, ident, History([records]), dict(requests=0), 1) == "VERIFIED"
+    row = fs.dataset(now_ms(), source="binance", schema_version=SCHEMA_VERSION)[0]
+    assert row["signal"]["symbol"] == symbol
+    assert row["label"]["classification"] == "loss"
+    validate_recovered(row)
+    store.close()

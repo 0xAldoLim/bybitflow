@@ -252,3 +252,25 @@ async def test_diagnostics_and_nontrade_discord(tmp_path):
         assert "SECRET" not in str(report) and report["checks"]["database"]["status"] == "OK"
     finally:
         store.close()
+
+
+@pytest.mark.parametrize("symbol", ["SUSDT", "WUSDT", "QUSDT", "\u9f99\u867eUSDT"])
+def test_metadata_symbols_keep_single_letter_and_non_latin_identity(symbol):
+    assert symbol_id(symbol, "binance") == symbol
+    assert symbol_id(symbol, "bybit") == symbol
+    assert symbol_id(symbol, "okx") == symbol[:-4] + "-USDT-SWAP"
+
+
+def test_symbol_validation_still_rejects_unsafe_or_noncanonical_aliases():
+    for symbol in (
+        "USDT",
+        "BTC/USDT",
+        "../BTCUSDT",
+        "BTC_USDT",
+        "sUSDT",
+        "SUSDT\n",
+        "A" * 26 + "USDT",
+        "\u9f99/\u867eUSDT",
+    ):
+        with pytest.raises(ValueError, match="canonical USDT perpetual"):
+            symbol_id(symbol, "binance")
