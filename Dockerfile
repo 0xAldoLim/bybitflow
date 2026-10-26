@@ -2,7 +2,7 @@ FROM python:3.12-slim AS base
 ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 FLOW_DATA_DIR=/app/data
 WORKDIR /app
 RUN useradd --uid 10001 --create-home researcher
-COPY requirements.lock ./
+COPY requirements*.lock ./
 RUN --mount=type=cache,target=/root/.cache/pip pip install --timeout 60 --retries 5 -r requirements.lock && mkdir /app/data && chown researcher:researcher /app/data
 RUN --mount=type=cache,target=/root/.cache/pip pip install --timeout 60 --retries 5 setuptools==78.1.0
 

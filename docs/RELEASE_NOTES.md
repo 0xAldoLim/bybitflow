@@ -1,5 +1,23 @@
 # Release notes
 
+## 2.2.1 — Reliability & Evidence Loop
+
+- Prospective, source/provenance-separated policy observations, fixed ablations,
+  guarded score/cohort reports and manual research review records.
+- Six scanner responsibility services with compatibility delegates and algorithm
+  equivalence checks; production policy formulas and lifecycle remain unchanged.
+- Ordered migration receipts, SQLite/loop pressure measurements, bounded local
+  time series, passive WAL checkpoint diagnostics and storage growth forecasts.
+- Background-only workload admission, common recovery status and a decision-first
+  dashboard with immutable plans separated from current health.
+- Deployment separated from ML maintenance; current-volume image rollback,
+  redacted provenance, isolated Docker backup/restore CI and security checks.
+
+Source release only; deployment is a separate operator action. No profitability,
+new trading authority, ML maturity reduction, signal quota or deletion policy is
+introduced. See [operating details](RELIABILITY_EVIDENCE_LOOP.md).
+
+
 Implementation notes by release. These describe source behavior,
 not the health or deployed version of any particular installation. Use
 `docker compose exec desk bybit-flow version` for version metadata and

@@ -51,61 +51,17 @@ class Store:
     def __init__(self, root: Path, migration_backup_dir: Path | None = None):
         self.root = root
         root.mkdir(parents=True, exist_ok=True)
-        self.db = sqlite3.connect(root / "research.sqlite", timeout=5)
+        from .db_runtime import MeasuredConnection
+
+        self._metadata = None
+        self._runtime = False
+        self.db = sqlite3.connect(root / "research.sqlite", timeout=5, factory=MeasuredConnection)
         self.db.row_factory = sqlite3.Row
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("PRAGMA foreign_keys=ON")
-        self.db.executescript("""
-        CREATE TABLE IF NOT EXISTS schema_version(version INTEGER PRIMARY KEY);
-        INSERT OR IGNORE INTO schema_version VALUES(1);
-        CREATE TABLE IF NOT EXISTS kv(key TEXT PRIMARY KEY, payload TEXT NOT NULL);
-        CREATE TABLE IF NOT EXISTS signals(id TEXT PRIMARY KEY, symbol TEXT, created_ms INTEGER,
-            state TEXT, payload TEXT NOT NULL);
-        CREATE TABLE IF NOT EXISTS transitions(id INTEGER PRIMARY KEY, signal_id TEXT,
-            at_ms INTEGER, state TEXT, reason TEXT);
-        CREATE TABLE IF NOT EXISTS universe(at_ms INTEGER, symbol TEXT, eligible INTEGER,
-            payload TEXT, PRIMARY KEY(at_ms,symbol));
-        CREATE TABLE IF NOT EXISTS facts(id INTEGER PRIMARY KEY, asset TEXT, known_ms INTEGER,
-            effective_ms INTEGER, expires_ms INTEGER, payload TEXT);
-        CREATE TABLE IF NOT EXISTS journal(id INTEGER PRIMARY KEY, at_ms INTEGER, payload TEXT);
-        CREATE TABLE IF NOT EXISTS experiments(id TEXT PRIMARY KEY, at_ms INTEGER, payload TEXT);
-        CREATE TABLE IF NOT EXISTS segments(id TEXT PRIMARY KEY, at_ms INTEGER, payload TEXT);
-        CREATE TABLE IF NOT EXISTS outbox(key TEXT PRIMARY KEY, signal_id TEXT, status TEXT,
-            payload TEXT, message_id TEXT, updated_ms INTEGER);
-        CREATE TABLE IF NOT EXISTS terminal_events(signal_id TEXT PRIMARY KEY, payload TEXT NOT NULL,
-            notification_status TEXT NOT NULL, attempts INTEGER DEFAULT 0, next_ms INTEGER DEFAULT 0);
-        CREATE TABLE IF NOT EXISTS tv_inbox(event_id TEXT PRIMARY KEY, digest TEXT NOT NULL,
-            received_ms INTEGER NOT NULL, payload TEXT NOT NULL, status TEXT NOT NULL,
-            result TEXT);
-        CREATE INDEX IF NOT EXISTS tv_pending ON tv_inbox(status,received_ms);
-        CREATE INDEX IF NOT EXISTS signals_recent ON signals(created_ms DESC);
-        CREATE INDEX IF NOT EXISTS signals_active_lifecycle
-          ON signals(CASE WHEN state='ALERTED' THEN 0 ELSE 1 END,created_ms DESC)
-          WHERE state NOT IN ('INVALIDATED','EXPIRED','RESOLVED');
-        INSERT OR IGNORE INTO schema_version VALUES(2);
-        """)
-        self.db.commit()
-        from .ml.store import migrate
+        from .migrations import apply
 
-        migrate(self.db)
-        from .observations import migrate as migrate_observations
-
-        migrate_observations(self)
-        from .packing import migrate as migrate_packing
-
-        migrate_packing(self)
-        from .identity import migrate as migrate_identity
-
-        migrate_identity(self, migration_backup_dir)
-        from .funnel import migrate as migrate_funnel
-
-        migrate_funnel(self)
-        from .path_research import migrate as migrate_paths
-
-        migrate_paths(self)
-        from .setup_research import migrate as migrate_setup_paths
-
-        migrate_setup_paths(self)
+        apply(self, migration_backup_dir)
         if self.get("horizon_counts") is None:
             counts = dict(
                 self.db.execute(
@@ -120,6 +76,12 @@ class Store:
                 raise ValueError("Product cutover epoch is immutable")
             return
         payload = json.dumps(value)
+        if getattr(self, "_metadata", None):
+            from .db_runtime import DIAGNOSTIC_KEYS
+
+            if key in DIAGNOSTIC_KEYS:
+                self._metadata.offer(key, payload)
+                return
         for attempt in range(4):
             try:
                 with self.db:
@@ -128,11 +90,17 @@ class Store:
             except sqlite3.OperationalError as exc:
                 if "locked" not in str(exc).lower() and "busy" not in str(exc).lower():
                     raise
-                if attempt == 3:
-                    raise
+                if attempt == 3 or getattr(self, "_runtime", False):
+                    raise  # A critical write is acknowledged or fails closed; no loop-blocking retries.
+                self.db.health.increment("sqlite_busy_retries")
                 time.sleep(0.05 * 2**attempt)
 
     def get(self, key, default=None):
+        writer = getattr(self, "_metadata", None)
+        if writer:
+            found, value = writer.read(key)
+            if found:
+                return value
         r = self.db.execute("SELECT payload FROM kv WHERE key=?", (key,)).fetchone()
         return json.loads(r[0]) if r else default
 
@@ -244,6 +212,14 @@ class Store:
             register_setup_paths(self, signal, now_ms())
             register_setup_paths(self, signal, now_ms(), stage="delivery")
         start(self, signal, now_ms())
+        # Shadow research cannot roll back an acknowledged production decision.
+        from .forward_evidence import register as register_forward
+
+        try:
+            with self.db:
+                register_forward(self, signal, now_ms())
+        except Exception:
+            self.db.health.increment("forward_enrollment_errors")
 
     def monitor(self, signal):
         """Persist only lightweight lifecycle progress, without scoring/ML jobs."""
@@ -340,7 +316,23 @@ class Store:
             source.execute("SELECT count(*) FROM sqlite_master").fetchone()
             source.backup(dest, pages=1000)
 
+    def enable_runtime(self):
+        from .db_runtime import MetadataWriter
+
+        if not self._runtime:
+            self.db.execute("PRAGMA busy_timeout=0")
+            self._runtime = True
+            self._metadata = MetadataWriter(self.root / "research.sqlite", self.db.health)
+
+    async def stop_runtime(self):
+        if getattr(self, "_metadata", None):
+            await asyncio.to_thread(self._metadata.close)
+            self._metadata = None
+
     def close(self):
+        if getattr(self, "_metadata", None):
+            self._metadata.close()
+            self._metadata = None
         self.db.close()
 
 

@@ -257,14 +257,14 @@ For a CI-gated Windows deployment, install PowerShell 7 and Git, then run the
 checked script from CMD in a clean `main` checkout with the desk already running:
 
 ```bat
-pwsh -NoProfile -File scripts\deploy_ml_bootstrap.ps1
+pwsh -NoProfile -File scripts\deploy.ps1
 ```
 
 It requires green GitHub CI for the exact `main` commit, preserves the data volume,
-records original active plans and delivery receipts, serializes bounded trainer
-work and saves a continuity audit under `data/deployment-audits`. It defers
-backfill if safe cleanup cannot bring storage below 95%. The script has no volume
-deletion or model-promotion step.
+records original active plans and delivery receipts, and saves a continuity audit
+under `data/deployment-audits`. Deployment does not run ML backfills or manual
+training. Use the separate [maintenance and recovery workflows](DEPLOYMENT.md).
+There is no volume deletion or model-promotion step.
 
 Manual research commands:
 

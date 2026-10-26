@@ -75,7 +75,7 @@ async def test_source_recovery_waiting_for_scan_does_not_stop_health_heartbeat(m
         clock = [1000, 122_000, 153_000][ticks - 1]
 
     monkeypatch.setattr("bybit_flow.scanner.asyncio.sleep", sleep)
-    monkeypatch.setattr("bybit_flow.scanner.now_ms", lambda: clock)
+    monkeypatch.setattr("bybit_flow.scanner_market_data.now_ms", lambda: clock)
     monkeypatch.setattr(
         "bybit_flow.feed_health.persistent_health",
         lambda *args: {"active_lifecycle_stream_health": {"fresh": 0, "total": 0}},

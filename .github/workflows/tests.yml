@@ -21,3 +21,12 @@ jobs:
       - run: pytest -q
       - run: python examples/offline_research.py
       - run: python examples/recorder_soak.py --seconds 20 --rate 500 --data-dir /tmp/bybitflow-recorder-smoke
+  container-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python examples/compose_smoke.py

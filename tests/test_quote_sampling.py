@@ -57,7 +57,7 @@ async def test_funding_latency_does_not_age_new_quotes_or_refresh_stale_ones(
 async def test_quote_cadence_includes_request_time_and_never_replays_missed_samples(
     monkeypatch, duration, fail_first
 ):
-    import bybit_flow.scanner as module
+    import bybit_flow.scanner_market_data as module
 
     clock, starts, sleeps, observed = 0, [], [], []
 
@@ -79,7 +79,11 @@ async def test_quote_cadence_includes_request_time_and_never_replays_missed_samp
     monkeypatch.setattr(
         module,
         "asyncio",
-        SimpleNamespace(get_running_loop=lambda: SimpleNamespace(time=lambda: clock), sleep=sleep),
+        SimpleNamespace(
+            get_running_loop=lambda: SimpleNamespace(time=lambda: clock),
+            sleep=sleep,
+            Semaphore=asyncio.Semaphore,
+        ),
     )
     monkeypatch.setattr(module, "now_ms", lambda: clock * 1000)
     scanner = SimpleNamespace(

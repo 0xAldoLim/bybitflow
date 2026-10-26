@@ -113,7 +113,9 @@ async def test_generation_schedules_only_new_plans_and_never_rearms_saved_plans(
     trigger, _, execution = stressed_setup(signal, "LONG")
     signal.evidence["initial_executable_quote"] = dict(available_ms=signal.created_ms, executable_price=100)
     base = signal.model_copy(deep=True)
-    monkeypatch.setattr("bybit_flow.scanner.candidates", lambda *args, **kwargs: [base.model_copy(deep=True)])
+    monkeypatch.setattr(
+        "bybit_flow.scanner_discovery.candidates", lambda *args, **kwargs: [base.model_copy(deep=True)]
+    )
     setup_bars = [Candle(0, trigger, 99, 103, 98, 101, 10, 1000)]
 
     async def cached(symbol, timeframe, now, limit):

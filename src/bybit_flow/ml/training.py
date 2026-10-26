@@ -90,10 +90,32 @@ def read_dataset(path, max_rows=10_000, track="primary"):
 
 
 def train(store, path, kinds=("logistic", "lightgbm"), calibration="sigmoid", track="primary"):
+    from time import monotonic
+
+    from ..operational import Priority
+    from ..storage import now_ms
+    from .cli import prioritize_live_recording
     from .locking import exclusive
 
-    with exclusive(store.root / "ml-fit.lock"):
-        return _train(store, path, kinds, calibration, track)
+    prioritize_live_recording(store, Priority.TRAINING_BOOTSTRAP)
+    start = monotonic()
+    telemetry = store.get("training_telemetry", {})
+    telemetry.update(at_ms=now_ms(), attempts=telemetry.get("attempts", 0) + 1, status="RUNNING")
+    store.put("training_telemetry", telemetry)
+    try:
+        with exclusive(store.root / "ml-fit.lock"):
+            result = _train(store, path, kinds, calibration, track)
+        telemetry["status"] = "COMPLETE"
+        return result
+    except Exception:
+        telemetry["status"] = "FAILED_OR_ABSTAINED"
+        raise
+    finally:
+        telemetry.update(at_ms=now_ms(), duration_ms=(monotonic() - start) * 1000)
+        try:
+            store.put("training_telemetry", telemetry)
+        except Exception:
+            pass  # Diagnostic failure cannot replace a training error/result.
 
 
 def _train(store, path, kinds, calibration, track):

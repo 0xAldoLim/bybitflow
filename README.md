@@ -22,6 +22,12 @@ and model rankings are research measures, not validated win probabilities.
 [Get started](#first-time-setup) | [Start and stop](#start-stop-and-check-status) |
 [Troubleshooting](#troubleshooting) | [Release notes](docs/RELEASE_NOTES.md)
 
+Version **2.2.1 — Reliability & Evidence Loop** adds prospective shadow-policy
+reports, ordered migrations, bounded operational telemetry, storage growth
+forecasts and separate deployment/maintenance workflows. It preserves the v2.2
+trading rules. See [architecture and evaluation](docs/RELIABILITY_EVIDENCE_LOOP.md)
+and [deployment/rollback](docs/DEPLOYMENT.md).
+
 ## Features
 
 - Public REST and WebSocket adapters with automatic primary-venue selection
@@ -186,6 +192,7 @@ in CMD, PowerShell and Linux/macOS shells.
 | Check version and deployment metadata | `docker compose exec desk bybit-flow version` |
 | Check feeds, recording and diagnostics | `docker compose exec desk bybit-flow doctor` |
 | Inspect signal qualification and delivery | `docker compose exec desk bybit-flow signals status` |
+| Inspect prospective policy observations | `docker compose exec desk bybit-flow forward-report` |
 | Inspect ML readiness and worker status | `docker compose exec trainer bybit-flow ml status` |
 | Inspect storage and retention | `docker compose exec desk bybit-flow storage status` |
 

@@ -319,7 +319,7 @@ async def test_scanner_retries_then_alerts_without_ml_champion(
     bars = swing_bars()
     end = bars[-1].end
     now = end + 1000
-    monkeypatch.setattr("bybit_flow.scanner.now_ms", lambda: now)
+    monkeypatch.setattr("bybit_flow.scanner_confirmation.now_ms", lambda: now)
     monkeypatch.setattr("bybit_flow.scanner.SpreadHistory.assess", lambda *args: dict(reasons=[]))
     signal.family = "range_rejection"
     signal.feature_schema_version = schema
@@ -409,7 +409,7 @@ async def test_scanner_retries_then_alerts_without_ml_champion(
     if reset_during_compute:
         import asyncio
 
-        from bybit_flow.scanner import footprint
+        from bybit_flow.scanner_confirmation import footprint
 
         original_to_thread = asyncio.to_thread
 

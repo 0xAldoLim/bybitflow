@@ -17,13 +17,21 @@ async def test_stale_other_symbol_does_not_block_confirmation_evidence(
     now, end = 1_801_000, 1_800_000
     monkeypatch.setattr("bybit_flow.scanner.now_ms", lambda: now)
     monkeypatch.setattr("bybit_flow.native_streams.now_ms", lambda: now)
-    monkeypatch.setattr("bybit_flow.scanner.candle_features", lambda *args: {"atr": 1})
+    monkeypatch.setattr("bybit_flow.scanner_market_data.candle_features", lambda *args: {"atr": 1})
     flow = {"available": False}
     calculate_flow = Mock(return_value=flow)
-    monkeypatch.setattr("bybit_flow.scanner.footprint", calculate_flow)
-    monkeypatch.setattr("bybit_flow.scanner.evaluate_risk", lambda *args: {"reasons": [], "accepted": False})
-    monkeypatch.setattr("bybit_flow.scanner.score", lambda *args, **kwargs: None)
+    monkeypatch.setattr("bybit_flow.scanner_confirmation.footprint", calculate_flow)
+    monkeypatch.setattr(
+        "bybit_flow.scanner_confirmation.evaluate_risk", lambda *args: {"reasons": [], "accepted": False}
+    )
+    monkeypatch.setattr("bybit_flow.scanner_confirmation.score", lambda *args, **kwargs: None)
     monkeypatch.setattr("bybit_flow.ml.inference.apply", lambda *args: None)
+    monkeypatch.setattr(
+        "bybit_flow.scanner_confirmation.now_ms", __import__("bybit_flow.scanner", fromlist=["now_ms"]).now_ms
+    )
+    monkeypatch.setattr(
+        "bybit_flow.scanner_discovery.now_ms", __import__("bybit_flow.scanner", fromlist=["now_ms"]).now_ms
+    )
     store = Store(settings.data_dir)
     signal.source = "binance"
     signal.expires_ms = now + 900_000
@@ -94,7 +102,9 @@ async def test_stale_other_symbol_does_not_block_confirmation_evidence(
         tape.last_event = tape.last_receipt = now
         scanner.context[signal.symbol].update(asof=now, h4=[])
         scanner.notifier = SimpleNamespace(send_research=AsyncMock())
-        monkeypatch.setattr("bybit_flow.scanner.candle_features", lambda *args: {"regime": "range"})
+        monkeypatch.setattr(
+            "bybit_flow.scanner_market_data.candle_features", lambda *args: {"regime": "range"}
+        )
         monkeypatch.setattr("bybit_flow.scanner.SpreadHistory.assess", lambda *args: {"eligible": True})
         await scanner.evaluate()
         scanner.notifier.send_research.assert_not_called()
@@ -105,6 +115,12 @@ async def test_stale_other_symbol_does_not_block_confirmation_evidence(
 async def test_elapsed_fast_window_expires_instead_of_remaining_pending(settings, signal, monkeypatch):
     now = 2_000_000
     monkeypatch.setattr("bybit_flow.scanner.now_ms", lambda: now)
+    monkeypatch.setattr(
+        "bybit_flow.scanner_confirmation.now_ms", __import__("bybit_flow.scanner", fromlist=["now_ms"]).now_ms
+    )
+    monkeypatch.setattr(
+        "bybit_flow.scanner_discovery.now_ms", __import__("bybit_flow.scanner", fromlist=["now_ms"]).now_ms
+    )
     store = Store(settings.data_dir)
     signal.source = "binance"
     signal.state = "PENDING CONFIRMATION"

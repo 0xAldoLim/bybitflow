@@ -70,7 +70,7 @@ async def test_one_stale_symbol_does_not_reset_other_native_feeds(monkeypatch):
             raise asyncio.CancelledError
 
     monkeypatch.setattr("bybit_flow.scanner.asyncio.sleep", sleep)
-    monkeypatch.setattr("bybit_flow.scanner.now_ms", lambda: calls * 180_000)
+    monkeypatch.setattr("bybit_flow.scanner_market_data.now_ms", lambda: calls * 180_000)
     with pytest.raises(asyncio.CancelledError):
         await scanner.source_watchdog()
     streams.select.assert_not_awaited()

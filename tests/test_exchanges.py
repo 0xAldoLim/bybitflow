@@ -106,7 +106,7 @@ async def test_auto_source_selection_records_transition_and_resets(settings, mon
     async def probe(name, settings):
         return {"exchange": name, "status": "HEALTHY" if name == "binance" else "UNAVAILABLE"}
 
-    monkeypatch.setattr(module, "market_probe", probe)
+    monkeypatch.setattr("bybit_flow.scanner_market_data.market_probe", probe)
     try:
         await scanner.select_source()
         assert scanner.exchange == "binance" and not scanner.context and scanner.source_ready

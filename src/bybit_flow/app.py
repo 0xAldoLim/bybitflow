@@ -63,20 +63,41 @@ def create_app(settings=None):
 
         store.put("tradingview_retirement", dict(at_ms=now_ms(), retired=retire_tradingview(store)))
         store.put("post_terminal_checkpoints", settings.post_terminal_checkpoints)
+        from .forward_evidence import initialize as initialize_forward
+        from .provenance import record as record_deployment
+
+        initialize_forward(store, now_ms())
+        record_deployment(store, settings, now_ms())
         recorder = Recorder(store, settings)
         scanner = Scanner(settings, store, recorder)
         app.state.store, app.state.recorder, app.state.scanner = store, recorder, scanner
+        store.enable_runtime()
         task = asyncio.create_task(recorder.run())
         scanner.start()
         yield
         await scanner.stop()
         recorder.running = False
         await task
+        await store.stop_runtime()
         store.close()
 
     app = FastAPI(
         title="Bybit Flow · Research", version=__version__, lifespan=lifespan, docs_url=None, redoc_url=None
     )
+
+    import sqlite3
+
+    @app.exception_handler(sqlite3.OperationalError)
+    async def database_busy(request, exc):
+        from .db_runtime import busy
+
+        if busy(exc):
+            return JSONResponse(
+                {"detail": "Database busy; write not acknowledged. Retry after contention clears."},
+                503,
+                headers={"Retry-After": "1"},
+            )
+        raise exc
 
     @app.middleware("http")
     async def access(request: Request, call_next):
@@ -246,6 +267,32 @@ def create_app(settings=None):
             status,
         )
 
+    @app.get("/api/forward")
+    async def forward_report():
+        from .forward_evidence import report
+
+        return await asyncio.to_thread(
+            read_report, settings.data_dir, lambda reader: report(reader, now_ms())
+        )
+
+    @app.get("/api/operations")
+    async def operations_report():
+        from .operational import samples
+        from .provenance import status
+        from .recovery_status import project
+
+        return await asyncio.to_thread(
+            read_report,
+            settings.data_dir,
+            lambda reader: dict(
+                provenance=status(reader, settings),
+                recovery=project(reader, now_ms()),
+                operations=reader.get("operational_health", {}),
+                time_series=samples(reader),
+                storage_growth=reader.get("storage_forecast", {}),
+            ),
+        )
+
     @app.get("/api/overview")
     async def overview(request: Request):
         from .operator_health import warnings
@@ -255,8 +302,19 @@ def create_app(settings=None):
         signals = await asyncio.to_thread(
             read_report, settings.data_dir, lambda reader: reader.signal_summaries()
         )
+        from .decision_view import current_quotes
+        from .decision_view import overview as decisions
+        from .decision_view import rows as decision_rows
+
+        active_rows = await asyncio.to_thread(read_report, settings.data_dir, decision_rows)
+        from .operational import warnings as operational_warnings
+
         return dict(
-            warnings=warnings(settings, store, scanner, rec, now_ms()),
+            decisions=decisions(active_rows, now_ms(), current_quotes(scanner, active_rows, now_ms())),
+            operator_priorities=operational_warnings(store, now_ms()),
+            storage_growth=store.get("storage_forecast", {}),
+            warnings=warnings(settings, store, scanner, rec, now_ms())
+            + operational_warnings(store, now_ms()),
             scanner=scanner.status,
             exchange=scanner.exchange,
             watchlist=store.get("watchlist", []),

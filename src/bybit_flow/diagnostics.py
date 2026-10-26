@@ -149,6 +149,15 @@ async def doctor(settings, store, network=True):
     else:
         for name in names:
             checks[name] = store.get("probe:" + name, {"status": "NOT_TESTED"})
+    from .operational import warnings as operational_warnings
+    from .provenance import status as provenance_status
+    from .recovery_status import project
+
+    checks["deployment"] = provenance_status(store, settings)
+    checks["operational_warnings"] = operational_warnings(store, now_ms())
+    checks["operations"] = store.get("operational_health", {})
+    checks["storage_forecast"] = store.get("storage_forecast", {"status": "UNKNOWN"})
+    checks["recovery_jobs"] = project(store, now_ms())
     checks["scanner"] = store.get("scanner", {"state": "NOT_OBSERVED"})
     from .v8_gating import status as v8_status
 
@@ -258,7 +267,9 @@ async def doctor(settings, store, network=True):
     from .ml.operations import status as ml_status
 
     checks["ml"] = ml_status(store, summary, settings.ml_enabled)
-    warnings = []
+    warnings = [
+        row["code"] + ": " + row["message"] + " " + row["action"] for row in checks["operational_warnings"]
+    ]
     if not settings.scan_enabled:
         warnings.append("Scanner disabled: FLOW_SCAN_ENABLED=false")
     if not checks["market_stream"]["connected"]:

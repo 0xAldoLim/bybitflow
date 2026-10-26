@@ -136,7 +136,7 @@ async def test_quote_failure_retries_then_rebuilds_only_real_samples(settings, m
             raise asyncio.CancelledError
 
     monkeypatch.setattr("bybit_flow.scanner.asyncio.sleep", sleep)
-    monkeypatch.setattr("bybit_flow.scanner.now_ms", lambda: clock)
+    monkeypatch.setattr("bybit_flow.scanner_market_data.now_ms", lambda: clock)
     try:
         with pytest.raises(asyncio.CancelledError):
             await scanner.quote_loop()
@@ -184,9 +184,9 @@ async def test_clock_network_failure_retries_quickly_without_retaining_false_dri
         else:
             raise asyncio.CancelledError
 
-    monkeypatch.setattr("bybit_flow.scanner.VenueAPI", API)
+    monkeypatch.setattr("bybit_flow.scanner_market_data.VenueAPI", API)
     monkeypatch.setattr("bybit_flow.scanner.asyncio.sleep", sleep)
-    monkeypatch.setattr("bybit_flow.scanner.now_ms", lambda: clock)
+    monkeypatch.setattr("bybit_flow.scanner_market_data.now_ms", lambda: clock)
     try:
         with pytest.raises(asyncio.CancelledError):
             await Scanner.clock_loop(scanner)

@@ -210,21 +210,25 @@ async function render() {
     $("#title").textContent = titles[page] || "Market overview";
     let body = "";
     if (page === "overview") {
-      const metrics = [
-        ["ELIGIBLE MARKETS", data.scanner.eligible || 0, "Dynamic liquidity-filtered universe"],
-        [
-          "ACTIVE SETUPS",
-          data.signals.filter((s) => !["EXPIRED", "INVALIDATED", "RESOLVED"].includes(s.state)).length,
-          "Independent experimental families",
-        ],
-        ["RECORDED EVENTS", number(data.health.records_written), "This collector process"],
-        ["RESEARCH GRADES", "SSS–F", "Quality score, 0–100"],
-      ];
-      body =
-        `<div class="metrics">${metrics.map((m) => `<div class="metric"><label>${m[0]}</label><b>${m[1]}</b><small>${m[2]}</small></div>`).join("")}</div>` +
-        panel("Priority watchlist", watchTable(data.watchlist.slice(0, 8)), "RESEARCH RANK ≠ PROBABILITY") +
-        panel("Recent setups", signalTable(data.signals.slice(0, 8)), "Shared feeds · multiple horizons") +
-        panel("Storage budget", `<p>${number(data.storage?.used_bytes / 1e9)} / ${number(data.storage?.budget_bytes / 1e9)} GB · ${escape(data.storage?.pressure || "Measuring")}</p>`);
+      const d = data.decisions || { opportunities: [], active: [], blocked: [] };
+      const f = await api("forward");
+      const critical = warnings.filter(w => w.severity === "error").length;
+      const notice = `${critical} critical · ${warnings.length - critical} warnings`;
+      body = panel("Operator priorities", `<p>${escape(notice)}</p><p>${warnings.length ? "Review the measured warnings above before relying on current alerts." : "No current operator warnings. UNKNOWN evidence remains unqualified."}</p>`) +
+        panel("Current valid opportunities", d.opportunities.length ? table(
+          ["Rank", "Market / horizon", "Setup", "Published score / E / T", "Net RR", "Reach / stop", "Impact / OFI", "Shared direction", "Entry deadline"],
+          d.opportunities.map(r => [number(r.rank, 0), `<a href="#signal/${encodeURIComponent(r.id)}">${escape(r.symbol)} ${escape(r.direction)}</a><br>${escape(r.horizon)}`, escape(r.family),
+            `${number(r.published_score)} / ${number(r.evidence_score)} / ${number(r.tradeability_score)}`, number(r.net_rr), `${escape(r.reachability)} / ${escape(r.stop_viability)}`,
+            `${escape(r.impact)} / ${escape(r.ofi)}`, `${number(r.shared_exposure, 0)} · same venue`, utc(r.entry_deadline)])) : empty("No currently valid entry", "See blocked setups and live data health below. No signal quota is applied."), "Informational rank · all valid setups") +
+        panel("Active plans and current health", d.active.length ? table(
+          ["Market", "Immutable entry / stop / targets", "Published score", "Current health", "Current price / R", "Monitoring / evidence"],
+          d.active.map(r => [escape(`${r.symbol} ${r.direction}`), Object.entries(r.original_plan).map(([k,v]) => `${escape(k)} ${number(v, 8)}`).join(" · "), number(r.published_score),
+            escape(r.current_health.state || "UNKNOWN"), `${number(r.current_price, 8)} / ${number(r.progress_r)}R`, `${escape(r.monitoring)} · ${escape(r.impact)} / ${escape(r.ofi)}`])) : empty("No active plans", "Setups appear after causal generation and confirmation."), "Current health never rewrites the published score") +
+        panel("Blocked setups", d.blocked.length ? table(["Market", "Reasons"], d.blocked.map(r => [escape(r.symbol), escape(r.blocked_reasons.join("; "))])) : empty("No blocked setup in the active set", "Deep diagnostics remain available in the signal journal.")) +
+        panel("Forward policy observations", `<p>${escape(f.label)}</p><p>${number(f.opportunities, 0)} prospective opportunities · ${escape(f.epoch ? utc(f.epoch.start_ms) : "Begins after this release is deployed")}</p>` +
+          table(["Policy / provenance / source", "Complete / observed", "Mean / median net R", "MFE / MAE", "Evidence"], Object.entries(f.policies).map(([key,v]) => [escape(key), `${v.accepted.complete_samples} / ${v.all_observed}`, `${number(v.accepted.mean_net_r)} / ${number(v.accepted.median_net_r)}`, `${number(v.accepted.mean_mfe)} / ${number(v.accepted.mean_mae)}`, escape(v.accepted.status)])) +
+          `<details><summary>Score bands and cohorts</summary>${json({score_bands: f.score_bands, cohorts: f.cohorts, limitation: f.limitation})}</details>`, "Descriptive observations · no auto promotion") +
+        panel("Storage outlook", `<p>${number(data.storage?.used_bytes / 1e9)} / ${number(data.storage?.budget_bytes / 1e9)} GB · observed-growth days to budget: ${escape(data.storage_growth?.days_to_budget ?? "UNKNOWN")}</p><details><summary>Category growth</summary>${json(data.storage_growth || {status: "UNKNOWN"})}</details>`);
     } else if (page === "watchlist")
       body = panel(
         "Eligible markets",
@@ -404,7 +408,7 @@ async function render() {
         body += panel("Derivatives", json(market.derivatives));
       }
     } else if (page === "health")
-      body = panel("Collection health", json(data.health)) + panel("Scanner status", json(data.scanner));
+      body = panel("Deployment, resource and recovery diagnostics", json(await api("operations"))) + panel("Collection health", json(data.health)) + panel("Scanner status", json(data.scanner));
     else if (page === "settings")
       body =
         panel("Configuration", json(await api("settings"))) +

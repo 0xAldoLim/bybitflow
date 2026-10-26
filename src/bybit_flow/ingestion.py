@@ -46,7 +46,13 @@ class Bybit:
                 await asyncio.sleep(max(0, self.next_request - time.monotonic()))
                 self.next_request = time.monotonic() + 1 / self.settings.rest_requests_per_second
             try:
-                r = await self.client.get("/v5/market/" + endpoint, params=params)
+                from .db_runtime import measure_await
+
+                r = await measure_await(
+                    getattr(self.recorder, "store", None),
+                    self.client.get("/v5/market/" + endpoint, params=params),
+                    "rest_http_latency_ms",
+                )
                 if r.status_code == 403:
                     # Do not bypass regional restrictions or a blocked IP.
                     self.blocked_until = time.monotonic() + 600

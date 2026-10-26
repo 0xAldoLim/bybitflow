@@ -15,10 +15,18 @@ async def test_live_updates_during_one_candidate_do_not_make_next_candidate_stal
     end = 1_800_000
     monkeypatch.setattr("bybit_flow.scanner.now_ms", lambda: clock["now"])
     monkeypatch.setattr("bybit_flow.native_streams.now_ms", lambda: clock["now"])
-    monkeypatch.setattr("bybit_flow.scanner.candle_features", lambda *args: {"atr": 1})
-    monkeypatch.setattr("bybit_flow.scanner.evaluate_risk", lambda *args: {"reasons": [], "accepted": False})
-    monkeypatch.setattr("bybit_flow.scanner.score", lambda *args, **kwargs: None)
+    monkeypatch.setattr("bybit_flow.scanner_market_data.candle_features", lambda *args: {"atr": 1})
+    monkeypatch.setattr(
+        "bybit_flow.scanner_confirmation.evaluate_risk", lambda *args: {"reasons": [], "accepted": False}
+    )
+    monkeypatch.setattr("bybit_flow.scanner_confirmation.score", lambda *args, **kwargs: None)
     monkeypatch.setattr("bybit_flow.ml.inference.apply", lambda *args: None)
+    monkeypatch.setattr(
+        "bybit_flow.scanner_confirmation.now_ms", __import__("bybit_flow.scanner", fromlist=["now_ms"]).now_ms
+    )
+    monkeypatch.setattr(
+        "bybit_flow.scanner_discovery.now_ms", __import__("bybit_flow.scanner", fromlist=["now_ms"]).now_ms
+    )
     store = Store(settings.data_dir)
     scanner = Scanner.__new__(Scanner)
     scanner.settings, scanner.store = settings, store
@@ -68,7 +76,7 @@ async def test_live_updates_during_one_candidate_do_not_make_next_candidate_stal
         return {"available": False}
 
     calculate = Mock(side_effect=flow)
-    monkeypatch.setattr("bybit_flow.scanner.footprint", calculate)
+    monkeypatch.setattr("bybit_flow.scanner_confirmation.footprint", calculate)
     await scanner.evaluate()
     saved = {row["symbol"]: row for row in store.signals()}
     assert calculate.call_count == 2
@@ -93,6 +101,12 @@ async def test_live_updates_during_one_candidate_do_not_make_next_candidate_stal
 async def test_generation_readiness_uses_receipt_time_after_candle_io(settings, signal, monkeypatch):
     clock = {"now": 1_801_000}
     monkeypatch.setattr("bybit_flow.scanner.now_ms", lambda: clock["now"])
+    monkeypatch.setattr(
+        "bybit_flow.scanner_confirmation.now_ms", __import__("bybit_flow.scanner", fromlist=["now_ms"]).now_ms
+    )
+    monkeypatch.setattr(
+        "bybit_flow.scanner_discovery.now_ms", __import__("bybit_flow.scanner", fromlist=["now_ms"]).now_ms
+    )
     store = Store(settings.data_dir)
     scanner = Scanner.__new__(Scanner)
     scanner.settings = settings.model_copy(
@@ -118,7 +132,7 @@ async def test_generation_readiness_uses_receipt_time_after_candle_io(settings, 
 
     scanner.cached_candles = fetch
     generate = Mock(return_value=[])
-    monkeypatch.setattr("bybit_flow.scanner.candidates", generate)
+    monkeypatch.setattr("bybit_flow.scanner_discovery.candidates", generate)
     await scanner.refresh_once()
     generate.assert_called_once()
     assert generate.call_args.args[4] == clock["now"]

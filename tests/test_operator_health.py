@@ -72,7 +72,7 @@ async def test_independent_clock_check_refreshes_during_blocked_scan(settings, m
     old = dict(source="binance", at_ms=now - 30_000, skew_ms=1950)
     store.put("clock_health", old)
     closed = asyncio.Event()
-    monkeypatch.setattr("bybit_flow.scanner.now_ms", lambda: now)
+    monkeypatch.setattr("bybit_flow.scanner_market_data.now_ms", lambda: now)
 
     class API:
         def __init__(self, source, config):
@@ -89,7 +89,7 @@ async def test_independent_clock_check_refreshes_during_blocked_scan(settings, m
         async def close(self):
             closed.set()
 
-    monkeypatch.setattr("bybit_flow.scanner.VenueAPI", API)
+    monkeypatch.setattr("bybit_flow.scanner_market_data.VenueAPI", API)
     task = None
     try:
         assert warnings(settings, store, scanner, recorder, now)[0]["code"] == "CLOCK_DRIFT"

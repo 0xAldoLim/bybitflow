@@ -47,8 +47,8 @@ async def test_outage_pauses_recovers_and_fresh_stop_still_invalidates(
     # Reconnected tape need not re-confirm an already published execution window.
     tape.coverage_start = now
     scanner.context[signal.symbol] = dict(asof=now, h4=[], instrument=SimpleNamespace(base="TEST"))
-    monkeypatch.setattr("bybit_flow.scanner.facts_asof", lambda *args: [])
-    monkeypatch.setattr("bybit_flow.scanner.candle_features", lambda *args: {"regime": "range"})
+    monkeypatch.setattr("bybit_flow.scanner_lifecycle.facts_asof", lambda *args: [])
+    monkeypatch.setattr("bybit_flow.scanner_lifecycle.candle_features", lambda *args: {"regime": "range"})
     await scanner.monitor_alerted(signal, now)
     assert signal.state == "ALERTED" and signal.coverage["monitoring"] == "active"
     assert scanner.notifier.send_research.await_count == 2

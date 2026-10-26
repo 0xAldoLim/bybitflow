@@ -1,5 +1,9 @@
 # Architecture
 
+For current v2.2.1 component ownership and data paths, see
+[Reliability & Evidence Loop](RELIABILITY_EVIDENCE_LOOP.md). The public feed
+and evidence contracts below remain in force.
+
 ## Native data and continuity
 
 VenueAPI exposes an explicitly internal scanner-v1 compatibility view. Actual Binance

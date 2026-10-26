@@ -25,6 +25,14 @@ def main():
     sub.add_parser("version", help="Product version, immutable cutover and v20 readiness")
     doctor = sub.add_parser("doctor", help="Public connectivity and local operational diagnostics")
     doctor.add_argument("--json", action="store_true")
+    doctor.add_argument(
+        "--no-network", action="store_true", help="Use cached exchange checks; no network requests"
+    )
+    review = sub.add_parser(
+        "policy-review", help="Record a manual policy research review; no production authority"
+    )
+    review.add_argument("record", type=Path)
+    sub.add_parser("forward-report", help="Prospective policy observations; never account performance")
     market = sub.add_parser("test-market", help="Genuine public REST and trade WebSocket smoke test")
     market.add_argument("--exchange", choices=["binance", "bybit", "okx"])
     sub.add_parser("test-discord", help="Send a connection test, never a trade signal")
@@ -105,9 +113,27 @@ def main():
 
             print(json.dumps(effectiveness(store, now_ms()), indent=2))
         elif args.command == "version":
+            from .provenance import status as provenance_status
             from .v2 import status
 
-            print(json.dumps(status(store), indent=2))
+            print(json.dumps(status(store) | {"deployment": provenance_status(store, settings)}, indent=2))
+        elif args.command == "policy-review":
+            from .forward_evidence import record_promotion
+
+            print(
+                json.dumps(
+                    {
+                        "review_id": record_promotion(
+                            store, json.loads(args.record.read_text(encoding="utf-8")), now_ms()
+                        ),
+                        "production_changed": False,
+                    }
+                )
+            )
+        elif args.command == "forward-report":
+            from .forward_evidence import report
+
+            print(json.dumps(report(store, now_ms()), indent=2))
         elif args.command == "signals":
             from .funnel import status
             from .v2 import status as product_status
@@ -217,7 +243,7 @@ async def diagnostic_command(args, settings, store):
     from .exchanges import VENUES, market_probe
 
     if args.command == "doctor":
-        report = await doctor(settings, store)
+        report = await doctor(settings, store, network=not args.no_network)
         print(json.dumps(report, indent=2) if args.json else human_report(report))
     elif args.command == "test-discord":
         result = await discord_test(settings, store)

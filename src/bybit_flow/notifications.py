@@ -508,9 +508,15 @@ class Notifier:
                 transport_detail = dict(category="UNKNOWN", http_status=None)
                 try:
                     async with httpx.AsyncClient(timeout=15, transport=self.transport) as client:
-                        response = await client.patch(
-                            secret.split("?")[0].rstrip("/") + "/messages/" + initial[1],
-                            json=payload,
+                        from .db_runtime import measure_await
+
+                        response = await measure_await(
+                            self.store,
+                            client.patch(
+                                secret.split("?")[0].rstrip("/") + "/messages/" + initial[1],
+                                json=payload,
+                            ),
+                            "discord_request_latency_ms",
                         )
                         transport_detail.update(category="HTTP", http_status=response.status_code)
                         if response.is_success:
@@ -772,7 +778,13 @@ class Notifier:
                         http_attempted = True
                         # HTTPX's timeout is per phase. Bound the full request.
                         async with asyncio.timeout(INITIAL_REQUEST_TIMEOUT if real_initial else None):
-                            response = await client.post(secret, params={"wait": "true"}, json=payload)
+                            from .db_runtime import measure_await
+
+                            response = await measure_await(
+                                self.store,
+                                client.post(secret, params={"wait": "true"}, json=payload),
+                                "discord_request_latency_ms",
+                            )
                         transport_detail.update(http_status=response.status_code, category="HTTP")
                         if response.status_code == 429:
                             status = "rate-limited"

@@ -4,6 +4,10 @@ Start with the [README](../README.md) and [operator guide](USER_RUNBOOK.md) for
 commands, configuration, and troubleshooting. This reference describes operational
 constraints. Repository verification records are dated evidence, not live health.
 
+Version 2.2.1 adds [bounded observability and forward evaluation](RELIABILITY_EVIDENCE_LOOP.md).
+Use [separate deployment, ML maintenance, recovery and rollback](DEPLOYMENT.md)
+workflows. Historical reports describe their dated deployments.
+
 ## Deployment and resources
 
 Run one collector and at most one ML worker per persistent data directory. Compose

@@ -15,9 +15,13 @@ class LiveRecordingPressure(RuntimeError):
     pass
 
 
-def prioritize_live_recording(store):
+def prioritize_live_recording(store, priority=None):
     """Yield optional learning work; cumulative historical drops are not an outage."""
     now = now_ms()
+    from ..operational import Priority, allowed
+
+    if not allowed(store, priority or Priority.HISTORICAL_RECOVERY, now):
+        raise LiveRecordingPressure("Background ML deferred by measured operational pressure")
     health = store.get("recorder_health", {})
     if not health or not 0 <= now - health.get("at_ms", 0) <= 90_000:
         return
@@ -304,6 +308,21 @@ def train_ready(settings, store, manual=False):
 
 
 def worker_step(settings, store, first_monitor=False, manual=False):
+    started = time.monotonic()
+    result = _worker_step(settings, store, first_monitor, manual)
+    try:
+        store.put(
+            "trainer_cycle_telemetry",
+            dict(
+                at_ms=now_ms(), duration_ms=(time.monotonic() - started) * 1000, status=result.get("status")
+            ),
+        )
+    except Exception:
+        pass  # Diagnostic failure cannot replace the existing worker outcome.
+    return result
+
+
+def _worker_step(settings, store, first_monitor=False, manual=False):
     """Writer contention defers a worker iteration without a restart loop."""
     import sqlite3
     import sys

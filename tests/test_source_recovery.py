@@ -40,8 +40,8 @@ async def test_failed_primary_can_change_new_scan_venue_without_replacing_active
         return dict(status="HEALTHY" if name == "bybit" else "UNAVAILABLE")
 
     monkeypatch.setattr("bybit_flow.scanner.asyncio.sleep", step)
-    monkeypatch.setattr("bybit_flow.scanner.now_ms", lambda: clock[0])
-    monkeypatch.setattr("bybit_flow.scanner.market_probe", probe)
+    monkeypatch.setattr("bybit_flow.scanner_market_data.now_ms", lambda: clock[0])
+    monkeypatch.setattr("bybit_flow.scanner_market_data.market_probe", probe)
     monkeypatch.setattr(
         "bybit_flow.feed_health.persistent_health",
         lambda *a: dict(active_lifecycle_stream_health=dict(fresh=0, total=1)),

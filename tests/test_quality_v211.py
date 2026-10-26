@@ -517,7 +517,7 @@ def test_execution_check_after_async_book_update_preserves_old_policy(
     book.asks = {Decimal("100"): Decimal("1000")}
     book.receipt_ms = book.event_ms = 2000
     scanner = SimpleNamespace(settings=settings, store=SimpleNamespace(get=lambda *args: {}))
-    monkeypatch.setattr("bybit_flow.scanner.now_ms", lambda: 2000)
+    monkeypatch.setattr("bybit_flow.scanner_confirmation.now_ms", lambda: 2000)
     assert not book.fresh(1100, settings.book_stale_ms)
     Scanner.apply_trade_quality(scanner, signal, book, 1100)
     q = signal.evidence["entry_quality"]

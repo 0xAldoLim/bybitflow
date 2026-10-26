@@ -384,6 +384,10 @@ async def _backfill(store, settings, source, limit, resume, market):
     market = market or VenueAPI(source, settings.model_copy(update={"rest_requests_per_second": 1}))
     try:
         for venue, symbol, start, end in ranges:
+            from ..operational import Priority
+            from .cli import prioritize_live_recording
+
+            prioritize_live_recording(store, Priority.TRAINING_BOOTSTRAP)
             if market.name != venue:
                 raise ValueError("Backfill market does not match frozen venue")
             if directory_bytes(store.root) >= settings.max_storage_gb * 1e9 * 0.95:

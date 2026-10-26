@@ -1,5 +1,9 @@
 # Feature status
 
+Maintenance release 2.2.1 adds prospective policy observations and bounded
+operational controls. Trading policy remains v2.2. See
+[Reliability & Evidence Loop](RELIABILITY_EVIDENCE_LOOP.md).
+
 ## Supported
 
 - Public REST and WebSocket adapters for Binance, Bybit, and OKX.

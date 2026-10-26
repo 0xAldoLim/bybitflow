@@ -199,7 +199,13 @@ class VenueAPI:
                 self.next_request = loop.time() + 1 / self.settings.rest_requests_per_second
             if self.recorder and not self.recorder.healthy:
                 raise RuntimeError("Recording circuit open")
-            response = await self.client.get(path, params=params)
+            from .db_runtime import measure_await
+
+            response = await measure_await(
+                getattr(self.recorder, "store", None),
+                self.client.get(path, params=params),
+                "rest_http_latency_ms",
+            )
             if response.status_code in {403, 418, 451}:
                 self.blocked_until = loop.time() + 600
                 raise PermissionError("Official endpoint denied access; no bypass or immediate retry")

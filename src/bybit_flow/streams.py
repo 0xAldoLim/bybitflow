@@ -215,6 +215,9 @@ class Streams:
             except Exception as exc:
                 # Never log transport URLs, credentials or raw payloads.
                 self.invalidate(type(exc).__name__)
+                metrics = getattr(getattr(self.store, "db", None), "health", None)
+                if metrics:
+                    metrics.increment("websocket_reconnect_count")
                 log.warning("stream_reconnect", extra={"error_type": type(exc).__name__})
                 await asyncio.sleep(delay + random.random())
                 delay = min(60, delay * 2)
