@@ -274,7 +274,8 @@ Application data lives in the persistent `research-data` Docker volume. Stopping
 services preserves it. Managed retention releases eligible raw recordings while
 keeping setup plans, snapshots, labels, datasets, model artifacts and delivery
 receipts. Active setups, unresolved outcomes and replay leases protect required
-evidence.
+evidence. Older horizon-research exports are compressed losslessly in bounded
+background batches; the current export and model artifacts remain protected.
 
 Preview cleanup before running it manually:
 

@@ -77,7 +77,14 @@ def fit(store, settings, asof):
     directory.mkdir(parents=True, exist_ok=True)
     if rows:
         target = directory / (digest(rows) + ".json")
-        if not target.exists():
+        archived = target.with_suffix(".json.gz")
+        if not target.exists() and archived.exists():
+            from .export_archival import fingerprint
+
+            if fingerprint(archived, packed=True)[0] != target.stem:
+                raise ValueError("Archived horizon export content hash mismatch")
+            target = archived
+        elif not target.exists():
             target.write_text(canonical(rows))
         report["dataset"] = str(target)
     if len(labeled) < settings.horizon_model_min_samples:

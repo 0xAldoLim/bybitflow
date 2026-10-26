@@ -505,3 +505,14 @@ calibration, validation and holdout periods actually used.
 Readiness diagnostics process chronological scalar pages and preserve the earliest
 snapshot per economic candidate. They do not sort full feature payloads in temporary
 storage, change training eligibility, or replay recordings on dashboard requests.
+
+
+## Historical horizon exports
+
+The worker losslessly compresses obsolete horizon-research JSON exports after
+two hours, in bounded batches before checking optional ML storage headroom.
+The current export and fitted model artifacts remain protected. An archive keeps
+the original content hash and is verified before the redundant JSON copy is
+removed; setup snapshots, labels, primary datasets and trained models are unchanged.
+An interrupted batch resumes from its verified archive. Reusing an archived
+export does not create another uncompressed copy. Archived files use `.json.gz`.
