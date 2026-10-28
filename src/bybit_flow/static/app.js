@@ -214,7 +214,8 @@ async function render() {
       const f = await api("forward");
       const critical = warnings.filter(w => w.severity === "error").length;
       const notice = `${critical} critical · ${warnings.length - critical} warnings`;
-      body = panel("Operator priorities", `<p>${escape(notice)}</p><p>${warnings.length ? "Review the measured warnings above before relying on current alerts." : "No current operator warnings. UNKNOWN evidence remains unqualified."}</p>`) +
+      body = `<div class="metrics"><div class="metric"><label>RECORDED EVENTS</label><b>${number(data.health?.records_written, 0)}</b><small>This collector run · resets on restart; saved recordings are retained by the storage policy</small></div></div>` +
+        panel("Operator priorities", `<p>${escape(notice)}</p><p>${warnings.length ? "Review the measured warnings above before relying on current alerts." : "No current operator warnings. UNKNOWN evidence remains unqualified."}</p>`) +
         panel("Current valid opportunities", d.opportunities.length ? table(
           ["Rank", "Market / horizon", "Setup", "Published score / E / T", "Net RR", "Reach / stop", "Impact / OFI", "Shared direction", "Entry deadline"],
           d.opportunities.map(r => [number(r.rank, 0), `<a href="#signal/${encodeURIComponent(r.id)}">${escape(r.symbol)} ${escape(r.direction)}</a><br>${escape(r.horizon)}`, escape(r.family),
