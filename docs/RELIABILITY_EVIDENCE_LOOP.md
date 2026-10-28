@@ -123,6 +123,12 @@ HTTP lock conflicts return 503 with Retry-After. Existing supervision retries th
 operation according to its own semantics; uncertain delivery is never blindly retried.
 Offline/worker connections retain their existing retry behavior.
 
+A contended recorder-status update does not create a raw coverage gap or open the
+recording circuit after a batch was acknowledged. Status retries on the next pass.
+A genuine writer failure remains fail-closed: its gap is persisted with yielding
+lock retries before the same bounded, idempotent batch is retried. Status-write
+contention cannot terminate that recovery loop.
+
 Low-pressure background sampling may run a **PASSIVE** WAL checkpoint. It never
 forces FULL/TRUNCATE checkpoints or deletes a WAL. Long read transactions can
 still hold WAL pages. SQLite reads/critical transactions are still synchronous;

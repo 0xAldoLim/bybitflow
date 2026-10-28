@@ -674,13 +674,25 @@ class Recorder:
                             "NORMAL" if self.queue.qsize() < self.queue.maxsize * 0.3 else "RECORDER_PRESSURE"
                         )
                     if time.monotonic() - last_health >= 5 or not self.running:
-                        self.store.put("recorder_health", self.metrics())
-                        if self.last_error_ms:
-                            self.store.put(
-                                "recorder_gap",
-                                dict(at_ms=self.last_error_ms, reason=self.reason, historical=self.healthy),
-                            )
-                        last_health = time.monotonic()
+                        try:
+                            self.store.put("recorder_health", self.metrics())
+                            if self.last_error_ms:
+                                self.store.put(
+                                    "recorder_gap",
+                                    dict(
+                                        at_ms=self.last_error_ms, reason=self.reason, historical=self.healthy
+                                    ),
+                                )
+                            last_health = time.monotonic()
+                        except sqlite3.OperationalError as exc:
+                            from .db_runtime import busy
+
+                            if not busy(exc):
+                                raise
+                            # The batch was already acknowledged. Retry cached
+                            # status next pass; do not invent a raw recording gap
+                            # or open a circuit that prevents the next batch.
+                            self.store.db.health.increment("recorder_status_busy_retries")
                     if not due:
                         await asyncio.sleep(0)
                 except Exception as exc:
@@ -697,8 +709,21 @@ class Recorder:
                         if isinstance(exc, StorageBudgetExceeded)
                         else type(exc).__name__ + ": recorder write failed; retry scheduled"
                     )
-                    self.store.put("recorder_gap", dict(at_ms=self.last_error_ms, reason=self.reason))
-                    self.store.put("recorder_health", self.metrics())
+                    # A real writer failure remains fail-closed until its gap
+                    # is durable. Contended diagnostics cannot kill this retry
+                    # loop or discard the bounded, idempotent pending batch.
+                    while True:
+                        try:
+                            self.store.put("recorder_gap", dict(at_ms=self.last_error_ms, reason=self.reason))
+                            self.store.put("recorder_health", self.metrics())
+                            break
+                        except sqlite3.OperationalError as metadata_exc:
+                            from .db_runtime import busy
+
+                            if not busy(metadata_exc):
+                                raise
+                            self.store.db.health.increment("recorder_status_busy_retries")
+                            await asyncio.sleep(0.05)
                     if not self.running:
                         break
                     # Retain the bounded failed batch and retry; never silently kill the writer.

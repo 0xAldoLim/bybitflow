@@ -198,3 +198,69 @@ def test_malformed_execution_is_preserved_as_gap(settings):
     assert not row["complete"] and row["source"] == "control/gap"
     assert json.loads(row["payload"])["original_envelope"] == invalid
     store.close()
+
+
+async def test_busy_status_after_acknowledged_batch_cannot_open_recording_circuit(settings, monkeypatch):
+    import sqlite3
+
+    store = Store(settings.data_dir)
+    rec = Recorder(store, settings)
+    real_put = store.put
+    failures = []
+
+    def contended_status(key, value):
+        if key == "recorder_health" and not failures:
+            failures.append(key)
+            raise sqlite3.OperationalError("database is locked")
+        return real_put(key, value)
+
+    monkeypatch.setattr(store, "put", contended_status)
+    rec.offer("test", "TESTUSDT", 100, {})
+    rec.running = False
+    await rec.run()
+    assert failures and rec.written == 1
+    assert rec.healthy and rec.state == "NORMAL" and rec.retries == 0
+    assert store.get("recorder_gap") is None
+    assert store.db.health.snapshot()["recorder_status_busy_retries"] == 1
+    store.close()
+
+
+async def test_actual_writer_failure_survives_busy_gap_status_and_retries_same_batch(settings, monkeypatch):
+    import sqlite3
+
+    store = Store(settings.data_dir)
+    rec = Recorder(store, settings)
+    real_put, attempts, busy_updates = store.put, [], []
+
+    class Writer:
+        def __init__(self, recorder):
+            pass
+
+        async def write(self, batch_id, batch):
+            attempts.append(batch_id)
+            if len(attempts) == 1:
+                raise OSError("controlled writer failure")
+            assert not rec.healthy  # Real failure stays closed until acknowledged.
+            rec.written += len(batch)
+            rec.running = False
+
+        def close(self):
+            pass
+
+    def contended_gap(key, value):
+        if key == "recorder_gap" and len(busy_updates) < 2:
+            busy_updates.append(key)
+            raise sqlite3.OperationalError("database is locked")
+        return real_put(key, value)
+
+    monkeypatch.setattr("bybit_flow.recorder_worker.ProcessWriter", Writer)
+    monkeypatch.setattr(store, "put", contended_gap)
+    rec.offer("test", "TESTUSDT", 100, {})
+    # Flush immediately without changing any live configuration.
+    rec.settings = settings.model_copy(update={"recorder_segment_rows": 1})
+    await asyncio.wait_for(rec.run(), 5)
+    assert len(attempts) == 2 and attempts[0] == attempts[1]
+    assert len(busy_updates) == 2 and rec.retries == 1 and rec.written == 1
+    assert rec.healthy and rec.last_error_type == "OSError"
+    assert store.get("recorder_gap")["historical"]
+    store.close()
