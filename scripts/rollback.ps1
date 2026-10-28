@@ -8,7 +8,7 @@ if (!$images.desk) { throw 'A captured known-good desk image is required' }
 . (Join-Path $PSScriptRoot 'continuity.ps1')
 $before=Read-Continuity
 $services=@{}
-foreach ($name in @('desk','trainer')) {
+foreach ($name in @('desk','trainer','maintenance')) {
     if ($images[$name]) {
         if ($images[$name] -notmatch '^sha256:[a-f0-9]{64}$') { throw 'Expected captured immutable image id' }
         & docker image inspect $images[$name] --format '{{.Id}}'
@@ -19,7 +19,16 @@ foreach ($name in @('desk','trainer')) {
 $override=Join-Path ([IO.Path]::GetTempPath()) ('bybitflow-rollback-'+[guid]::NewGuid().ToString('N')+'.json')
 try {
     @{services=$services} | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $override
-    & docker compose -f compose.yaml -f $override --profile ml up -d --no-build --pull never --wait --wait-timeout 180
+    # Restore only previously running services, preserving a deliberately stopped trainer.
+    if (!$images.maintenance) {
+        & docker compose stop maintenance
+        if ($LASTEXITCODE -ne 0) { throw 'Could not stop upkeep for the older runtime' }
+    }
+    $composeArgs=@('compose','-f','compose.yaml')
+    if (Test-Path -LiteralPath 'compose.override.yaml') { $composeArgs += @('-f','compose.override.yaml') }
+    $composeArgs += @('-f',$override,'--profile','ml','up','-d','--no-build','--pull','never','--wait','--wait-timeout','180')
+    $composeArgs += @($services.Keys)
+    & docker @composeArgs
     if ($LASTEXITCODE -ne 0) { throw 'Rollback health check failed' }
     $after=Read-Continuity -Ids ($before.active.Keys -join ',')
     Assert-Continuity -Before $before -After $after

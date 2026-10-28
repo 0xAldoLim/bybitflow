@@ -77,9 +77,9 @@ class Store:
             return
         payload = json.dumps(value)
         if getattr(self, "_metadata", None):
-            from .db_runtime import DIAGNOSTIC_KEYS
+            from .db_runtime import diagnostic_key
 
-            if key in DIAGNOSTIC_KEYS:
+            if diagnostic_key(key):
                 self._metadata.offer(key, payload)
                 return
         for attempt in range(4):
@@ -311,7 +311,12 @@ class Store:
             raise ValueError("Commit pending writes before taking a migration backup")
         # Pin a WAL read snapshot. Otherwise frequent health writes can restart
         # every incremental copy step and prevent a large live backup finishing.
-        with sqlite3.connect(self.root / "research.sqlite") as source, sqlite3.connect(target) as dest:
+        from contextlib import closing
+
+        with (
+            closing(sqlite3.connect(self.root / "research.sqlite")) as source,
+            closing(sqlite3.connect(target)) as dest,
+        ):
             source.execute("BEGIN")
             source.execute("SELECT count(*) FROM sqlite_master").fetchone()
             source.backup(dest, pages=1000)
@@ -320,18 +325,20 @@ class Store:
         from .db_runtime import MetadataWriter
 
         if not self._runtime:
-            self.db.execute("PRAGMA busy_timeout=0")
+            # Permit a short independent writer commit, with a hard 25ms wait
+            # instead of the default five-second event-loop stall.
+            self.db.execute("PRAGMA busy_timeout=25")
             self._runtime = True
-            self._metadata = MetadataWriter(self.root / "research.sqlite", self.db.health)
+            self._metadata = MetadataWriter(self.db, self.db.health)
 
     async def stop_runtime(self):
         if getattr(self, "_metadata", None):
-            await asyncio.to_thread(self._metadata.close)
+            await self._metadata.close()
             self._metadata = None
 
     def close(self):
         if getattr(self, "_metadata", None):
-            self._metadata.close()
+            self._metadata.abort()
             self._metadata = None
         self.db.close()
 

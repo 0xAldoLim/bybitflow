@@ -52,6 +52,8 @@ def main():
         try:
             run("build","desk")
             ready(project)
+            upkeep="from pathlib import Path; from bybit_flow.config import Settings; from bybit_flow.storage import Store; from bybit_flow.capacity import step; s=Settings(_env_file=None,data_dir=Path('/app/data')); st=Store(s.data_dir); assert step(s,st)['state']=='NORMAL'; st.close()"
+            run("exec","-T","desk","python","-c",upkeep)
             marker="from bybit_flow.storage import Store; from pathlib import Path; s=Store(Path('/app/data')); s.put('backup_probe',{'software_test':True}); s.close()"
             run("exec","-T","desk","python","-c",marker)
             run("stop","desk")

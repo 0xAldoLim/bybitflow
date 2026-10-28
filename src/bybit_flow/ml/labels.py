@@ -79,7 +79,15 @@ def close_pre_retention_decisions(store):
     return len(rows)
 
 
-def label_recordings(
+def label_recordings(store, rows, settings, *args, **kwargs):
+    """Serialize checkpoint owners without tying upkeep to the training worker."""
+    from .locking import exclusive
+
+    with exclusive(store.root / "primary-label.lock"):
+        return _label_recordings(store, rows, settings, *args, **kwargs)
+
+
+def _label_recordings(
     store, rows, settings, stage="decision", max_active=5000, observed_until_ms=None, incremental=False
 ):
     import heapq

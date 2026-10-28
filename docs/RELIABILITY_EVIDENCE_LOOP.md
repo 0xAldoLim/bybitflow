@@ -113,8 +113,11 @@ rows, indexes/views and repeated startup. No historical labels/plans are normali
 SQLite measurements include write/read/transaction latency, busy events/retries,
 WAL bytes and passive checkpoint progress. Samples are bounded; no SQL text,
 webhook URLs or payloads are logged. Runtime connections do not synchronously sleep
-through lock retries. A bounded private writer coalesces an explicit allowlist of
-cached diagnostics, with read-your-write overlays. Critical receipts, lifecycle
+through lock retries. The owning connection waits at most 25 ms for a competing
+writer. A bounded asynchronous pump coalesces cached diagnostics, storage health
+and supervisor status on that same connection, with read-your-write overlays.
+It yields between rows and never commits an existing critical transaction.
+This avoids an independent diagnostic writer racing critical writes. Critical receipts, lifecycle
 and evidence writes are never enqueued: they acknowledge or raise/fail closed.
 HTTP lock conflicts return 503 with Retry-After. Existing supervision retries the
 operation according to its own semantics; uncertain delivery is never blindly retried.
@@ -200,3 +203,26 @@ features ([CodeQL](https://github.com/github/codeql-action),
 reason. Low-confidence alerts are reviewed, not automatically made release gates.
 
 See [deployment and rollback](DEPLOYMENT.md) for separate operating workflows.
+
+## Independent storage upkeep
+
+The default Compose `maintenance` service has a 512 MB memory limit, one-quarter
+CPU and no network. It does not depend on the optional trainer. Above 85% storage
+usage it materializes the existing prints-v1 outcome policy in chronological
+batches, then invokes existing verified retention. It shares an exclusive primary
+checkpoint lock with normal labeling, preventing two materializers from advancing
+one checkpoint concurrently. SQLite contention defers the iteration and retries.
+
+Each pass selects at most 16 ordinary segments and 64 MB of compressed input.
+Overlapping/equal receipt boundaries stay together (hard limit 128 segments).
+An oversized group is deferred rather than partially consumed. All selected
+segments pass the existing integrity preflight before replay. A truncated batch
+never substitutes wall time for the observation boundary, so later positions are
+not falsely finalized as incomplete. A full caught-up pass uses the existing
+live-cutoff rules, including genuine recording gaps. No old labels are rewritten.
+
+Training, fitting, backfills and model promotion do not run in this service. Raw
+pruning retains active plans, unresolved outcomes, leases and immutable derived
+records. If protected/permanent data fills the budget, recording still fails
+closed and the dashboard names the capacity blocker. A finite budget cannot
+preserve unlimited permanent history; service restarts cannot solve that condition.

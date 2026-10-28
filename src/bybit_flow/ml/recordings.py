@@ -30,12 +30,12 @@ def replay_start(store, after_ms=None):
     return start
 
 
-def worker_rows(store, after_ms=None):
+def worker_rows(store, after_ms=None, *, manifests=None):
     from ..leases import RangeLease
 
     start = replay_start(store, after_ms)
     with RangeLease(store, start, now_ms(), "ML verified replay") as lease:
-        yield from _worker_rows(store, lease, after_ms)
+        yield from _worker_rows(store, lease, after_ms, manifests=manifests)
 
 
 def committed_manifests(store, retained_after):
@@ -55,10 +55,11 @@ def committed_manifests(store, retained_after):
             yield json.loads(payload)
 
 
-def _worker_rows(store, lease=None, after_ms=None):
+def _worker_rows(store, lease=None, after_ms=None, *, manifests=None):
     # SQLite publication happens after gzip, parquet and manifest have closed.
     retained_after = replay_start(store, after_ms)
-    manifests = committed_manifests(store, retained_after)
+    if manifests is None:
+        manifests = committed_manifests(store, retained_after)
     spans = []
     for manifest in manifests:
         if lease:

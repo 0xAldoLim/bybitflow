@@ -8,6 +8,17 @@ import json
 from pathlib import Path
 
 
+def canonical(node):
+    if isinstance(node, ast.AST):
+        return [
+            type(node).__name__,
+            [[k, canonical(v)] for k, v in ast.iter_fields(node) if v is not None and v != []],
+        ]
+    if isinstance(node, list):
+        return [canonical(v) for v in node]
+    return node
+
+
 def test_extracted_algorithms_preserve_original_ast():
     expected = json.loads(
         (Path(__file__).parent / "fixtures/scanner_algorithm_fingerprints.json").read_text()
@@ -29,6 +40,6 @@ def test_extracted_algorithms_preserve_original_ast():
             if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == name
         )
         body = RestoreContext().visit(ast.Module(body=method.body[1:], type_ignores=[]))
-        assert hashlib.sha256(ast.dump(body, include_attributes=False).encode()).hexdigest() == fingerprint, (
-            location
-        )
+        assert (
+            hashlib.sha256(json.dumps(canonical(body), sort_keys=True).encode()).hexdigest() == fingerprint
+        ), location

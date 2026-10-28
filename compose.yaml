@@ -32,6 +32,34 @@ services:
       interval: 30s
       timeout: 8s
       retries: 3
+  maintenance:
+    build:
+      context: .
+      args:
+        FLOW_CODE_COMMIT: ${FLOW_CODE_COMMIT:-unknown}
+    init: true
+    restart: unless-stopped
+    command: [python, -m, bybit_flow.capacity]
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      FLOW_DATA_DIR: /app/data
+      OMP_NUM_THREADS: "1"
+      OPENBLAS_NUM_THREADS: "1"
+    volumes:
+      - research-data:/app/data
+    read_only: true
+    tmpfs: [/tmp:size=32m]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    network_mode: none
+    mem_limit: 512m
+    cpus: 0.25
+    stop_grace_period: 30s
+    depends_on:
+      desk:
+        condition: service_started
   trainer:
     profiles: [ml]
     build:

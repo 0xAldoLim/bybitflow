@@ -1,5 +1,6 @@
 """Bounded SQLite measurements and an explicitly noncritical metadata writer."""
 
+import asyncio
 import json
 import sqlite3
 import threading
@@ -15,8 +16,13 @@ DIAGNOSTIC_KEYS = frozenset(
         "quote_health",
         "scan_health",
         "operational_health",
+        "storage_health",
     }
 )
+
+
+def diagnostic_key(key):
+    return key in DIAGNOSTIC_KEYS or key.startswith("supervisor:")
 
 
 def busy(exc):
@@ -106,81 +112,80 @@ class MeasuredConnection(sqlite3.Connection):
 
 
 class MetadataWriter:
-    """Only allowlisted cached diagnostics; critical writes never enter this queue."""
+    """Coalesce diagnostics on the owning loop/connection; never contend with it.
 
-    def __init__(self, path, measurements, capacity=64):
-        self.path, self.metrics, self.capacity = path, measurements, capacity
+    External writers still fail closed. No SQLite connection crosses threads, and
+    an existing critical transaction is never committed by the diagnostic pump.
+    """
+
+    def __init__(self, db, measurements, capacity=64):
+        self.db, self.metrics, self.capacity = db, measurements, capacity
         self.pending, self.overlay = OrderedDict(), {}
-        self.condition = threading.Condition()
         self.sequence, self.stopping = 0, False
-        self.deadline = None
-        self.thread = threading.Thread(target=self.run, name="diagnostic-metadata", daemon=True)
-        self.thread.start()
+        self.wakeup = asyncio.Event()
+        self.task = asyncio.create_task(self.run(), name="diagnostic-metadata")
 
     def offer(self, key, payload):
-        if key not in DIAGNOSTIC_KEYS:
+        if not diagnostic_key(key):
             raise ValueError("Critical metadata cannot be queued")
-        with self.condition:
-            self.sequence += 1
-            value = (self.sequence, payload)
-            if key not in self.pending and len(self.pending) >= self.capacity:
-                old, dropped = self.pending.popitem(last=False)
-                if self.overlay.get(old) == dropped:
-                    self.overlay.pop(old, None)
-                self.metrics.increment("diagnostic_metadata_dropped")
-            self.pending[key] = self.overlay[key] = value
-            self.condition.notify()
+        self.sequence += 1
+        value = (self.sequence, payload)
+        if key not in self.pending and len(self.pending) >= self.capacity:
+            old, dropped = self.pending.popitem(last=False)
+            if self.overlay.get(old) == dropped:
+                self.overlay.pop(old, None)
+            self.metrics.increment("diagnostic_metadata_dropped")
+        self.pending[key] = self.overlay[key] = value
+        self.wakeup.set()
 
     def read(self, key):
-        with self.condition:
-            row = self.overlay.get(key)
-            return (True, json.loads(row[1])) if row else (False, None)
+        row = self.overlay.get(key)
+        return (True, json.loads(row[1])) if row else (False, None)
 
-    def run(self):
-        db = sqlite3.connect(self.path, timeout=0.05)
-        try:
-            while True:
-                with self.condition:
-                    self.condition.wait_for(lambda: self.pending or self.stopping)
-                    if self.stopping and self.deadline is not None and time.monotonic() >= self.deadline:
-                        self.metrics.increment("diagnostic_shutdown_unflushed")
-                        self.pending.clear()
-                        self.overlay.clear()
-                        return
-                    if not self.pending and self.stopping:
-                        return
-                    key, value = self.pending.popitem(last=False)
-                try:
-                    with db:
-                        db.execute("INSERT OR REPLACE INTO kv VALUES(?,?)", (key, value[1]))
-                    with self.condition:
-                        if self.overlay.get(key) == value:
-                            self.overlay.pop(key, None)
-                except sqlite3.OperationalError as exc:
-                    if not busy(exc):
-                        self.metrics.increment("diagnostic_metadata_failures")
-                        with self.condition:
-                            if self.overlay.get(key) == value:
-                                self.overlay.pop(key, None)
-                        continue
-                    self.metrics.increment("sqlite_busy_events")
+    async def run(self):
+        while True:
+            await self.wakeup.wait()
+            if self.stopping and not self.pending:
+                return
+            # Coalesce bursts and yield to recording/lifecycle work between rows.
+            await asyncio.sleep(0.02)
+            if self.db.in_transaction:
+                continue
+            key, value = self.pending.popitem(last=False)
+            try:
+                with self.db:
+                    self.db.execute("INSERT OR REPLACE INTO kv VALUES(?,?)", (key, value[1]))
+                if self.overlay.get(key) == value:
+                    self.overlay.pop(key, None)
+            except sqlite3.OperationalError as exc:
+                if busy(exc):
                     self.metrics.increment("sqlite_busy_retries")
-                    with self.condition:
-                        if self.overlay.get(key) == value:
-                            self.pending.setdefault(key, value)
-                    time.sleep(0.05)  # Private writer thread; never the asyncio collector.
-        finally:
-            db.close()
+                    self.pending.setdefault(key, value)
+                else:
+                    self.metrics.increment("diagnostic_metadata_failures")
+                    if self.overlay.get(key) == value:
+                        self.overlay.pop(key, None)
+            if not self.pending:
+                self.wakeup.clear()
+                if self.stopping:
+                    return
 
-    def close(self, timeout=5):
-        with self.condition:
-            self.stopping = True
-            self.deadline = time.monotonic() + timeout
-            self.condition.notify()
-        self.thread.join(timeout)
-        if self.thread.is_alive():
+    def abort(self):
+        if self.pending:
             self.metrics.increment("diagnostic_shutdown_unflushed")
-        return not self.thread.is_alive()
+        self.task.cancel()
+        self.pending.clear()
+        self.overlay.clear()
+
+    async def close(self, timeout=5):
+        self.stopping = True
+        self.wakeup.set()
+        try:
+            await asyncio.wait_for(self.task, timeout)
+            return True
+        except TimeoutError:
+            self.abort()
+            return False
 
 
 async def measure_await(store, awaitable, metric):

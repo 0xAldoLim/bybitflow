@@ -31,6 +31,10 @@ $required = @('test (3.12)', 'test (3.13)', 'container-smoke')
 foreach ($name in $required) {
     if (!($jobs.jobs | Where-Object { $_.name -eq $name -and $_.conclusion -eq 'success' })) { throw "Required CI job missing or failed: $name" }
 }
+$security = $runs.workflow_runs | Where-Object { $_.name -eq 'Security analysis' } | Sort-Object run_number -Descending | Select-Object -First 1
+if (!$security -or $security.head_sha -ne $commit -or $security.conclusion -ne 'success') { throw 'The exact commit has not passed security analysis' }
+$securityJobs = Invoke-RestMethod -Uri "$apiRoot/actions/runs/$($security.id)/jobs" -Headers $headers
+if (!($securityJobs.jobs | Where-Object { $_.name -eq 'codeql' -and $_.conclusion -eq 'success' })) { throw 'Required CodeQL check missing or failed' }
 Write-Host "Verified commit $commit · $($run.html_url)"
 
 $auditCode = @'
@@ -68,7 +72,7 @@ New-Item -ItemType Directory -Force -Path $reportRoot | Out-Null
 $reportPath = Join-Path $reportRoot ($commit + '.json')
 $before | ConvertTo-Json -Depth 15 | Set-Content -LiteralPath ($reportPath + '.before')
 $images = @{}
-foreach ($name in @('desk','trainer')) {
+foreach ($name in @('desk','trainer','maintenance')) {
     $id = [string](& docker compose --profile ml ps -q $name)
     if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect existing services' }
     $id = $id.Trim()
@@ -80,7 +84,7 @@ foreach ($name in @('desk','trainer')) {
 $images | ConvertTo-Json | Set-Content -LiteralPath ($reportPath + '.rollback-images.json')
 $env:FLOW_CODE_COMMIT = $commit
 # Preserve an intentionally disabled trainer unless explicitly requested.
-$services=@('desk')
+$services=@('desk','maintenance')
 if ($WithTrainer -or $images.ContainsKey('trainer')) { $services += 'trainer' }
 Invoke-Docker -DockerArgs (@('compose','--profile','ml','build') + $services)
 Invoke-Docker -DockerArgs (@('compose','--profile','ml','up','-d','--no-build','--wait','--wait-timeout','180') + $services)

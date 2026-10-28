@@ -6,6 +6,7 @@ from .liquidity import SpreadHistory
 
 def recovery_detail(health, now):
     labels = {
+        "RECORDING_UNAVAILABLE": "Recording is unavailable; check recording and storage health.",
         "DNS_RESOLUTION": "Exchange hostname resolution failed.",
         "TLS_CERTIFICATE": "Exchange certificate verification failed; verification remains enabled.",
         "NETWORK_TIMEOUT": "The exchange request timed out.",
@@ -55,6 +56,20 @@ def warnings(settings, store, scanner, recorder, now):
             "Discord cannot receive new setup cards.",
             "Check FLOW_RESEARCH_ALERTS and the signal webhook configuration.",
             severity="error",
+        )
+
+    capacity = store.get("capacity_health", {})
+    if (
+        capacity.get("state") == "PROTECTED_CAPACITY_BLOCKED"
+        and 0 <= now - capacity.get("at_ms", 0) <= 180_000
+    ):
+        add(
+            "PROTECTED_CAPACITY_BLOCKED",
+            "Protected evidence fills the storage budget",
+            "Safe cleanup cannot currently free enough space. Recording remains blocked while required evidence is preserved.",
+            "Review storage capacity. Outcome processing retries automatically; restarting the application or syncing the clock does not increase available recording space.",
+            severity="error",
+            at_ms=capacity.get("at_ms"),
         )
 
     clock = store.get("clock_health", {})

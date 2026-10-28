@@ -92,3 +92,13 @@ procedure. Inspect failures rather than repeatedly recreating containers.
   immutable evidence as if it had been continuously recorded.
 
 See the [operator runbook](USER_RUNBOOK.md) for detailed host/network guidance.
+
+## Storage upkeep when training is paused
+
+`maintenance` starts with the default stack and uses the same persistent volume.
+It processes existing local outcomes and safe retention without starting the
+trainer or making exchange/Discord requests. Inspect `docker compose logs --tail
+30 maintenance` for progress, busy deferrals or capacity blockers. Keep it running
+when stopping `trainer` to reduce memory. Never remove protected evidence to make
+a stalled recorder appear healthy. Permanently full protected storage requires a
+capacity decision; the application reports that state explicitly.

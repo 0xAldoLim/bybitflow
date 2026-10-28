@@ -73,3 +73,50 @@ def test_sqlite_telemetry_is_bounded_and_contains_no_sql_or_private_payload(tmp_
     assert "not-for-diagnostics" not in json.dumps(metrics)
     assert all(len(v) <= 256 for v in store.db.health.samples.values())
     store.close()
+
+
+async def test_diagnostic_pump_never_contends_with_critical_owner(tmp_path):
+    store = Store(tmp_path)
+    store.enable_runtime()
+    for index in range(100):
+        store.put("runtime_health", {"index": index})
+        store.put("critical-receipt", {"index": index})
+        await asyncio.sleep(0.001)
+    await store.stop_runtime()
+    assert store.get("runtime_health") == {"index": 99}
+    assert store.get("critical-receipt") == {"index": 99}
+    assert store.db.health.snapshot().get("sqlite_busy_events", 0) == 0
+    store.close()
+
+
+async def test_diagnostic_pump_cannot_commit_an_open_critical_transaction(tmp_path):
+    store = Store(tmp_path)
+    store.enable_runtime()
+    reader = sqlite3.connect(tmp_path / "research.sqlite")
+    store.db.execute("INSERT INTO kv VALUES('critical-uncommitted','{}')")
+    store.put("runtime_health", {"fresh": True})
+    await asyncio.sleep(0.08)
+    assert store.db.in_transaction
+    assert reader.execute("SELECT 1 FROM kv WHERE key='critical-uncommitted'").fetchone() is None
+    store.db.rollback()
+    await store.stop_runtime()
+    assert store.get("critical-uncommitted") is None
+    assert store.get("runtime_health") == {"fresh": True}
+    reader.close()
+    store.close()
+
+
+async def test_supervisor_diagnostics_cannot_kill_recovery_on_sqlite_contention(tmp_path):
+    store = Store(tmp_path)
+    store.enable_runtime()
+    blocker = sqlite3.connect(tmp_path / "research.sqlite")
+    blocker.execute("BEGIN IMMEDIATE")
+    store.put("supervisor:storage", {"state": "RECOVERING"})
+    store.put("storage_health", {"state": "STORAGE_BACKPRESSURE"})
+    await asyncio.sleep(0.04)
+    assert store.get("supervisor:storage")["state"] == "RECOVERING"
+    blocker.rollback()
+    blocker.close()
+    await store.stop_runtime()
+    assert store.get("storage_health")["state"] == "STORAGE_BACKPRESSURE"
+    store.close()

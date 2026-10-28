@@ -12,7 +12,9 @@ workflows. Historical reports describe their dated deployments.
 
 Run one collector and at most one ML worker per persistent data directory. Compose
 uses Linux containers, a 4 GB/two-CPU desk limit, and a 2 GB/one-CPU trainer limit.
-The trainer is enabled by `--profile ml`. Both services use `restart: unless-stopped`.
+The trainer is enabled by `--profile ml`. The default local-only `maintenance`
+service keeps outcome materialization and safe retention running when training
+is paused. These services use `restart: unless-stopped`.
 Measure memory, disk, and throughput before increasing deep subscriptions from the
 default eight toward the supported maximum of 30. A small VPS is not a measured
 capacity guarantee for that workload.

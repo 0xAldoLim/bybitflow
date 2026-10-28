@@ -22,6 +22,8 @@ async def rest_batch(*awaitables):
 
 
 def error_category(exc):
+    if isinstance(exc, RuntimeError) and str(exc) == "Recording circuit open":
+        return "RECORDING_UNAVAILABLE"
     chain, pending, seen = [], [exc], set()
     while pending:
         item = pending.pop()

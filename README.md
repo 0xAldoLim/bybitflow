@@ -54,8 +54,8 @@ REST and WebSocket endpoints must be reachable from the containers.
 Discord delivery requires permission to create two channel webhooks. No exchange
 trading keys or paid chart subscription are required.
 
-The default limits are 4 GB/two CPUs for the desk and 2 GB/one CPU for the optional
-trainer. Docker and the operating system need additional resources. Begin with
+The default limits are 4 GB/two CPUs for the desk, 512 MB/one-quarter CPU for
+local storage upkeep, and 2 GB/one CPU for the optional trainer. Docker and the operating system need additional resources. Begin with
 the default eight deep subscriptions and measure resource use before increasing
 them. Continuous collection requires an awake host and a running Docker engine.
 The [memory audit](docs/MEMORY_AUDIT.md) explains application memory, file cache
@@ -276,6 +276,18 @@ remain in force. See [ML research](docs/ML_RESEARCH.md) for algorithms, limitati
 and recovery status fields.
 
 ## Storage and cleanup
+
+The default `maintenance` service processes existing recorded outcomes and runs
+safe retention independently of ML training. It has no network access and does
+not train or promote models. Pausing `trainer` therefore does not pause required
+storage upkeep. It retries busy database work and processes bounded chronological
+batches, retaining unresolved evidence and the existing completeness rules.
+
+```sh
+docker compose ps maintenance
+docker compose logs --tail 30 maintenance
+```
+
 
 Application data lives in the persistent `research-data` Docker volume. Stopping
 services preserves it. Managed retention releases eligible raw recordings while
