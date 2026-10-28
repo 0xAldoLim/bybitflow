@@ -71,16 +71,8 @@ $reportRoot = Join-Path $repoRoot 'data\deployment-audits'
 New-Item -ItemType Directory -Force -Path $reportRoot | Out-Null
 $reportPath = Join-Path $reportRoot ($commit + '.json')
 $before | ConvertTo-Json -Depth 15 | Set-Content -LiteralPath ($reportPath + '.before')
-$images = @{}
-foreach ($name in @('desk','trainer','maintenance')) {
-    $id = [string](& docker compose --profile ml ps -q $name)
-    if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect existing services' }
-    $id = $id.Trim()
-    if ($id) {
-        $images[$name] = (& docker inspect --format '{{.Image}}' $id).Trim()
-        if ($LASTEXITCODE -ne 0) { throw 'Cannot capture rollback image' }
-    }
-}
+. (Join-Path $PSScriptRoot 'docker-state.ps1')
+$images = Read-RunningImages
 $images | ConvertTo-Json | Set-Content -LiteralPath ($reportPath + '.rollback-images.json')
 $env:FLOW_CODE_COMMIT = $commit
 # Preserve an intentionally disabled trainer unless explicitly requested.
