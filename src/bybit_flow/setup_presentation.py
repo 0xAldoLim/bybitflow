@@ -44,6 +44,13 @@ def embed(signal, dashboard_url):
     def field(name, value, inline=False):
         fields.append(dict(name=name, value=str(value)[:850], inline=inline))
 
+    exception = e.get("discord_opposition_exception", {})
+    if exception.get("allowed"):
+        field(
+            "Why an opposite setup is allowed",
+            "\n".join(r["explanation"] for r in exception.get("reviews", [])),
+        )
+
     price = snap.get("executable_price", q.get("executable_price"))
     entry = (
         f"{price:g} observed {'ask' if s.direction == 'LONG' else 'bid'}"

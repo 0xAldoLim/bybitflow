@@ -614,6 +614,11 @@ class Notifier:
 
     def opposing_visible_setup(self, plan):
         """Presentation guard only: every original plan stays independently monitored."""
+        from .notification_conflicts import POLICY, assess
+
+        evidence = plan.setdefault("evidence", {})
+        evidence.pop("discord_opposition_exception", None)
+        reviews = []
         for ident, raw in self.store.db.execute(
             "SELECT id,payload FROM signals WHERE symbol=? AND "
             "state NOT IN ('INVALIDATED','EXPIRED','RESOLVED') AND id!=?",
@@ -622,22 +627,28 @@ class Notifier:
             other = json.loads(raw)
             if (
                 other["direction"] == plan["direction"]
-                or other.get("horizon_profile", "LEGACY") != plan.get("horizon_profile", "LEGACY")
                 or (other.get("holding_deadline_ms") or other["expires_ms"]) <= now_ms()
             ):
                 continue
             if any(self.was_initially_delivered(ident, c) for c in ("research", "validated")):
-                self.store.put(
-                    "discord_conflict:" + plan["id"],
-                    dict(
-                        policy="same-horizon-opposition-v1",
-                        blocking_signal_id=ident,
-                        at_ms=now_ms(),
-                        reason="OPPOSING_VISIBLE_ACTIVE_SETUP",
-                        lifecycle_changed=False,
-                    ),
-                )
-                return ident
+                review = assess(plan, other, now_ms(), self.settings)
+                reviews.append(review)
+                if not review["allowed"]:
+                    self.store.put(
+                        "discord_conflict:" + plan["id"],
+                        dict(
+                            policy=POLICY,
+                            blocking_signal_id=ident,
+                            at_ms=now_ms(),
+                            reason="OPPOSING_VISIBLE_ACTIVE_SETUP",
+                            review=review,
+                            lifecycle_changed=False,
+                        ),
+                    )
+                    return ident
+        if reviews:
+            evidence["discord_opposition_exception"] = dict(policy=POLICY, allowed=True, reviews=reviews)
+            self.store.put("discord_conflict:" + plan["id"], evidence["discord_opposition_exception"])
         return None
 
     def initial_delivery_block(self, signal_id, signal=None):
@@ -656,7 +667,18 @@ class Notifier:
         # Reserve the existing HTTP timeout, not extra time for the trading plan.
         if remaining < INITIAL_REQUEST_TIMEOUT * 1000:
             return "blocked:entry-window-too-short"
-        if self.opposing_visible_setup(plan):
+        if signal is not None:
+            # The last-mile runtime may have refreshed evidence since Store.signal;
+            # lifecycle state, prices and deadlines still come from the durable plan.
+            plan["evidence"] = dict(signal.evidence)
+        blocking = self.opposing_visible_setup(plan)
+        if signal is not None:
+            signal.evidence.pop("discord_opposition_exception", None)
+            if not blocking and plan["evidence"].get("discord_opposition_exception"):
+                signal.evidence["discord_opposition_exception"] = plan["evidence"][
+                    "discord_opposition_exception"
+                ]
+        if blocking:
             return "blocked:opposing-visible-active-setup"
         return None
 

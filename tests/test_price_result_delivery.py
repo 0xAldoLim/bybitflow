@@ -178,7 +178,7 @@ async def test_visible_opposite_same_horizon_blocked_without_lifecycle_changes(
 
 
 @pytest.mark.parametrize(
-    "condition", ["other-horizon", "never-sent", "retired-destination", "same-direction", "deadline-passed"]
+    "condition", ["never-sent", "retired-destination", "same-direction", "deadline-passed"]
 )
 def test_conflict_guard_is_narrow(settings, signal, notification_clock, condition):
     configured(settings)
@@ -190,9 +190,7 @@ def test_conflict_guard_is_narrow(settings, signal, notification_clock, conditio
         initial(store, signal)
     new = signal.model_copy(deep=True)
     new.id, new.direction = "new", "SHORT"
-    if condition == "other-horizon":
-        new.horizon_profile = "SWING"
-    elif condition == "retired-destination":
+    if condition == "retired-destination":
         store.put(f"discord_initial_webhook_id:{signal.id}", "old")
     elif condition == "same-direction":
         new.direction = "LONG"

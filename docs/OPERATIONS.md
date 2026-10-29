@@ -108,7 +108,14 @@ These posts follow the same initial-visibility rule and are never blindly resent
 after an uncertain request. Ambiguous recovered paths do not claim a win.
 Same-symbol, same-horizon opposite alerts are blocked while a visible setup is
 still active; its entry deadline may have passed while tracking continues.
-Other horizons retain conflict disclosures. Related-card statuses are snapshots
+Other horizons also require justification: only a shorter counter-horizon with
+fresh strong existing confirmation, a distinct causal frozen structure, and every
+entry-zone/stop/target level strictly between the original stop and TP1 can be
+published. Its deadline cannot exceed the original's. The original must have fresh
+active monitoring and stable health. Missing, stale or conflicting evidence blocks
+publication regardless of score. This conservative notification policy is not a
+validated trading edge. Every approved exception includes its reason on the card
+and is rechecked immediately before HTTP dispatch. Related-card statuses are snapshots
 at publication; each original card carries its own current result. These rules
 change notification presentation, not independent lifecycle or ML evidence.
 Monitoring pause/resume cards use `FLOW_MONITORING_WEBHOOK` and
