@@ -70,12 +70,14 @@ async def test_transient_stop_wick_and_durable_terminal(settings, signal, failur
         store.db.execute("UPDATE terminal_events SET next_ms=0")
     await notifier.retry_terminals()
     await notifier.retry_terminals()
-    assert len(attempts) == 2 and all(r.method == "PATCH" for r in attempts)
-    card = json.loads(attempts[-1].content)["embeds"][0]
+    assert [r.method for r in attempts] == ["PATCH", "PATCH", "POST"]
+    card = json.loads(attempts[1].content)["embeds"][0]
     assert "Updated original card" in card["description"]
     assert "First posted <t:0:f>" in card["description"]
     assert any("Entry 100" in f["value"] and "SL 95" in f["value"] for f in card["fields"])
-    assert store.db.execute("SELECT payload,message_id FROM outbox").fetchone()[:] == ("{}", "123")
+    assert store.db.execute("SELECT payload,message_id FROM outbox WHERE key LIKE '%:initial'").fetchone()[
+        :
+    ] == ("{}", "123")
     assert store.db.execute("SELECT notification_status FROM terminal_events").fetchone()[0] == "sent"
     assert store.get("discord_transport:signals")["http_status"] == 200
     assert store.get("discord_transport:signals")["status"] == "sent"

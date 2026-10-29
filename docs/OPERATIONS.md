@@ -102,7 +102,16 @@ A child mentioned in another setup's card is not independently delivered.
 
 Terminal events are persisted before an independent worker edits the original
 signals card. Editing a known message can be retried without creating another
-initial alert. Monitoring pause/resume cards use `FLOW_MONITORING_WEBHOOK` and
+initial alert. Evidenced TP1/stop results use explicit `TP1 REACHED` / `STOP REACHED`
+titles and additionally post one result notification through the durable outbox.
+These posts follow the same initial-visibility rule and are never blindly resent
+after an uncertain request. Ambiguous recovered paths do not claim a win.
+Same-symbol, same-horizon opposite alerts are blocked while a visible setup is
+still active; its entry deadline may have passed while tracking continues.
+Other horizons retain conflict disclosures. Related-card statuses are snapshots
+at publication; each original card carries its own current result. These rules
+change notification presentation, not independent lifecycle or ML evidence.
+Monitoring pause/resume cards use `FLOW_MONITORING_WEBHOOK` and
 deduplicate by setup ID and outage start. Catch-up that finds a terminal result
 does not send a resume first. Notification clustering never merges or terminates
 the underlying plans. Switching webhooks does not republish old initials.

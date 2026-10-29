@@ -11,7 +11,15 @@ Version 2.2 adds one Setup Score, price-response diagnostics, horizon-based
 target reachability, stop viability and a fresh execution check before Discord
 delivery. Cards distinguish the execution target from the structural objective.
 Ranking and shared market exposure are informational; every distinct valid
-opportunity may be sent. There is no daily signal quota or top-N alert cap.
+opportunity may be sent, subject to notification deduplication. A delivered active
+setup blocks opposite-direction alerts for the same symbol and holding horizon;
+internal monitoring continues independently. Different horizons retain explicit
+conflict labels. There is no daily signal quota or top-N alert cap.
+
+Observed TP1 and stop results edit the original Discord card and send one result
+notification. Result posts require a successful initial card in the current
+signals destination. Ambiguous delivery is not automatically resent. Price-path
+results describe the published plan; they do not verify account fills or profit.
 See the [v2.2 assumptions and limitations](docs/V22_SETUP_QUALITY.md).
 The [fixed retrospective comparison](docs/V22_VERIFICATION.md) does not establish
 improved profitability; full target-construction performance remains unmeasured.

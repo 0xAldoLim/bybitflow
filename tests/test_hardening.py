@@ -443,9 +443,11 @@ def test_related_setup_cards_show_old_and_new_without_changing_plans(signal, rel
     assert card["title"].startswith("NEW SETUP [" + label + "]")
     fields = {f["name"]: f["value"] for f in card["fields"]}
     assert "101" in fields["Entry"]
-    assert "Entry 100" in fields["Previous setup [unchanged]"]
-    assert "SL 95" in fields["Previous setup [unchanged]"]
-    assert "CORE_INTRADAY" in fields["Previous setup [unchanged]"]
+    assert "Entry 100" in fields["Previous setup [at publication]"]
+    assert "SL 95" in fields["Previous setup [at publication]"]
+    assert "CORE_INTRADAY" in fields["Previous setup [at publication]"]
     assert "separately monitored" in fields["Monitoring"]
+    assert "snapshot at publication" in fields["Monitoring"]
+    assert "not an instruction to close or reverse" in fields["Monitoring"]
     assert before == (old.model_dump_json(), new.model_dump_json())
     assert len(json.dumps(card)) < 6000

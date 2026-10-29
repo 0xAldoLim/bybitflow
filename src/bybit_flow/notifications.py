@@ -16,6 +16,19 @@ def iso(ms):
     return datetime.fromtimestamp(ms / 1000, timezone.utc).isoformat()
 
 
+def price_result(signal):
+    """Classify an evidenced price result, never an account fill or ambiguous bar."""
+    event = signal.evidence.get("terminal_event") or {}
+    if event.get("ambiguous") or event.get("method") not in {"LIVE_EXECUTED_TRADE", "CLOSED_1M_OHLC"}:
+        return None
+    outcome = signal.evidence.get("primary_outcome")
+    if outcome == "TARGET" and signal.state == "RESOLVED":
+        return "TARGET"
+    if outcome == "STOP" and signal.state == "INVALIDATED":
+        return "STOP"
+    return None
+
+
 def embed(signal, dashboard_url):
 
     s = signal
@@ -42,6 +55,9 @@ def embed(signal, dashboard_url):
         "INVALIDATED": "SETUP WITHDRAWN",
         "RESOLVED": "CLOSED",
     }.get(s.state, s.state)
+    result = price_result(s)
+    if result:
+        status = "TP1 REACHED" if result == "TARGET" else "STOP REACHED"
     if tracking_end:
         status = "TRACKING ENDED"
 
@@ -89,6 +105,23 @@ def embed(signal, dashboard_url):
         terminal_reason = s.coverage.get("terminal_reason", reason)
         if terminal_reason == "TRADINGVIEW_SUBSYSTEM_RETIRED":
             terminal_reason = "TradingView subsystem retired"
+        if result:
+            event = s.evidence["terminal_event"]
+            level = s.tp1 if result == "TARGET" else s.stop
+            terminal_reason = f"{'First target' if result == 'TARGET' else 'Planned stop'} {level:g} reached on {s.source.capitalize()}."
+            at = event.get("effective_ms")
+            if at is not None:
+                terminal_reason += f"\nObserved <t:{at // 1000}:F>"
+            if event["method"] == "CLOSED_1M_OHLC":
+                terminal_reason += "\nRecovered from closed 1-minute candles; time is a candle-end bound."
+            distance = abs(s.entry - s.stop)
+            if distance > 0 and s.evidence.get("observed_entry_ms") is not None:
+                move = (1 if s.direction == "LONG" else -1) * (level - s.entry)
+                field(
+                    "Planned price result",
+                    f"{100 * move / s.entry:+.2f}% · {move / distance:+.2f}R gross, before fees",
+                )
+            terminal_reason += "\nPrice-path result only; account fills and realized profit are not verified."
         field("Update", terminal_reason)
 
         field("Original plan", f"Entry {s.entry:g} · SL {s.stop:g} · TP1 {s.tp1:g} · TP2 {s.tp2:g}")
@@ -336,12 +369,12 @@ def related_embed(signal, primary, relation, dashboard_url, cluster_id):
         0, dict(name="Relationship [" + category + "]", value=relationship_note, inline=False)
     )
 
-    card["fields"].append(dict(name="Previous setup [unchanged]", value=old_plan, inline=False))
+    card["fields"].append(dict(name="Previous setup [at publication]", value=old_plan, inline=False))
 
     card["fields"].append(
         dict(
             name="Monitoring",
-            value="Both setups retain their original stops, targets and deadlines and remain separately monitored.",
+            value="Both setups retain their original stops, targets and deadlines and are separately monitored until terminal. The previous status is a snapshot at publication; check each original card for its current result. This is not an instruction to close or reverse an existing position.",
             inline=False,
         )
     )
@@ -539,6 +572,11 @@ class Notifier:
                 # Never post a standalone terminal card when the original
                 # destination is unknown or retired. Internal tracking continues.
                 status = "blocked:no-visible-initial"
+            if status == "sent":
+                # PATCH is idempotent, but an edit does not notify Discord users.
+                # Attempt before terminal commit: a crash resumes here safely,
+                # while the durable outbox prevents a duplicate result POST.
+                await self.send_price_result(signal)
             with self.store.db:
                 self.store.db.execute(
                     "UPDATE terminal_events SET notification_status=?,attempts=attempts+1,next_ms=? WHERE signal_id=?",
@@ -546,6 +584,61 @@ class Notifier:
                 )
             if status == "sent":
                 self.store.put("last_terminal_delivery_ms", now_ms())
+
+    async def send_price_result(self, signal):
+        from .models import Signal
+
+        saved = self.store.db.execute("SELECT payload FROM signals WHERE id=?", (signal.id,)).fetchone()
+        if not saved:
+            return "blocked:no-price-result"
+        signal = Signal.model_validate_json(saved[0])
+        if not price_result(signal):
+            return "blocked:no-price-result"
+        channel = next(
+            (c for c in ("research", "validated") if self.was_initially_delivered(signal.id, c)), None
+        )
+        if channel is None:
+            return "blocked:no-visible-initial"
+        secret = self.settings.research_webhook.get_secret_value()
+        if not secret:
+            return "dry-run"
+        delivery = self.store.get(f"discord_initial_delivery:{channel}:{signal.id}", {})
+        original_webhook_id = delivery.get("webhook_id") or self.store.get(
+            f"discord_initial_webhook_id:{signal.id}"
+        )
+        path = urlparse(secret).path.split("/")
+        if not original_webhook_id or len(path) <= 3 or original_webhook_id != path[3]:
+            return "blocked:no-visible-initial"
+        payload = embed(signal, self.settings.dashboard_url)
+        return await self.deliver(f"{channel}:{signal.id}:price-result", signal.id, payload, secret)
+
+    def opposing_visible_setup(self, plan):
+        """Presentation guard only: every original plan stays independently monitored."""
+        for ident, raw in self.store.db.execute(
+            "SELECT id,payload FROM signals WHERE symbol=? AND "
+            "state NOT IN ('INVALIDATED','EXPIRED','RESOLVED') AND id!=?",
+            (plan["symbol"], plan["id"]),
+        ).fetchall():
+            other = json.loads(raw)
+            if (
+                other["direction"] == plan["direction"]
+                or other.get("horizon_profile", "LEGACY") != plan.get("horizon_profile", "LEGACY")
+                or (other.get("holding_deadline_ms") or other["expires_ms"]) <= now_ms()
+            ):
+                continue
+            if any(self.was_initially_delivered(ident, c) for c in ("research", "validated")):
+                self.store.put(
+                    "discord_conflict:" + plan["id"],
+                    dict(
+                        policy="same-horizon-opposition-v1",
+                        blocking_signal_id=ident,
+                        at_ms=now_ms(),
+                        reason="OPPOSING_VISIBLE_ACTIVE_SETUP",
+                        lifecycle_changed=False,
+                    ),
+                )
+                return ident
+        return None
 
     def initial_delivery_block(self, signal_id, signal=None):
         current = self.store.db.execute(
@@ -563,6 +656,8 @@ class Notifier:
         # Reserve the existing HTTP timeout, not extra time for the trading plan.
         if remaining < INITIAL_REQUEST_TIMEOUT * 1000:
             return "blocked:entry-window-too-short"
+        if self.opposing_visible_setup(plan):
+            return "blocked:opposing-visible-active-setup"
         return None
 
     async def deliver_initial(self, key, signal, payload, secret):
