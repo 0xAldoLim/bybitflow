@@ -6,7 +6,7 @@ const escape = (value) =>
     (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c],
   );
 const number = (n, digits = 2) =>
-  n == null ? "—" : Number(n).toLocaleString("en-US", { maximumFractionDigits: digits });
+  n == null || !Number.isFinite(Number(n)) ? "—" : Number(n).toLocaleString("en-US", { maximumFractionDigits: digits });
 const utc = (n) => (n ? new Date(n).toISOString().replace("T", " ").slice(0, 19) + " UTC" : "—");
 const money = (n) =>
   n >= 1e9 ? "$" + number(n / 1e9) + "B" : n >= 1e6 ? "$" + number(n / 1e6) + "M" : "$" + number(n);
@@ -29,17 +29,71 @@ function factForm() {
     )}</div><label><input name="major_event" type="checkbox"> Major event invalidates current strategy assumptions (blocks affected setups)</label><label><input name="reviewed" type="checkbox" required> Source reviewed; observation and limitations recorded accurately.</label><button type="submit">Save source-attributed fact</button><p id="fact-saved" role="status"></p></form>`;
 }
 async function api(path, data) {
-  const r = await fetch(
-    "/api/" + path,
-    data
-      ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) }
-      : {},
-  );
-  if (!r.ok) throw Error((await r.json()).detail || `HTTP ${r.status}`);
-  return r.json();
+  let r;
+  try {
+    r = await fetch("/api/" + path, {
+      ...(data ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) } : {}),
+      signal: AbortSignal.timeout(25000),
+    });
+  } catch (e) {
+    throw Error(e.name === "TimeoutError" || e.name === "AbortError"
+      ? "The dashboard request timed out. Collection may still be running; retry the view."
+      : "Cannot reach the dashboard service. Check Docker and retry.");
+  }
+  const body = await r.text();
+  let value;
+  try { value = JSON.parse(body); }
+  catch { throw Error(`The dashboard service returned an invalid response (HTTP ${r.status}). Retry the view.`); }
+  if (!r.ok) throw Error(typeof value.detail === "string" ? value.detail : `Dashboard request failed (HTTP ${r.status}).`);
+  return value;
 }
 function table(columns, rows) {
-  return `<table><thead><tr>${columns.map((c) => `<th>${escape(c)}</th>`).join("")}</tr></thead><tbody>${rows.map((r) => `<tr>${r.map((c) => `<td>${c}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
+  return `<div class="table-scroll"><table><thead><tr>${columns.map((c) => `<th>${escape(c)}</th>`).join("")}</tr></thead><tbody>${rows.map((r) => `<tr>${r.map((c) => `<td>${c}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
+}
+function collectionSummary(data) {
+  const h = data.health || {}, m = h.recorder_metrics || {}, scanner = data.scanner || {};
+  const used = data.storage?.used_bytes, budget = data.storage?.budget_bytes;
+  const pressure = m.state && m.state !== "NORMAL";
+  const items = [
+    ["Recorded events", number(h.records_written, 0), "This collector run · resets on restart"],
+    ["Recorder", h.recorder ? (pressure ? "Under load" : "Recording") : "Paused", `${number(h.queued ?? m.queue_depth, 0)} queued · ${number(m.events_dropped, 0)} dropped`],
+    ["Selected markets", number(scanner.deep_selected ?? scanner.deep_symbols?.length, 0), `${data.exchange || scanner.exchange || "Source pending"} · ${number(scanner.eligible, 0)} eligible`],
+    ["Research storage", budget > 0 ? `${number(100 * used / budget, 1)}%` : "—", `${number(used / 1e9)} / ${number(budget / 1e9)} GB`],
+  ];
+  return `<div class="metrics">${items.map(([label, value, detail]) => `<div class="metric"><label>${escape(label)}</label><b>${escape(value)}</b><small>${escape(detail)}</small></div>`).join("")}</div>`;
+}
+function warningSummary(warnings, expanded = false) {
+  const card = w => `<article class="runtime-warning ${w.severity === "error" ? "runtime-error" : ""}"><strong>${escape(w.title)}</strong><p>${escape(w.message)}</p><p class="warning-action">${escape(w.action)}</p></article>`;
+  const errors = warnings.filter(w => w.severity === "error"), advisory = warnings.filter(w => w.severity !== "error");
+  return errors.map(card).join("") + (advisory.length ? `<details class="warning-summary"${expanded ? " open" : ""}><summary>${advisory.length} operational ${advisory.length === 1 ? "advisory" : "advisories"} · ${advisory.map(w => escape(w.title)).join(" · ")}</summary><div>${advisory.map(card).join("")}</div></details>` : "");
+}
+function priceResult(s) {
+  const e = s.evidence || {}, event = e.terminal_event || {};
+  if (event.ambiguous || !["LIVE_EXECUTED_TRADE", "CLOSED_1M_OHLC"].includes(event.method)) return null;
+  return s.state === "RESOLVED" && e.primary_outcome === "TARGET" ? "TP1 REACHED" :
+    s.state === "INVALIDATED" && e.primary_outcome === "STOP" ? "STOP REACHED" : null;
+}
+const reportCache = new Map();
+function reportPanel(title, path) {
+  return panel(title, `<details data-report="${escape(path)}"><summary>Load ${escape(title.toLowerCase())}</summary><div class="report-content" role="status"></div></details>`, "On demand · keeps routine refreshes light");
+}
+function bindReports() {
+  document.querySelectorAll("details[data-report]").forEach(detail => detail.addEventListener("toggle", async () => {
+    if (!detail.open) return;
+    const path = detail.dataset.report, content = detail.querySelector(".report-content");
+    content.textContent = "Loading report… Live collection continues independently.";
+    if (!reportCache.has(path)) reportCache.set(path, api(path).then(data => ({ data, loaded: Date.now() })));
+    try {
+      const { data, loaded } = await reportCache.get(path);
+      content.innerHTML = `<p class="muted">Loaded ${escape(utc(loaded))} · cached for this page session</p>${json(data)}`;
+    } catch (e) {
+      content.textContent = e.message;
+      const retry = document.createElement("button");
+      retry.textContent = "Retry report";
+      retry.addEventListener("click", () => { reportCache.delete(path); detail.open = false; detail.open = true; });
+      content.append(retry);
+    }
+  }));
 }
 function funnelPanel(f) {
   const metrics = [
@@ -61,6 +115,7 @@ function signalTable(rows) {
       return net == null ? "TRACKING ENDED · RESULT UNKNOWN" :
         `TRACKING ENDED · EST. ${net > 0 ? "PROFIT" : net < 0 ? "LOSS" : "FLAT"} ${net >= 0 ? "+" : ""}${number(net, 3)}R`;
     }
+    if (priceResult(s)) return priceResult(s);
     return s.state === "ALERTED" && s.coverage?.monitoring === "paused" ? "MONITORING PAUSED" : s.state;
   };
   return rows.length
@@ -177,21 +232,25 @@ function depthChart(book) {
   return `<svg viewBox="0 0 900 230" role="img" aria-label="Cumulative visible bid and ask notional by price"><line x1="45" x2="855" y1="195" y2="195" stroke="#252d39"/><polyline fill="none" stroke="#65d2b4" stroke-width="2" points="${points(bids)}"/><polyline fill="none" stroke="#ef929c" stroke-width="2" points="${points(asks)}"/><text x="45" y="220">Price ${number(low, 8)}</text><text x="750" y="220">${number(high, 8)}</text><text x="45" y="20">Cumulative visible notional · max ${money(max)}</text></svg>`;
 }
 let generation = 0;
-async function render() {
+let lastView = null;
+async function render(background = false) {
   const gen = ++generation;
   $("#error").textContent = "";
+  $("#refresh-state").textContent = "Refreshing…";
+  $("#view").setAttribute("aria-busy", "true");
   try {
     const route = location.hash.slice(1) || "overview",
       [page, id] = route.split("/");
     const data = await api("overview");
     if (gen !== generation) return;
     $("#status").textContent = data.scanner.state;
+    $("#status").className = "pill";
+    $("#system-summary").innerHTML = collectionSummary(data);
     $("#clock").textContent = utc(data.at_ms);
     const warnings = data.warnings || [];
     $("#runtime-warnings").hidden = !warnings.length;
-    $("#runtime-warnings").innerHTML = warnings.map(w =>
-      `<article class="runtime-warning ${w.severity === "error" ? "runtime-error" : ""}"><strong>${escape(w.title)}</strong><p>${escape(w.message)}</p><p class="warning-action">${escape(w.action)}</p></article>`
-    ).join("");
+    $("#runtime-warnings").innerHTML = warningSummary(warnings, Boolean(document.querySelector("#runtime-warnings details[open]")));
+    if (background && document.querySelector("#view details[open]")) return;
     document.querySelectorAll("nav a").forEach((a) => a.classList.toggle("active", a.hash === "#" + page));
     const titles = {
       overview: "Market overview",
@@ -211,11 +270,11 @@ async function render() {
     let body = "";
     if (page === "overview") {
       const d = data.decisions || { opportunities: [], active: [], blocked: [] };
-      const f = await api("forward");
+      let f;
+      try { f = await api("forward"); } catch (e) { f = { unavailable: e.message }; }
       const critical = warnings.filter(w => w.severity === "error").length;
       const notice = `${critical} critical · ${warnings.length - critical} warnings`;
-      body = `<div class="metrics"><div class="metric"><label>RECORDED EVENTS</label><b>${number(data.health?.records_written, 0)}</b><small>This collector run · resets on restart; saved recordings are retained by the storage policy</small></div></div>` +
-        panel("Operator priorities", `<p>${escape(notice)}</p><p>${warnings.length ? "Review the measured warnings above before relying on current alerts." : "No current operator warnings. UNKNOWN evidence remains unqualified."}</p>`) +
+      body = panel("Operator priorities", `<p>${escape(notice)}</p><p>${warnings.length ? "Review the measured warnings above before relying on current alerts." : "No current operator warnings. UNKNOWN evidence remains unqualified."}</p>`) +
         panel("Current valid opportunities", d.opportunities.length ? table(
           ["Rank", "Market / horizon", "Setup", "Published score / E / T", "Net RR", "Reach / stop", "Impact / OFI", "Shared direction", "Entry deadline"],
           d.opportunities.map(r => [number(r.rank, 0), `<a href="#signal/${encodeURIComponent(r.id)}">${escape(r.symbol)} ${escape(r.direction)}</a><br>${escape(r.horizon)}`, escape(r.family),
@@ -226,9 +285,9 @@ async function render() {
           d.active.map(r => [escape(`${r.symbol} ${r.direction}`), Object.entries(r.original_plan).map(([k,v]) => `${escape(k)} ${number(v, 8)}`).join(" · "), number(r.published_score),
             escape(r.current_health.state || "UNKNOWN"), `${number(r.current_price, 8)} / ${number(r.progress_r)}R`, `${escape(r.monitoring)} · ${escape(r.impact)} / ${escape(r.ofi)}`])) : empty("No active plans", "Setups appear after causal generation and confirmation."), "Current health never rewrites the published score") +
         panel("Blocked setups", d.blocked.length ? table(["Market", "Reasons"], d.blocked.map(r => [escape(r.symbol), escape(r.blocked_reasons.join("; "))])) : empty("No blocked setup in the active set", "Deep diagnostics remain available in the signal journal.")) +
-        panel("Forward policy observations", `<p>${escape(f.label)}</p><p>${number(f.opportunities, 0)} prospective opportunities · ${escape(f.epoch ? utc(f.epoch.start_ms) : "Begins after this release is deployed")}</p>` +
-          table(["Policy / provenance / source", "Complete / observed", "Mean / median net R", "MFE / MAE", "Evidence"], Object.entries(f.policies).map(([key,v]) => [escape(key), `${v.accepted.complete_samples} / ${v.all_observed}`, `${number(v.accepted.mean_net_r)} / ${number(v.accepted.median_net_r)}`, `${number(v.accepted.mean_mfe)} / ${number(v.accepted.mean_mae)}`, escape(v.accepted.status)])) +
-          `<details><summary>Score bands and cohorts</summary>${json({score_bands: f.score_bands, cohorts: f.cohorts, limitation: f.limitation})}</details>`, "Descriptive observations · no auto promotion") +
+        (f.unavailable ? panel("Forward policy observations", empty("Report temporarily unavailable", f.unavailable)) : panel("Forward policy observations", `<p>${escape(f.label)}</p><p>${number(f.opportunities, 0)} prospective opportunities · ${escape(f.epoch ? utc(f.epoch.start_ms) : "Begins after this release is deployed")}</p>` +
+          table(["Policy / provenance / source", "Complete / observed", "Mean / median net R", "MFE / MAE", "Evidence"], Object.entries(f.policies || {}).map(([key,v]) => [escape(key), `${v.accepted.complete_samples} / ${v.all_observed}`, `${number(v.accepted.mean_net_r)} / ${number(v.accepted.median_net_r)}`, `${number(v.accepted.mean_mfe)} / ${number(v.accepted.mean_mae)}`, escape(v.accepted.status)])) +
+          `<details><summary>Score bands and cohorts</summary>${json({score_bands: f.score_bands, cohorts: f.cohorts, limitation: f.limitation})}</details>`, "Descriptive observations · no auto promotion")) +
         panel("Storage outlook", `<p>${number(data.storage?.used_bytes / 1e9)} / ${number(data.storage?.budget_bytes / 1e9)} GB · observed-growth days to budget: ${escape(data.storage_growth?.days_to_budget ?? "UNKNOWN")}</p><details><summary>Category growth</summary>${json(data.storage_growth || {status: "UNKNOWN"})}</details>`);
     } else if (page === "watchlist")
       body = panel(
@@ -240,12 +299,13 @@ async function render() {
       const delivery = await api("delivery");
       const funnel = await api("funnel");
       const { transport_health, ...initialDelivery } = delivery;
-      body = funnelPanel(funnel) + panel("Real signal delivery", json(initialDelivery), "Initial cards only; excludes tests and lifecycle updates") + panel("Discord transport history", json(transport_health), "Latest writes and read-only connectivity checks; neither a successful edit nor a GET confirms an earlier uncertain card") + panel("Lifecycle journal", signalTable(data.signals), "Research alerts; no order execution");
+      body = funnelPanel(funnel) + panel("Real signal delivery", table(["Initial cards sent", "Duplicate alerts suppressed", "Uncertain delivery", "Rejected / rate-limited"], [[number(initialDelivery.sent, 0), number(initialDelivery.duplicate_suppressed, 0), number(initialDelivery.uncertain, 0), number(initialDelivery.rejected, 0)]]) + `<details><summary>Delivery receipts and latest signal</summary>${json(initialDelivery)}</details>`, "Initial cards only; excludes tests and lifecycle updates") + panel("Discord transport history", `<details><summary>Inspect connectivity and delivery checks</summary>${json(transport_health)}</details>`, "Latest writes and read-only connectivity checks; neither a successful edit nor a GET confirms an earlier uncertain card") + panel("Lifecycle journal", signalTable(data.signals), "Research alerts; no order execution");
     }
     else if (page === "ml") {
       const ml = await api("ml"),
         latest = ml.models[0];
-      const horizons = await api("horizons");
+      const stale = ml.status === "STALE";
+      const modelReport = latest?.report || {};
       body = panel(
         "Learning data",
         table(["Exchange", "Recorded-print outcomes", "Recovered setup outcomes", "Historical bootstrap"],
@@ -256,7 +316,7 @@ async function render() {
         "500 complete independent outcomes per exchange and track; chronological checks still apply",
       ) + panel(
         "Champion and collection",
-        json({
+        `<p>${stale ? "ML summary is stale" : "Cached ML summary"} · last worker report ${escape(utc(ml.summary_at_ms))}</p><p>${escape(ml.learning_note || "Model status and counts come from the worker report.")}</p><details><summary>Collection and model diagnostics</summary>` + json({
           champion: ml.champion || "None — no validated model",
           model_status: ml.model_status,
           primary_model_id: ml.primary_model_id,
@@ -281,13 +341,9 @@ async function render() {
           cycle: ml.cycle,
           horizon_model: ml.horizon_model,
           drift: ml.drift,
-        }),
+        }) + "</details>",
       );
-      body += panel("Horizon and timing research",
-        table(["Profile", "Expected hold", "Research checkpoints"], Object.entries(horizons.profiles).map(([name,p]) =>
-          [escape(name), `${number(p.hold_min/60)}–${number(p.hold_max/60)} hours`, p.checkpoints.map(m => `${number(m/60)}h`).join(" · ")])) +
-        `<p>Current session: ${escape(horizons.session.primary)} · Late observations: ${escape(JSON.stringify(horizons.observations))}</p>` +
-        `<details><summary>Score buckets and research diagnostics</summary>${json(horizons.score_buckets)}</details>`);
+      body += reportPanel("Horizon and timing research", "horizons");
       body += panel(
         "Model comparison",
         ml.models.length
@@ -295,10 +351,10 @@ async function render() {
               ["Model", "Holdout N / clusters", "Net R / interval", "Brier", "Approval blockers"],
               ml.models.map((m) => [
                 escape(m.id.slice(0, 12)),
-                `${m.report.holdout.n} / ${m.report.holdout.effective_samples}`,
-                `${number(m.report.holdout.net_expectancy_r)} / ${escape(m.report.holdout.ev_interval)}`,
-                number(m.report.all_holdout.brier, 4),
-                escape(m.promotion_reasons.join("; ")),
+                `${number(m.report?.holdout?.n, 0)} / ${number(m.report?.holdout?.effective_samples, 0)}`,
+                `${number(m.report?.holdout?.net_expectancy_r)} / ${escape(m.report?.holdout?.ev_interval)}`,
+                number(m.report?.all_holdout?.brier, 4),
+                escape((m.promotion_reasons || []).join("; ")),
               ]),
             )
           : empty(
@@ -311,7 +367,7 @@ async function render() {
           "Holdout reliability",
           table(
             ["Probability bin", "Count", "Predicted", "Observed"],
-            latest.report.all_holdout.reliability.map((r) => [
+            (modelReport.all_holdout?.reliability || []).map((r) => [
               number(r.lower, 1),
               r.count,
               number(r.predicted, 3),
@@ -324,25 +380,25 @@ async function render() {
           "Feature importance",
           table(
             ["Feature", "Magnitude"],
-            Object.entries(latest.importance)
+            Object.entries(latest.importance || {})
               .sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]))
               .slice(0, 15)
               .map(([k, v]) => [escape(k), number(v, 4)]),
           ),
           "ASSOCIATION, NOT CAUSATION",
         );
-        body += panel("Family / direction / regime / symbol / tier", json(latest.report.breakdown));
+        body += panel("Family / direction / regime / symbol / tier", `<details><summary>View cohort breakdown</summary>${json(modelReport.breakdown)}</details>`);
         body += panel(
           "Thresholds and validation trials",
-          json({
+          "<details><summary>View validation trials</summary>" + json({
             thresholds: latest.thresholds,
-            trials: latest.report.experiments,
-            walk_forward: latest.report.walk_forward,
-          }),
+            trials: modelReport.experiments,
+            walk_forward: modelReport.walk_forward,
+          }) + "</details>",
           "VALIDATION-TUNED, NOT HOLDOUT-TUNED",
         );
       }
-      body += panel("Promotion / rollback history", json(ml.history));
+      body += panel("Promotion / rollback history", `<details><summary>View model history</summary>${json(ml.history)}</details>`);
     } else if (page === "exchanges")
       body =
         panel("Sources and transitions", json(await api("exchanges"))) +
@@ -409,7 +465,7 @@ async function render() {
         body += panel("Derivatives", json(market.derivatives));
       }
     } else if (page === "health")
-      body = panel("Deployment, resource and recovery diagnostics", json(await api("operations"))) + panel("Collection health", json(data.health)) + panel("Scanner status", json(data.scanner));
+      body = panel("Collection health", json(data.health)) + panel("Scanner status", json(data.scanner)) + reportPanel("Extended operational diagnostics", "operations");
     else if (page === "settings")
       body =
         panel("Configuration", json(await api("settings"))) +
@@ -480,7 +536,7 @@ async function render() {
       const observation = await api("observations/" + encodeURIComponent(id));
       const f = s.evidence.flow || {};
       const expiryMark = s.state === "EXPIRED" && s.coverage?.tracking_end ? s.evidence?.expiry_mark : null;
-      body =
+      body = (priceResult(s) ? panel(priceResult(s), `<p>${escape(s.symbol)} ${escape(s.direction)} · observed ${escape(utc(s.evidence.terminal_event.effective_ms))}</p><p>Original plan price-path result. Account fills and realized profit are not verified.</p>`) : "") +
         panel(
           `${s.symbol} · ${s.direction} · ${s.final_tier}`,
           `<p>${escape(s.horizon_profile || "LEGACY")} · ${escape(s.entry_session || "Legacy session not recorded")} · ${escape(s.version)}</p><p>${escape(s.reason)}</p>` +
@@ -520,6 +576,8 @@ async function render() {
     }
     if (gen !== generation) return;
     $("#view").innerHTML = body;
+    lastView = { title: $("#title").textContent, at_ms: data.at_ms };
+    bindReports();
     $("#filter")?.addEventListener("input", (e) => {
       $("#watch-table").innerHTML = watchTable(
         data.watchlist.filter((r) => r.symbol.includes(e.target.value.toUpperCase())),
@@ -569,12 +627,21 @@ async function render() {
       }
     });
   } catch (e) {
-    $("#error").textContent = e.message;
-    $("#status").textContent = "Unavailable";
+    if (gen !== generation) return;
+    $("#error").textContent = e.message + (lastView ? ` Showing the last loaded ${lastView.title.toLowerCase()} from ${utc(lastView.at_ms)}.` : " No dashboard data has loaded yet.");
+    if (lastView) $("#title").textContent = lastView.title;
+    $("#status").textContent = "Refresh failed";
+    $("#status").className = "pill tag";
+  } finally {
+    if (gen === generation) {
+      $("#refresh-state").textContent = "";
+      $("#view").setAttribute("aria-busy", "false");
+    }
   }
 }
-window.addEventListener("hashchange", render);
+window.addEventListener("hashchange", () => render());
+$("#refresh").addEventListener("click", () => render());
 render();
 setInterval(() => {
-  if (!["TEXTAREA", "INPUT"].includes(document.activeElement.tagName)) render();
+  if (!["TEXTAREA", "INPUT"].includes(document.activeElement.tagName)) render(true);
 }, 30000);

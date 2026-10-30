@@ -11,3 +11,23 @@
   .panel-head{gap:12px;flex-wrap:wrap}
   .panel-head span{overflow-wrap:anywhere}
 }
+
+/* Keep core collection status visible before operational detail. */
+aside{display:flex;flex-direction:column;height:100dvh;overflow:hidden}
+.brand,.nav-caption{flex-shrink:0}nav{min-height:0;overflow-y:auto;flex-shrink:1}
+.sidebar-bottom{position:static;margin-top:auto;padding-top:18px;flex-shrink:0}
+.sidebar-bottom p{margin:8px 0}.nav-caption{margin-top:30px}
+.metrics{grid-template-columns:repeat(4,minmax(0,1fr))}.metric{min-width:0;padding:16px 18px}
+.metric label{text-transform:uppercase;letter-spacing:.6px}.metric b{font-size:clamp(18px,2.3vw,28px);font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+.metric small{display:block;overflow-wrap:anywhere}.table-scroll{max-width:100%;overflow-x:auto}
+.table-scroll table{min-width:540px}td,th{vertical-align:top}.panel{min-width:0}
+.warning-summary{border:1px solid #66512e;border-radius:6px;padding:10px 16px;background:#191710}
+.warning-summary>summary{color:var(--amber);font-size:12px}.warning-summary>div{margin-top:12px}
+#runtime-warnings{margin-bottom:18px}#refresh{margin-top:8px;padding:5px 12px;font-size:12px}
+#refresh-state{display:block;min-height:17px;font-size:11px;color:var(--muted)}
+#view[aria-busy=true]{opacity:.75}.report-content button{display:block;margin-top:12px}
+@media(max-height:800px) and (min-width:651px){.sidebar-bottom p{display:none}.sidebar-bottom{padding-top:10px}.nav-caption{margin-top:22px}nav a{padding-top:8px;padding-bottom:8px}}
+@media(max-width:1000px){.metrics{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:650px){aside{display:block;height:auto;overflow:visible}nav{overflow-x:auto;overflow-y:visible}.sidebar-bottom{display:none}.notice{margin-bottom:16px}.metric{padding:13px}.header-right{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.header-right time,#refresh{margin-top:0}#refresh-state{min-height:0}.warning-summary>summary{line-height:1.7}}
+
+.sidebar-bottom small{display:block}

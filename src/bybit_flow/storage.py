@@ -259,15 +259,21 @@ class Store:
         columns = ",".join(f"json_extract(payload,'$.{field}')" for field in fields)
         rows = self.db.execute(
             "SELECT " + columns + ",json_extract(payload,'$.coverage'),"
-            "json_extract(payload,'$.evidence.expiry_mark') FROM signals "
+            "json_extract(payload,'$.evidence.expiry_mark'),"
+            "json_extract(payload,'$.evidence.primary_outcome'),"
+            "json_extract(payload,'$.evidence.terminal_event') FROM signals "
             "ORDER BY created_ms DESC LIMIT ?",
             (limit,),
         )
         result = []
         for row in rows:
             summary = dict(zip(fields, row[: len(fields)]))
-            summary["coverage"] = json.loads(row[-2]) if row[-2] else {}
-            summary["evidence"] = {"expiry_mark": json.loads(row[-1])} if row[-1] else {}
+            summary["coverage"] = json.loads(row[-4]) if row[-4] else {}
+            summary["evidence"] = {"expiry_mark": json.loads(row[-3])} if row[-3] else {}
+            if row[-2]:
+                summary["evidence"]["primary_outcome"] = row[-2]
+            if row[-1]:
+                summary["evidence"]["terminal_event"] = json.loads(row[-1])
             result.append(summary)
         return result
 

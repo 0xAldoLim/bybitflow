@@ -49,6 +49,10 @@ and [deployment/rollback](docs/DEPLOYMENT.md).
 - Versioned execution-target selection and immutable delivery snapshots.
 - Separate Discord destinations for setup cards and monitoring notices.
 - An authenticated local dashboard with feed, clock, storage and delivery diagnostics.
+  Recording, queue, selected-market and storage counters stay visible across views.
+  Critical alerts remain visible; advisory details expand on demand. Heavy horizon
+  and operational reports load only when opened, and cached ML reports show their
+  worker timestamp.
 - Bounded recording and managed retention that preserve protected evidence,
   setup plans, training labels and model artifacts.
 - Optional source-specific ML collection, outcome recovery and automatic training
