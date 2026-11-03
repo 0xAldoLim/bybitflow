@@ -234,15 +234,27 @@ def status(store, now=None, configured=None):
 def maintain(store, now):
     """Bound transient telemetry; retain cumulative totals and stable stage keys."""
     cutoff = now - 7 * 86400000
-    with store.db:
-        store.db.execute(
-            "DELETE FROM funnel_minutes WHERE rowid IN (SELECT rowid FROM funnel_minutes WHERE minute_ms<? LIMIT 5000)",
+    # Search before taking SQLite's single writer slot. Old stable stage keys
+    # can make the time-index search expensive even when few rows are deletable.
+    # Finish each read cursor before its bounded delete; no WAL read upgrade.
+    queries = (
+        ("funnel_minutes", "minute_ms<?", (cutoff,)),
+        (
+            "funnel_events",
+            "at_ms<? AND event_key NOT LIKE 'generated:%' "
+            "AND event_key NOT LIKE 'pending_confirmation:%' "
+            "AND event_key NOT LIKE 'confirmed:%' AND event_key NOT LIKE 'alerted:%'",
             (cutoff,),
-        )
-        store.db.execute(
-            "DELETE FROM funnel_events WHERE rowid IN (SELECT rowid FROM funnel_events WHERE at_ms<? AND event_key NOT LIKE 'generated:%' AND event_key NOT LIKE 'pending_confirmation:%' AND event_key NOT LIKE 'confirmed:%' AND event_key NOT LIKE 'alerted:%' LIMIT 5000)",
-            (cutoff,),
-        )
+        ),
+    )
+    for table, where, parameters in queries:
+        rows = store.db.execute(f"SELECT rowid FROM {table} WHERE {where} LIMIT 5000", parameters).fetchall()
+        if rows:
+            with store.db:
+                store.db.executemany(
+                    f"DELETE FROM {table} WHERE rowid=? AND {where}",
+                    [(row[0], *parameters) for row in rows],
+                )
 
 
 def import_deliveries(store):

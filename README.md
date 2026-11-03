@@ -384,6 +384,13 @@ trainer; omit `--profile ml` from the update command when operating without it.
 See [build provenance](docs/USER_RUNBOOK.md#record-the-build-commit) and the
 [advanced deployment guide](docs/ML_RESEARCH.md#storage-and-replay-checkpoints).
 
+Feed-health reporting is buffered separately from critical recording and delivery
+receipts. Temporary SQLite contention cannot disconnect a stream merely because
+its health snapshot could not be written immediately. Telemetry cleanup searches
+outside write transactions. Storage forecasts refresh hourly even when background
+research is deferred, provided the recorder is healthy and has capacity. Signal
+qualification and recorded-evidence requirements remain unchanged.
+
 ## Documentation and contributing
 
 - [Operator guide](docs/USER_RUNBOOK.md): configuration, recovery and troubleshooting.

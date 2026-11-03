@@ -284,7 +284,13 @@ async def monitor(runtime):
             trainer_cycle=runtime.store.get("trainer_cycle_telemetry", {}),
             trainer_state=runtime.store.get("ml_worker_state", {}),
         )
-        collect_growth = now - last_storage >= HOUR and state.defer_from > Priority.FORWARD_RESEARCH
+        # Capacity reporting is hourly operational telemetry, not optional
+        # research. Otherwise sustained pressure leaves a days-old forecast
+        # displayed while storage continues growing. Still defer for recorder
+        # backpressure, and perform the directory scan on the private worker.
+        collect_growth = (
+            now - last_storage >= HOUR and sample["recorder_healthy"] and sample["recorder_pressure"] < 0.5
+        )
         try:
             await asyncio.to_thread(
                 persist,

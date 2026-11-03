@@ -17,12 +17,18 @@ DIAGNOSTIC_KEYS = frozenset(
         "scan_health",
         "operational_health",
         "storage_health",
+        "stream_health",
     }
 )
 
 
 def diagnostic_key(key):
-    return key in DIAGNOSTIC_KEYS or key.startswith("supervisor:")
+    # Socket health and cached display frames are not recorder evidence. A busy
+    # status write must not escape into a socket's reconnect/gap handler. Raw
+    # depth/trade/frame envelopes still go through the acknowledged recorder.
+    return key in DIAGNOSTIC_KEYS or key.startswith(
+        ("supervisor:", "feed:", "depth_recovery:", "flow_warmup:", "liquidity:")
+    )
 
 
 def busy(exc):
