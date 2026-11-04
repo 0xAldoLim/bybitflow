@@ -48,7 +48,7 @@ def main():
             run("exec","-T","desk","bybit-flow","doctor","--json","--no-network",project_name=name)
             version=json.loads(run("exec","-T","desk","bybit-flow","version",project_name=name).stdout)
             assert version["deployment"]["git_commit"]=="isolated-smoke"
-            assert version["deployment"]["database"]["level"]=="009"
+            assert version["deployment"]["database"]["level"]=="010"
         try:
             run("build","desk")
             ready(project)
@@ -68,7 +68,7 @@ def main():
             with sqlite3.connect(backup/"research.sqlite") as db:
                 assert db.execute("PRAGMA quick_check").fetchone()[0]=="ok"
                 assert db.execute("SELECT count(*) FROM signals").fetchone()[0]==0
-                assert db.execute("SELECT count(*) FROM migration_registry").fetchone()[0]==9
+                assert db.execute("SELECT count(*) FROM migration_registry").fetchone()[0]==10
             db.close()
             run("create","desk",project_name=restored)
             run("cp",str(backup)+"/.","desk:/app/data",project_name=restored)
