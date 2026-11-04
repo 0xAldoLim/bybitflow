@@ -391,8 +391,9 @@ outside write transactions. Storage forecasts refresh hourly even when backgroun
 research is deferred, provided the recorder is healthy and has capacity. Signal
 qualification and recorded-evidence requirements remain unchanged.
 The pending-recording symbol lookup uses a compact index rather than repeatedly
-reading historical feature payloads on the live confirmation loop. Migration 010
-adds this index without changing snapshots, labels, models or delivery receipts.
+reading historical feature payloads on the live confirmation loop. Migration 011
+adds a compact symbol projection and covering index for consistent behavior across
+SQLite versions, without changing source snapshots, labels, models or receipts.
 
 ## Documentation and contributing
 

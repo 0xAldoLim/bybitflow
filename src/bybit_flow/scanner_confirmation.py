@@ -24,15 +24,13 @@ TERMINAL = {"INVALIDATED", "EXPIRED", "RESOLVED"}
 
 
 def pending_recording_symbols(store, since_ms):
-    # The live loop needs symbols, not historical feature payloads. Force the
-    # compact expression index: SQLite otherwise prefers the older stage/time
-    # index and reads/parses large JSON evidence on every confirmation cycle.
+    # Older SQLite versions still decode JSON even with an expression index.
+    # Read the compact projection, maintained by source-row transaction triggers.
     return {
         row[0]
         for row in store.db.execute(
-            "SELECT DISTINCT json_extract(s.payload,'$.signal.symbol') FROM ml_snapshots s "
-            "INDEXED BY ml_pending_recording_symbols WHERE s.stage='decision' "
-            "AND NOT EXISTS (SELECT 1 FROM ml_labels l WHERE l.snapshot_id=s.id AND l.policy='prints-v1') "
+            "SELECT DISTINCT s.symbol FROM ml_recording_symbols s WHERE s.stage='decision' "
+            "AND NOT EXISTS (SELECT 1 FROM ml_labels l WHERE l.snapshot_id=s.snapshot_id AND l.policy='prints-v1') "
             "AND s.decision_ms>?",
             (since_ms,),
         )

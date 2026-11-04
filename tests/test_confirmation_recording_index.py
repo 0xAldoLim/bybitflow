@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from bybit_flow.models import DAY
 from bybit_flow.scanner_confirmation import pending_recording_symbols
 from bybit_flow.storage import Store
@@ -57,9 +59,11 @@ def test_pending_recording_symbols_do_not_decode_historical_snapshots(settings):
     actual = pending_recording_symbols(store, cutoff)
     store.db.set_trace_callback(None)
     assert actual == expected
-    query = next(sql for sql in statements if sql.startswith("SELECT DISTINCT json_extract(s.payload"))
+    query = next(
+        sql for sql in statements if sql.startswith("SELECT DISTINCT s.symbol FROM ml_recording_symbols")
+    )
     plan = [row[3] for row in store.db.execute("EXPLAIN QUERY PLAN " + query)]
-    assert any("ml_pending_recording_symbols" in step for step in plan)
+    assert any("USING COVERING INDEX ml_recording_symbols_time" in step for step in plan)
     # Verify the execution path, not a machine-dependent timing threshold:
     # SQLite must read the stored index expression, never parse large JSON rows.
     bytecode = store.db.execute("EXPLAIN " + query).fetchall()
@@ -73,14 +77,25 @@ def test_pending_recording_symbols_do_not_decode_historical_snapshots(settings):
             (now + 1, '{"signal":{"symbol":"NEW"}}'),
         )
     assert pending_recording_symbols(store, cutoff) == expected - {"PENDING"} | {"NEW"}
+    with store.db:
+        store.db.execute(
+            "UPDATE ml_snapshots SET payload=? WHERE id='new'", ('{"signal":{"symbol":"UPDATED"}}',)
+        )
+    assert pending_recording_symbols(store, cutoff) == expected - {"PENDING"} | {"UPDATED"}
+    with store.db:
+        store.db.execute("DELETE FROM ml_snapshots WHERE id='new'")
+    assert pending_recording_symbols(store, cutoff) == expected - {"PENDING"}
     store.close()
 
 
-def test_recording_symbol_index_upgrade_preserves_existing_evidence(settings, monkeypatch):
+@pytest.mark.parametrize("previous_level", ["009", "010"])
+def test_recording_symbol_index_upgrade_preserves_existing_evidence(settings, monkeypatch, previous_level):
     from bybit_flow import migrations
 
     registry = migrations.registry
-    monkeypatch.setattr(migrations, "registry", lambda: tuple(step for step in registry() if step.id < "010"))
+    monkeypatch.setattr(
+        migrations, "registry", lambda: tuple(step for step in registry() if step.id <= previous_level)
+    )
     store = Store(settings.data_dir)
     with store.db:
         store.db.execute(
@@ -98,10 +113,15 @@ def test_recording_symbol_index_upgrade_preserves_existing_evidence(settings, mo
     for table in tables[:-1]:
         assert [tuple(row) for row in store.db.execute("SELECT * FROM " + table)] == before[table]
     assert [
-        tuple(row) for row in store.db.execute("SELECT * FROM migration_registry WHERE migration_id<'010'")
+        tuple(row)
+        for row in store.db.execute(
+            "SELECT * FROM migration_registry WHERE migration_id<=?", (previous_level,)
+        )
     ] == before["migration_registry"]
-    assert migrations.status(store)["level"] == "010"
-    assert store.db.execute(
-        "SELECT 1 FROM sqlite_master WHERE name='ml_pending_recording_symbols'"
-    ).fetchone()
+    assert migrations.status(store)["level"] == "011"
+    assert store.db.execute("SELECT 1 FROM sqlite_master WHERE name='ml_recording_symbols_time'").fetchone()
+    assert (
+        store.db.execute("SELECT symbol FROM ml_recording_symbols WHERE snapshot_id='frozen'").fetchone()[0]
+        == "ORIGINAL"
+    )
     store.close()

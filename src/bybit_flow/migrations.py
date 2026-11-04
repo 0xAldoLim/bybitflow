@@ -58,6 +58,27 @@ CREATE INDEX IF NOT EXISTS ml_pending_recording_symbols ON ml_snapshots(
  decision_ms,id,json_extract(payload,'$.signal.symbol')) WHERE stage='decision';
 """
 
+RECORDING_SYMBOL_PROJECTION_SQL = """
+CREATE TABLE IF NOT EXISTS ml_recording_symbols(
+ snapshot_id TEXT PRIMARY KEY,stage TEXT NOT NULL,decision_ms INTEGER NOT NULL,symbol);
+CREATE INDEX IF NOT EXISTS ml_recording_symbols_time
+ ON ml_recording_symbols(stage,decision_ms,snapshot_id,symbol);
+CREATE TRIGGER IF NOT EXISTS ml_recording_symbols_insert AFTER INSERT ON ml_snapshots BEGIN
+ INSERT OR REPLACE INTO ml_recording_symbols VALUES(
+  NEW.id,NEW.stage,NEW.decision_ms,json_extract(NEW.payload,'$.signal.symbol'));
+END;
+CREATE TRIGGER IF NOT EXISTS ml_recording_symbols_update AFTER UPDATE ON ml_snapshots BEGIN
+ DELETE FROM ml_recording_symbols WHERE snapshot_id=OLD.id;
+ INSERT OR REPLACE INTO ml_recording_symbols VALUES(
+  NEW.id,NEW.stage,NEW.decision_ms,json_extract(NEW.payload,'$.signal.symbol'));
+END;
+CREATE TRIGGER IF NOT EXISTS ml_recording_symbols_delete AFTER DELETE ON ml_snapshots BEGIN
+ DELETE FROM ml_recording_symbols WHERE snapshot_id=OLD.id;
+END;
+INSERT OR IGNORE INTO ml_recording_symbols
+ SELECT id,stage,decision_ms,json_extract(payload,'$.signal.symbol') FROM ml_snapshots;
+"""
+
 
 class MigrationIntegrityError(RuntimeError):
     pass
@@ -93,6 +114,12 @@ def recording_symbol_index(store):
     store.db.execute(RECORDING_SYMBOL_SQL)
 
 
+def recording_symbol_projection(store):
+    # Triggers maintain derived metadata in the source row's own transaction.
+    # Idempotent backfill permits recovery if startup stops before the receipt.
+    store.db.executescript(RECORDING_SYMBOL_PROJECTION_SQL)
+
+
 def registry():
     from . import funnel, identity, observations, packing, path_research, setup_research
     from .ml import store as features
@@ -115,6 +142,13 @@ def registry():
             recording_symbol_index,
             repeatable=False,
             sql=RECORDING_SYMBOL_SQL,
+        ),
+        Migration(
+            "011",
+            "cover-pending-recording-symbols",
+            recording_symbol_projection,
+            repeatable=False,
+            sql=RECORDING_SYMBOL_PROJECTION_SQL,
         ),
     )
 
