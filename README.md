@@ -390,6 +390,8 @@ its health snapshot could not be written immediately. Telemetry cleanup searches
 outside write transactions. Storage forecasts refresh hourly even when background
 research is deferred, provided the recorder is healthy and has capacity. Signal
 qualification and recorded-evidence requirements remain unchanged.
+Global health snapshots take priority over per-market display snapshots when the
+bounded telemetry queue is full, so display bursts cannot evict readiness data.
 The pending-recording symbol lookup uses a compact index rather than repeatedly
 reading historical feature payloads on the live confirmation loop. Migration 011
 adds a compact symbol projection and covering index for consistent behavior across

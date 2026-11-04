@@ -137,7 +137,14 @@ class MetadataWriter:
         self.sequence += 1
         value = (self.sequence, payload)
         if key not in self.pending and len(self.pending) >= self.capacity:
-            old, dropped = self.pending.popitem(last=False)
+            # Per-market bursts must not evict the global health snapshots used
+            # by readiness and operator warnings. Both classes remain bounded.
+            old = next((name for name in self.pending if name not in DIAGNOSTIC_KEYS), None)
+            if old is None and key not in DIAGNOSTIC_KEYS:
+                self.metrics.increment("diagnostic_metadata_dropped")
+                return
+            old = old if old is not None else next(iter(self.pending))
+            dropped = self.pending.pop(old)
             if self.overlay.get(old) == dropped:
                 self.overlay.pop(old, None)
             self.metrics.increment("diagnostic_metadata_dropped")
