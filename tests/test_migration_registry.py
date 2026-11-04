@@ -45,7 +45,7 @@ def test_supported_legacy_schema_preserves_history_and_repeated_startup(tmp_path
             == '{"complete":false}'
         )
     migrations = status(store)
-    assert migrations["level"] == "009"
+    assert migrations["level"] == "010"
     for name in (
         "policy_opportunities",
         "operational_samples",
@@ -83,7 +83,7 @@ def test_application_starts_on_old_fixture_and_exposes_additive_status(tmp_path,
     with TestClient(create_app(settings)) as client:
         assert client.get("/healthz").status_code == 200
         operations = client.get("/api/operations").json()
-        assert operations["provenance"]["database"]["level"] == "009"
+        assert operations["provenance"]["database"]["level"] == "010"
         assert "time_series" in operations
         assert client.get("/api/overview").json()["decisions"]["opportunities"] == []
         assert client.get("/api/forward").json()["opportunities"] == 0

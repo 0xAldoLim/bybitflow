@@ -53,6 +53,11 @@ CREATE TABLE IF NOT EXISTS recovery_status(job_id TEXT PRIMARY KEY,updated_ms IN
 CREATE INDEX IF NOT EXISTS recovery_status_time ON recovery_status(updated_ms,job_id);
 """
 
+RECORDING_SYMBOL_SQL = """
+CREATE INDEX IF NOT EXISTS ml_pending_recording_symbols ON ml_snapshots(
+ decision_ms,id,json_extract(payload,'$.signal.symbol')) WHERE stage='decision';
+"""
+
 
 class MigrationIntegrityError(RuntimeError):
     pass
@@ -84,6 +89,10 @@ def reliability_schema(store):
             store.db.execute(statement)
 
 
+def recording_symbol_index(store):
+    store.db.execute(RECORDING_SYMBOL_SQL)
+
+
 def registry():
     from . import funnel, identity, observations, packing, path_research, setup_research
     from .ml import store as features
@@ -99,6 +108,13 @@ def registry():
         Migration("008", "legacy-setup-paths", setup_research.migrate),
         Migration(
             "009", "reliability-evidence-loop", reliability_schema, repeatable=False, sql=RELIABILITY_SQL
+        ),
+        Migration(
+            "010",
+            "pending-recording-symbol-index",
+            recording_symbol_index,
+            repeatable=False,
+            sql=RECORDING_SYMBOL_SQL,
         ),
     )
 

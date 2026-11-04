@@ -1,4 +1,6 @@
-"""Structural equivalence of the extracted algorithms to reviewed main 82051a14."""
+"""Structural fingerprints of the reviewed scanner algorithms and approved repairs.
+
+The recording-priority query extraction is covered by test_confirmation_recording_index."""
 
 import ast
 import hashlib

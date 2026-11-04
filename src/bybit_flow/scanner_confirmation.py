@@ -23,6 +23,22 @@ log = logging.getLogger(__name__)
 TERMINAL = {"INVALIDATED", "EXPIRED", "RESOLVED"}
 
 
+def pending_recording_symbols(store, since_ms):
+    # The live loop needs symbols, not historical feature payloads. Force the
+    # compact expression index: SQLite otherwise prefers the older stage/time
+    # index and reads/parses large JSON evidence on every confirmation cycle.
+    return {
+        row[0]
+        for row in store.db.execute(
+            "SELECT DISTINCT json_extract(s.payload,'$.signal.symbol') FROM ml_snapshots s "
+            "INDEXED BY ml_pending_recording_symbols WHERE s.stage='decision' "
+            "AND NOT EXISTS (SELECT 1 FROM ml_labels l WHERE l.snapshot_id=s.id AND l.policy='prints-v1') "
+            "AND s.decision_ms>?",
+            (since_ms,),
+        )
+    }
+
+
 class RuntimePorts(Protocol):
     apply_trade_quality: Any
     cached_features: Any
@@ -153,15 +169,7 @@ class ConfirmationEngine:
         runtime = self.runtime
         now = now_ms()
         runtime.recorder.critical_symbols = set(runtime.pending_symbols()) | {"BTCUSDT", "ETHUSDT"}
-        runtime.recorder.critical_symbols.update(
-            r[0]
-            for r in runtime.store.db.execute(
-                "SELECT DISTINCT json_extract(s.payload,'$.signal.symbol') FROM ml_snapshots s WHERE s.stage='decision' "
-                "AND NOT EXISTS (SELECT 1 FROM ml_labels l WHERE l.snapshot_id=s.id AND l.policy='prints-v1') "
-                "AND s.decision_ms>?",
-                (now - 7 * DAY,),
-            )
-        )
+        runtime.recorder.critical_symbols.update(pending_recording_symbols(runtime.store, now - 7 * DAY))
         for payload in runtime.store.active_signals():
             s = Signal.model_validate(payload)
             # Feed callbacks advance receipts while earlier candidates await flow
