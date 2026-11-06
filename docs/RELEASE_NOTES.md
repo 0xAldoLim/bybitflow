@@ -1,5 +1,31 @@
 # Release notes
 
+## 2.2.3 — evidence power (research only)
+
+- Delayed-entry stages `delay60`, `delay180` and `delay600` after the durable
+  sent-initial timestamp, paired with the delivery stage on every exit variant.
+  Missed entries (`MISSED_INVALIDATED`, `MISSED_TARGET_PASSED`, `MISSED_EXPIRED`)
+  are kept as explicit zero exposure.
+- A `structure_only_control` for v2.2 candidates that failed only flow
+  confirmation, enrolled once per identity at its structural decision time.
+  Confirmed opportunities record structural time, planned price and entry cost.
+- `forward_stats`: whole-UTC-day resampling with a recorded seed, clustered
+  effective N, Holm-adjusted paired differences with a printed comparison
+  count, Score/net-R Spearman, conservative and optimistic ambiguity bounds,
+  1.5×/2× cost stress from stored gross R, and minimum detectable differences.
+- A trade-through conservative fill bound alongside touch. Stop-exit slippage
+  is labeled a fixed assumption, and a decision-time depth diagnostic is research only.
+- Causal `attempt_ordinal`/`pullback_ordinal` as forward-report cohorts, and a
+  `first_attempt_only` shadow variant.
+- `bybit-flow policy-preregister` stores immutable, hashed pre-registrations.
+  `policy-review` flags reviews `NOT_PREREGISTERED`.
+
+Research only, with no profitability claim and no production change: score,
+gates, delivery, Discord content, lifecycle, risk/costs, ML schema
+`candidate-v20`, 500/500 minimums and authority are unchanged. A fixed fixture is
+byte-identical to 2.2.2. Append-only migration 012 is bounded by hourly caps and
+row limits under forward-research admission. See [evidence power](EVIDENCE_POWER.md).
+
 ## 2.2.2 — staged exhaustion and reclaim timing
 
 - New intraday and swing range-rejection/liquidity-sweep candidates can confirm

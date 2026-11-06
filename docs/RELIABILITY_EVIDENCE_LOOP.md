@@ -99,10 +99,21 @@ Required keys are `policy_id`, `parent_policy`, `development_period`,
 and `code_commit`. Records have no production authority. Changing production
 still requires a reviewed source change and separate deployment.
 
+Since 2.2.3, a review may cite `prereg_id` from `bybit-flow policy-preregister`.
+A review without one, or whose `forward_start` precedes it, is stored and printed
+as `NOT_PREREGISTERED`. The forward report also has an `evidence_power` section
+with delayed-entry, structure-only, trade-through and attempt cohorts. It shows
+day-resampled clustered intervals, Holm-adjusted paired differences with a
+comparison count, Score/net-R Spearman, ambiguity bounds and cost stress. The
+`first_attempt_only` shadow variant joins the fixed controls. See
+[evidence power](EVIDENCE_POWER.md).
+
 ## Database and migrations
 
 Startup uses the ordered `migration_registry` (ID, name, checksum, applied time).
-001–008 preserve existing legacy ensure steps; 009 adds the reliability tables.
+001–008 preserve existing legacy ensure steps; 009 adds the reliability tables;
+010–011 index pending recording symbols; 012 adds append-only evidence-power
+tables protected by update/delete triggers.
 Checksums cover migration code and associated SQL. Unknown/mismatched receipts
 must be investigated; never edit a receipt merely to bypass an integrity error.
 New migrations should be appended, not rewritten. The new migration and its receipt

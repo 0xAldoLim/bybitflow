@@ -1,5 +1,9 @@
 # Feature status
 
+Release 2.2.3 adds research-only evidence-power measurements: delayed-entry,
+structure-only, trade-through and attempt cohorts with clustered, day-resampled
+statistics and pre-registration. It makes no production change and no
+profitability claim ([evidence power](EVIDENCE_POWER.md)).
 Release 2.2.2 adds versioned staged reversal timing inside the existing scanner.
 Release 2.2.1 introduced prospective policy observations and bounded
 operational controls. Existing v2.2 checks remain available. See
@@ -29,11 +33,16 @@ operational controls. Existing v2.2 checks remain available. See
   host downtime, independently of strict print continuity.
 - Authenticated local dashboard, diagnostics, backup, and retention planning.
 - Separate forward exit-policy research at first decision and successful delivery.
+- Research-only delayed-entry, structure-only control, trade-through fill bound
+  and attempt-ordinal cohorts with clustered, day-resampled statistics.
 - Historical TradingView records remain readable; new chart-event ingestion is retired.
 
 ## Limitations
 
-Research scoring and model performance require empirical validation. Current print
+Research scoring and model performance require empirical validation.
+Evidence-power statistics are descriptive. Until clustered samples are large,
+most comparisons report INSUFFICIENT SAMPLE. Stop-exit slippage is a fixed
+assumption; no depth-based stop-exit model is implemented. Current print
 labels use assumed fees, slippage, and funding reserves; they cannot satisfy the
 verified-cost model promotion gate.
 

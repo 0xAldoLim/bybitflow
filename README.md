@@ -31,6 +31,9 @@ pressure must fail to extend, followed by a separate price reclaim/hold and
 trusted trade/quote-event flow turn. The existing confirmation route remains
 available. See [reversal timing](docs/REVERSAL_TIMING.md) for the exact research
 assumptions and continuity requirements.
+Version **2.2.3** adds research-only [evidence power](docs/EVIDENCE_POWER.md):
+delayed-entry, structure-only, trade-through and attempt cohorts with clustered,
+day-resampled statistics and pre-registration. Production behavior is unchanged.
 The [fixed retrospective comparison](docs/V22_VERIFICATION.md) does not establish
 improved profitability; full target-construction performance remains unmeasured.
 
@@ -215,6 +218,7 @@ in CMD, PowerShell and Linux/macOS shells.
 | Check feeds, recording and diagnostics | `docker compose exec desk bybit-flow doctor` |
 | Inspect signal qualification and delivery | `docker compose exec desk bybit-flow signals status` |
 | Inspect prospective policy observations | `docker compose exec desk bybit-flow forward-report` |
+| Pre-register a research comparison | `docker compose exec desk bybit-flow policy-preregister prereg.json` |
 | Inspect ML readiness and worker status | `docker compose exec trainer bybit-flow ml status` |
 | Inspect storage and retention | `docker compose exec desk bybit-flow storage status` |
 
