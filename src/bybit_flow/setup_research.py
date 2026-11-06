@@ -128,6 +128,151 @@ def register(store, signal, now, stage="decision"):
     )
 
 
+MISSED = ("MISSED_INVALIDATED", "MISSED_TARGET_PASSED", "MISSED_EXPIRED")
+# Frozen delivery-stage fields shared unchanged by every delayed-entry stage.
+DELAY_FROZEN = (
+    "policy",
+    "source",
+    "symbol",
+    "signal_id",
+    "direction",
+    "feature_schema",
+    "original_planned_entry",
+    "stop",
+    "risk",
+    "cost_per_base",
+    "structural_tp1",
+    "execution_tp1",
+    "entry_deadline_ms",
+    "deadline_ms",
+    "decay_after_ms",
+    "delivered_ms",
+    "observed_quote_ms",
+    "score",
+    "original_gates",
+    "v211_baseline",
+    "ablations",
+    "costs_verified",
+    "account_fill_verified",
+    "research_only",
+    "production_ml",
+    "partial_assumption",
+    "decay_assumption",
+)
+
+
+def fresh_state(policies):
+    return dict(
+        coverage_complete=True,
+        entered_ms=None,
+        first_stop_ms=None,
+        entry_stop_order_unknown=False,
+        entry_milestones_unknown=[],
+        mfe_lower_bound_r=0.0,
+        mae_lower_bound_r=0.0,
+        milestones={},
+        policies={
+            key: dict(
+                target=row["target"],
+                partial_fraction=row["partial_fraction"],
+                partial_done=False,
+                complete=False,
+                ambiguous=False,
+                outcome=None,
+                net_r=None,
+            )
+            for key, row in policies.items()
+        },
+    )
+
+
+def delayed_plan(delivery, snapshot, delay_ms):
+    """The delivery-stage plan entered later; never a new plan, fill or alert.
+
+    Stop, targets, deadlines, cost and the original risk denominator stay frozen.
+    Only durable send time and the delivery snapshot quote are inputs.
+    """
+    bid, ask = snapshot.get("best_bid"), snapshot.get("best_ask")
+    half = (ask - bid) / 2 if positive(bid) and positive(ask) and ask >= bid else None
+    start = delivery["delivered_ms"] + delay_ms
+    p = {k: deepcopy(delivery.get(k)) for k in DELAY_FROZEN}
+    p.update(fresh_state(delivery["policies"]))
+    p.update(
+        stage=f"delay{delay_ms // 1000}",
+        visible_at_entry=True,
+        entry=None,
+        entry_rule="delayed_open",
+        delay_ms=delay_ms,
+        delivery_entry=delivery["entry"],
+        half_spread=half,
+        entry_not_before_ms=start,
+        decision_ms=start,
+        available_ms=start,
+        pre_entry=None,
+        entry_assumption="Open of the first complete 1m bar starting at/after durable send + delay, "
+        "moved against the trader by half the delivery-snapshot spread; not a verified fill",
+    )
+    return p
+
+
+def trade_through_plan(plan, tick):
+    """Conservative fill bound on the same frozen decision plan."""
+    p = deepcopy(plan)
+    p.update(fresh_state(plan["policies"]))
+    p.update(
+        stage="decision_trade_through",
+        entry_rule="trade_through",
+        tick=tick,
+        entry_assumption="First complete 1m candle touching the frozen planned entry and trading beyond it "
+        "by more than one tick; a conservative bound, not a verified fill",
+    )
+    return p
+
+
+def entry_reached(p, b, sign):
+    if not b.low <= p["entry"] <= b.high:
+        return False
+    if p.get("entry_rule") != "trade_through":
+        return True
+    return b.low < p["entry"] - p["tick"] if sign > 0 else b.high > p["entry"] + p["tick"]
+
+
+def delayed_entry(p, b, sign):
+    """True once entered at this bar's open; pre-entry crossings end the stage."""
+    target = p["policies"]["execution_tp1"]["target"]
+    adverse, favorable = (b.low, b.high) if sign > 0 else (b.high, b.low)
+    stop_crossed = sign * (adverse - p["stop"]) <= 0
+    target_crossed = sign * (favorable - target) >= 0
+    if b.start >= p["entry_deadline_ms"]:
+        p["pre_entry"], p["pre_entry_ms"] = "MISSED_EXPIRED", b.start
+        return False
+    if b.start < p["entry_not_before_ms"]:
+        if stop_crossed or target_crossed:
+            if b.start < p["delivered_ms"]:
+                # The send minute may have crossed before acknowledgement.
+                p["pre_entry"] = "UNKNOWN_PRE_ENTRY_ORDER"
+            else:
+                p["pre_entry"] = "MISSED_INVALIDATED" if stop_crossed else "MISSED_TARGET_PASSED"
+                p["pre_entry_both_crossed"] = stop_crossed and target_crossed
+            p["pre_entry_ms"] = b.end
+        return False
+    if not number(p.get("half_spread")):
+        p["pre_entry"], p["pre_entry_ms"] = "UNKNOWN_SPREAD", b.start
+        return False
+    entry = b.open + sign * p["half_spread"]
+    if sign * (entry - p["stop"]) <= 0 or sign * (entry - target) >= 0:
+        p["pre_entry"] = "MISSED_INVALIDATED" if sign * (entry - p["stop"]) <= 0 else "MISSED_TARGET_PASSED"
+        p["pre_entry_ms"] = b.start
+        return False
+    p.update(
+        entry=entry,
+        entered_ms=b.start,
+        delayed_entry_risk=abs(entry - p["stop"]),
+        delayed_entry_risk_ratio=abs(entry - p["stop"]) / p["risk"],
+    )
+    return True
+
+
 def finish_policy(p, row, reason, at, price):
     sign = 1 if p["direction"] == "LONG" else -1
     gross_r = sign * (price - p["entry"]) / p["risk"]
@@ -138,9 +283,12 @@ def finish_policy(p, row, reason, at, price):
         outcome=reason,
         exit_ms=at,
         exit_price=price,
+        gross_r=gross_r,
         net_r=gross_r - p["cost_per_base"] / p["risk"] if valid else None,
         complete=valid,
     )
+    if valid and positive(p.get("delayed_entry_risk")):
+        row["net_r_delayed_entry_risk"] = (gross_r * p["risk"] - p["cost_per_base"]) / p["delayed_entry_risk"]
 
 
 def advance(store, ident, bars, now):
@@ -164,12 +312,18 @@ def advance(store, ident, bars, now):
         ):
             p["coverage_complete"] = False
             continue
+        if p.get("entry_rule") == "delayed_open" and p["entered_ms"] is None:
+            # Entry at the open: this bar's whole range follows the entry.
+            if not delayed_entry(p, b, sign):
+                if p.get("pre_entry"):
+                    break
+                continue
         if b.start < p["decision_ms"]:
             continue  # Partial decision candle cannot order entry and exits.
         if p["entered_ms"] is None:
             if b.start >= p["entry_deadline_ms"]:
                 break
-            if not b.low <= p["entry"] <= b.high:
+            if not entry_reached(p, b, sign):
                 continue
             p["entered_ms"] = b.end
             if b.low <= p["stop"] <= b.high:
@@ -232,6 +386,7 @@ def advance(store, ident, bars, now):
         and cursor >= p["entry_deadline_ms"]
         or all(r["outcome"] is not None for r in p["policies"].values())
         or cursor >= deadline
+        or bool(p.get("pre_entry"))
     )
     with store.db:
         if done:
@@ -273,6 +428,14 @@ def advance(store, ident, bars, now):
                 if p["policies"]["execution_tp1"]["outcome"] == "TIME_EXIT"
                 else None,
             )
+            if p.get("entry_rule") == "delayed_open" and p["entered_ms"] is None:
+                # A missed delayed entry is kept as explicit zero exposure, never a loss.
+                p["pre_entry"] = p.get("pre_entry") or "MISSED_EXPIRED"
+                missed = p["pre_entry"] in MISSED and p["coverage_complete"]
+                p["state"] = (
+                    p["pre_entry"] if missed or p["pre_entry"].startswith("UNKNOWN") else "INCOMPLETE"
+                )
+                p["zero_exposure"] = missed
             store.db.execute(
                 "INSERT OR IGNORE INTO setup_path_labels VALUES(?,?,?)", (ident, now, json.dumps(p))
             )
