@@ -1,6 +1,7 @@
 """Structural fingerprints of the reviewed scanner algorithms and approved repairs.
 
-The recording-priority query extraction is covered by test_confirmation_recording_index."""
+The recording-priority lookup and the versioned reversal integration have focused
+behavioral regression coverage in their respective tests."""
 
 import ast
 import hashlib

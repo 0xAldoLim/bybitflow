@@ -10,6 +10,11 @@ def assess(signal, now, ofi=None, history=()):
     e = signal.evidence
     flow = e.get("flow") or {}
     quality = e.get("flow_quality") or flow.get("quality") or {}
+    from .reversal_sequence import selected_flow
+
+    trigger = selected_flow(signal, now)
+    if trigger:
+        flow, quality = trigger, trigger["quality"]
     sign = 1 if signal.direction == "LONG" else -1
     result = envelope(
         signal,
@@ -67,7 +72,7 @@ def assess(signal, now, ofi=None, history=()):
     efficiency = max(0, response_atr) / depth_ratio if positive(depth_ratio) else None
     ofi = ofi or e.get("event_ofi") or {}
     ready_ofi = ofi.get("state") == "READY" and causal(ofi, signal, now, 5000)
-    touch = ofi.get("windows", {}).get("60", {}).get("touch", {})
+    touch = ofi.get("windows", {}).get("15" if trigger else "60", {}).get("touch", {})
     ofi_directional = touch.get("directional") if ready_ofi else None
     ofi_state = (
         "UNKNOWN"
@@ -166,6 +171,7 @@ def assess(signal, now, ofi=None, history=()):
         opposing_replenishment_ratio=replenishment_ratio,
         spread_bps=book.get("spread_bps"),
         window_end_ms=quality.get("window_end_ms"),
+        assessment_window="STAGED_TRIGGER_15S" if trigger else "CONTEXT_60S",
         repeated_failed_windows=failed,
         assumption="One aggression concept; maximum valid directional/absorption path; no additive delta/CVD/stack votes",
     )

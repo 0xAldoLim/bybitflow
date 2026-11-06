@@ -85,7 +85,17 @@ class Runtime:
         book = scanner.streams.books.get(signal.symbol)
         if not book or not book.valid or not scanner.recorder.healthy:
             return "blocked:v22-live-evidence-unavailable"
+        from .reversal_sequence import augment, delivery_ready
+        from .reversal_sequence import enabled as staged_reversal
+
+        if signal.evidence.get("flow_confirmation_mode") == "LOCAL_STAGED_REVERSAL" and not delivery_ready(
+            signal, now, book, scanner.streams.tapes.get(signal.symbol)
+        ):
+            return "blocked:REVERSAL_SEQUENCE_STALE"
         copy = deepcopy(signal)
+        if staged_reversal(copy) and signal.coverage.get("delivery_reversal_sequence"):
+            # The fresh delivery assessment never overwrites the first decision.
+            copy.evidence["reversal_sequence"] = deepcopy(signal.coverage["delivery_reversal_sequence"])
         copy.evidence["book"] = book.features(now)
         copy.evidence["event_ofi"] = event_assess(book, now, signal.source, signal.symbol, signal.direction)
         from .production import INTRADAY, REVERSALS, evaluate_intraday_confirmation, structure_response
@@ -105,8 +115,20 @@ class Runtime:
             )
             copy.evidence["confirmation"] = confirmation
             copy.evidence["flow_confirmed"] = confirmation["passed"]
+            copy.evidence["flow_confirmation_mode"] = confirmation["flow_confirmation_mode"]
         else:
             copy.evidence["flow_confirmed"] = confirm(copy, copy.evidence["flow"], execution_bars)
+            if staged_reversal(copy):
+                confirmation = augment(
+                    copy,
+                    dict(passed=copy.evidence["flow_confirmed"], flow_confirmation_mode="NONE"),
+                    now,
+                    factor_ok=not copy.evidence.get("market_alignment", {}).get("blocked", False),
+                )
+                copy.evidence["confirmation"] = confirmation
+                copy.evidence["flow_confirmed"] = confirmation["passed"]
+                if confirmation.get("flow_confirmation_mode") == "LOCAL_STAGED_REVERSAL":
+                    copy.evidence["flow_confirmation_mode"] = "LOCAL_STAGED_REVERSAL"
         price = float(min(book.asks) if signal.direction == "LONG" else max(book.bids))
         liquidity = scanner.store.get(f"liquidity-v21:{signal.source}:{signal.symbol}", {})
         if not 0 <= now - liquidity.get("at_ms", 0) <= 120000:
@@ -166,6 +188,17 @@ class Runtime:
             return "blocked:v22-flow-coverage-unavailable"
         signal.evidence["flow"] = flow
         signal.evidence["flow_quality"] = flow["quality"]
+        if signal.evidence.get("flow_confirmation_mode") == "LOCAL_STAGED_REVERSAL":
+            context = scanner.context.get(signal.symbol, {})
+            execution = scanner.candle_cache.get((signal.symbol, signal.execution_timeframe), (None, []))[1]
+            if (
+                not context
+                or not execution
+                or not await scanner.confirmation.refresh_reversal(
+                    signal, context, tape, book, execution, now_ms()
+                )
+            ):
+                return "blocked:REVERSAL_SEQUENCE_UNAVAILABLE"
         bars = scanner.candle_cache.get((signal.symbol, signal.setup_timeframe), (None, []))[1]
         signal.evidence["horizon_movement_capacity"] = movement_capacity(signal, bars, now_ms())
         return self.check(signal, now_ms())
@@ -184,6 +217,12 @@ class Runtime:
     def dispatch_guard(self, signal):
         book = self.scanner.streams.books.get(signal.symbol)
         now = now_ms()
+        from .reversal_sequence import delivery_ready
+
+        if signal.evidence.get("flow_confirmation_mode") == "LOCAL_STAGED_REVERSAL" and not delivery_ready(
+            signal, now, book, self.scanner.streams.tapes.get(signal.symbol)
+        ):
+            return "blocked:REVERSAL_SEQUENCE_STALE"
         snap = signal.evidence.get("delivery_execution_snapshot") or {}
         if not book or not book.fresh(now, self.scanner.settings.book_stale_ms):
             return "blocked:EXECUTION_QUOTE_STALE"

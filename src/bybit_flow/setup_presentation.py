@@ -115,7 +115,12 @@ def embed(signal, dashboard_url):
     field(
         "Why this setup",
         f"{label(s.family)} with a frozen structural reference. {label(response.get('state'))}; "
-        f"the execution target is {label(target.get('state')).lower()} under the historical-horizon assumption. "
+        + (
+            "Opposing pressure failed to extend, then price reclaimed and held the level with a fresh flow turn. "
+            if e.get("flow_confirmation_mode") == "LOCAL_STAGED_REVERSAL"
+            else ""
+        )
+        + f"the execution target is {label(target.get('state')).lower()} under the historical-horizon assumption. "
         "Component scores describe the evidence; they do not estimate success probability.",
     )
     field(

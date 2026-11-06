@@ -1,7 +1,7 @@
 """MarketDiscoveryCoordinator ownership; the orchestration context supplies explicit runtime ports.
 
-Trading algorithms are unchanged. This service owns scheduling/logic, while
-shared session state remains on Scanner during the incremental extraction.
+This service schedules discovery and assigns policies to new candidates.
+Shared session state remains on Scanner.
 """
 
 import asyncio
@@ -150,6 +150,7 @@ class MarketDiscoveryCoordinator:
             volume_profile=runtime.generation_profile(instrument, setup_bars, evaluated),
             horizon="CORE_INTRADAY",
             quality_policy="trade-validity-v22",
+            reversal_timing=True,
             structural_observations=observations,
         )
         runtime.remember_structures(instrument, "CORE_INTRADAY", observations, evaluated)
@@ -218,6 +219,7 @@ class MarketDiscoveryCoordinator:
                 volume_profile=runtime.generation_profile(instrument, bars[1], now),
                 horizon=name,
                 quality_policy="trade-validity-v22",
+                reversal_timing=True,
                 structural_observations=observations,
             )
             runtime.remember_structures(instrument, name, observations, now)

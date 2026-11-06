@@ -1,7 +1,7 @@
 """ConfirmationEngine ownership; the orchestration context supplies explicit runtime ports.
 
-Trading algorithms are unchanged. This service owns scheduling/logic, while
-shared session state remains on Scanner during the incremental extraction.
+This service schedules confirmation and its versioned timing policies.
+Shared session state remains on Scanner.
 """
 
 import asyncio
@@ -88,6 +88,12 @@ class ConfirmationEngine:
 
     def entry_ready(self, signal, book, now):
         runtime = self.runtime
+        from .reversal_sequence import delivery_ready
+
+        if signal.evidence.get("flow_confirmation_mode") == "LOCAL_STAGED_REVERSAL" and not delivery_ready(
+            signal, now, book, runtime.streams.tapes.get(signal.symbol)
+        ):
+            return False
         from . import quality_v211
         from .production import entry_position
         from .quality_v22 import enabled as v22_enabled
@@ -162,6 +168,53 @@ class ConfirmationEngine:
         coverage_record(runtime, signal, now, ["COVERAGE_BOOK_STALE"], start, end)
         runtime.store.signal(signal, signal.coverage["readiness"])
         emit(runtime.store, "coverage_incomplete", now, signal=signal, reason="COVERAGE_BOOK_STALE")
+
+    async def refresh_reversal(self, signal, context, tape, book, bars, now):
+        """Reuse existing tape/book, worker and evidence storage; no parallel scanner."""
+        from .ofi import event_assess
+        from .reversal_sequence import CONTEXT_MS, TRIGGER_MS, observe
+
+        start = now // 1000 * 1000 - CONTEXT_MS - TRIGGER_MS
+        epoch, event_epoch = book.ofi_epoch, book.event_ofi_epoch
+        # Freeze bounded observations before yielding to a worker. Never pass a
+        # mutable live book/deque to footprint calculations in this path.
+        observed_book = Book()
+        observed_book.valid = book.valid
+        observed_book.changes.extend(x for x in book.changes if start <= x[0] <= now)
+        features = book.features(now)
+        ofi = event_assess(book, now, signal.source, signal.symbol, signal.direction)
+        trades = tape.window(start, now // 1000 * 1000)
+        atr = self.runtime.cached_features(signal.symbol, signal.execution_timeframe, bars, now)["atr"]
+        cache = getattr(self.runtime, "v8_cache", {}).get(signal.symbol, {})
+        liquidation = deepcopy(cache.get("liquidation", {})) if cache.get("source") == signal.source else {}
+        row = await asyncio.to_thread(
+            observe,
+            signal,
+            trades,
+            context["instrument"].tick,
+            atr,
+            observed_book,
+            features,
+            ofi,
+            now,
+            coverage_start=tape.coverage_start,
+            book_start=book.event_ofi_start_ms,
+            liquidation=liquidation,
+        )
+        if (
+            not book.valid
+            or book.ofi_epoch != epoch
+            or book.event_ofi_epoch != event_epoch
+            or tape.coverage_start > start
+            or not book.fresh(now_ms(), self.runtime.settings.book_stale_ms)
+        ):
+            return False
+        if signal.state == "CONFIRMED":
+            # Delivery recovery must not rewrite the frozen decision/ML vector.
+            signal.coverage["delivery_reversal_sequence"] = row
+        else:
+            signal.evidence["reversal_sequence"] = row
+        return True
 
     async def evaluate(self):
         runtime = self.runtime
@@ -297,6 +350,20 @@ class ConfirmationEngine:
             )
             if macro_deferred_ms is not None:
                 s.coverage["macro_deferred_ms"] = macro_deferred_ms
+            from .reversal_sequence import enabled as staged_reversal
+            from .reversal_sequence import valid as valid_sequence
+
+            if (
+                staged_reversal(s)
+                and healthy
+                and (
+                    s.state != "CONFIRMED"
+                    or s.evidence.get("flow_confirmation_mode") == "LOCAL_STAGED_REVERSAL"
+                )
+            ):
+                if not await self.refresh_reversal(s, c, tape, book, execution_bars, now):
+                    runtime.record_confirmation_book_gap(s, now, start, end)
+                    continue
             # One immutable first-covered execution decision per setup ID. Re-evaluating
             # changed flow against yesterday's frozen ML vector would corrupt meta-labels.
             if s.state == "CONFIRMED" and not s.gates and healthy:
@@ -341,6 +408,10 @@ class ConfirmationEngine:
                             structure_response(s, execution_bars, now),
                         )
                         resumed_flow_ok = support["raw_fallback"] and support["state"] == "FLOW_SUPPORTIVE"
+                        if s.evidence.get("flow_confirmation_mode") == "LOCAL_STAGED_REVERSAL":
+                            from .reversal_sequence import delivery_ready
+
+                            resumed_flow_ok = delivery_ready(s, now_ms(), book, tape)
                     if end <= s.coverage["macro_deferred_ms"] or not resumed_flow_ok:
                         continue
                 # A deferred last-mile send must not silently strand an immutable decision.
@@ -541,6 +612,9 @@ class ConfirmationEngine:
                 and quality.get("flow_trust_score") is not None
                 and quality["flow_trust_score"] < 0.6
                 and not s.evidence.get("flow_substitution", {}).get("passed")
+                and not (
+                    staged_reversal(s) and valid_sequence(s, s.evidence.get("reversal_sequence", {}), now)
+                )
             ):
                 s.gates.append("LOW_INFORMATION_EXECUTED_FLOW")
             if s.horizon_profile != "LEGACY":
@@ -650,6 +724,19 @@ class ConfirmationEngine:
                         s.gates.extend(confirmation["reason_codes"])
                     else:
                         flow_ok = flow_ok or s.evidence.get("flow_substitution", {}).get("passed", False)
+                        if staged_reversal(s):
+                            from .reversal_sequence import augment
+
+                            confirmation = augment(
+                                s,
+                                dict(passed=bool(flow_ok), flow_confirmation_mode="NONE"),
+                                now,
+                                factor_ok=not alignment["blocked"],
+                            )
+                            s.evidence["confirmation"] = confirmation
+                            flow_ok = confirmation["passed"]
+                            if confirmation.get("flow_confirmation_mode") == "LOCAL_STAGED_REVERSAL":
+                                s.evidence["flow_confirmation_mode"] = "LOCAL_STAGED_REVERSAL"
                         if flow_ok and s.evidence["flow_confirmation_mode"] == "NONE":
                             s.evidence["flow_confirmation_mode"] = (
                                 "LOCAL_GENUINE_ABSORPTION"

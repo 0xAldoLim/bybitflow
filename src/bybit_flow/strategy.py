@@ -22,6 +22,7 @@ def candidates(
     horizon=None,
     quality_policy=False,
     structural_observations=None,
+    reversal_timing=False,
 ):
     context_bars, setup_bars, execution_bars = [
         [b for b in bars if b.end <= asof] for bars in (context_bars, setup_bars, execution_bars)
@@ -205,6 +206,16 @@ def candidates(
             if quality_policy:
                 version += ":" + (str(quality_policy) if modern else quality_module.POLICY)
                 slot = structure.get("event_start_ms", last.end)
+            staged = bool(
+                reversal_timing
+                and quality_policy == "trade-validity-v22"
+                and family in {"range_rejection", "liquidity_sweep"}
+                and horizon in {"SHORT_INTRADAY", "CORE_INTRADAY", "SWING"}
+            )
+            if staged:
+                from .reversal_sequence import POLICY as REVERSAL_POLICY
+
+                version += ":" + REVERSAL_POLICY
             ident = hashlib.sha256(
                 f"{instrument.symbol}|{direction}|{family}|{slot if modern else last.end}|{slot}|{version}".encode()
             ).hexdigest()[:20]
@@ -230,6 +241,7 @@ def candidates(
                     evidence={
                         **({"frozen_structure": structure} if structure else {}),
                         "production_policies": dict(
+                            **({"reversal_timing": REVERSAL_POLICY} if staged else {}),
                             confirmation="intraday-confirmation-v2"
                             if horizon in {"SHORT_INTRADAY", "CORE_INTRADAY"}
                             and family in {"liquidity_sweep", "range_rejection"}

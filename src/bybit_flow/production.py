@@ -540,7 +540,7 @@ def evaluate_intraday_confirmation(signal, flow, bars, asof, alignment=None):
         if passed
         else "NONE"
     )
-    return dict(
+    result = dict(
         policy="intraday-confirmation-v2",
         passed=passed,
         reason_codes=reasons,
@@ -558,3 +558,6 @@ def evaluate_intraday_confirmation(signal, flow, bars, asof, alignment=None):
         window_end_ms=signal.coverage.get("window_end_ms"),
         sample_count=metrics.get("baseline_samples", 0),
     )
+    from .reversal_sequence import augment
+
+    return augment(signal, result, asof, factor_ok=factor_ok, hold_ok=hold_ok, profile_ok=profile_ok)

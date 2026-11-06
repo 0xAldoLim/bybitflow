@@ -1,5 +1,22 @@
 # Release notes
 
+## 2.2.2 — staged exhaustion and reclaim timing
+
+- New intraday and swing range-rejection/liquidity-sweep candidates can confirm
+  through a non-overlapping pressure/decay/trigger sequence. The existing
+  confirmation route remains available in the same scanner.
+- Reuses retained tape, defended footprint calculations and bounded quote-event
+  OFI. Resets, incomplete observations, untrusted churn and continuing adverse
+  liquidation cascades cannot establish the new sequence.
+- Mechanism scoring uses the actual confirmed trigger without adding duplicate
+  delta/CVD votes. Raw context, baseline results and policy version are retained.
+- Deferred initial delivery rechecks the sequence without changing the original
+  decision snapshot. Existing active plans and lifecycle monitoring are preserved.
+
+No new service, ML training, compatibility relaxation, migration or data rewrite
+is introduced. Execution costs, risk, liquidity, macro/factor and V8 gates remain
+in force. See [definitions and validation limits](REVERSAL_TIMING.md).
+
 ## 2.2.1 — Reliability & Evidence Loop
 
 - Prospective, source/provenance-separated policy observations, fixed ablations,

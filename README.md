@@ -25,6 +25,12 @@ notification. Result posts require a successful initial card in the current
 signals destination. Ambiguous delivery is not automatically resent. Price-path
 results describe the published plan; they do not verify account fills or profit.
 See the [v2.2 assumptions and limitations](docs/V22_SETUP_QUALITY.md).
+Version **2.2.2** also supports staged exhaustion/reclaim timing for new range
+rejections and liquidity sweeps. It reuses the existing scanner and recorder:
+pressure must fail to extend, followed by a separate price reclaim/hold and
+trusted trade/quote-event flow turn. The existing confirmation route remains
+available. See [reversal timing](docs/REVERSAL_TIMING.md) for the exact research
+assumptions and continuity requirements.
 The [fixed retrospective comparison](docs/V22_VERIFICATION.md) does not establish
 improved profitability; full target-construction performance remains unmeasured.
 

@@ -174,7 +174,7 @@ def test_config_digest_is_redacted_stable_and_version_has_schema(settings):
     assert not any(v in json.dumps(first) for v in ("TOPSECRET", "secret.invalid", "data_dir", "equity"))
     store = Store(settings.data_dir)
     result = status(store, settings)
-    assert result["version"] == "2.2.1" and result["database"]["level"] == "011"
+    assert result["version"] == "2.2.2" and result["database"]["level"] == "011"
     store.close()
 
 

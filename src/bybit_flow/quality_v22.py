@@ -59,7 +59,16 @@ def apply(signal, price, now, liquidity=None, minimum_rr=1.5, *, book=None, sett
     # Never relabel the persisted signal or rewrite any historical observation.
     copy = deepcopy(signal)
     copy.evidence["production_policies"]["trade_quality"] = quality_v211.POLICY
+    from .reversal_sequence import selected_flow
+
+    trigger = selected_flow(signal, now)
+    if trigger:
+        # Mechanism checks use the observed turn. The unchanged control below
+        # still assesses the original full-window evidence and original target.
+        copy.evidence["flow"] = deepcopy(trigger)
     quality_v211.apply(copy, price, now, liquidity, minimum_rr, book=book, settings=settings)
+    if trigger:
+        copy.evidence["aggression_response"]["assessment_window"] = "STAGED_TRIGGER_15S"
     baseline = deepcopy(signal)
     baseline.evidence["production_policies"]["trade_quality"] = quality_v211.POLICY
     baseline.tp1 = signal.evidence.get("structural_tp1", signal.tp1)

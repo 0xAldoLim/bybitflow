@@ -1,7 +1,8 @@
 # Feature status
 
-Maintenance release 2.2.1 adds prospective policy observations and bounded
-operational controls. Trading policy remains v2.2. See
+Release 2.2.2 adds versioned staged reversal timing inside the existing scanner.
+Release 2.2.1 introduced prospective policy observations and bounded
+operational controls. Existing v2.2 checks remain available. See
 [Reliability & Evidence Loop](RELIABILITY_EVIDENCE_LOOP.md).
 
 ## Supported
@@ -9,6 +10,8 @@ operational controls. Trading policy remains v2.2. See
 - Public REST and WebSocket adapters for Binance, Bybit, and OKX.
 - Automatic source selection, fixed-source operation, and bounded multi-source comparison.
 - Four deterministic setup families with closed-bar features and executed-flow confirmation.
+- Pressure → failed extension → reclaim/hold → fresh trade/OFI turn for newly
+  generated intraday and swing reversal candidates; no additional feed or scanner.
 - V2.2 Setup Score with Evidence/Tradeability diagnostics, bounded event OFI,
   response efficiency, movement-capacity reachability and stop viability.
 - Causal execution-target selection with a retained structural objective,
