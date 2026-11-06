@@ -67,6 +67,9 @@ def create_app(settings=None):
         from .provenance import record as record_deployment
 
         initialize_forward(store, now_ms())
+        from .forward_power import initialize as initialize_power
+
+        initialize_power(store, now_ms(), settings)
         record_deployment(store, settings, now_ms())
         recorder = Recorder(store, settings)
         scanner = Scanner(settings, store, recorder)

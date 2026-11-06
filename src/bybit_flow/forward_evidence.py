@@ -17,6 +17,7 @@ POLICIES = (
     "without_target_reachability",
     "without_stop_viability",
     "without_execution_target_replacement",
+    "first_attempt_only",
 )
 PROVENANCES = ("verified_prints", "recovered_prints", "monitored_ohlc_proxy", "research_only")
 MIN_COHORT = 30  # Reporting safeguard only; never a trading or ML gate.
@@ -29,12 +30,13 @@ def initialize(store, now):
     return store.get(key)
 
 
-def variants(signal, now):
+def variants(signal, now, attempt=None):
     """Freeze fixed-component controls
     shared entry/flow/liquidity gates survive.
 
     Controls are deliberately scoped, not a reconstruction of the entire older
     scanner. Unknown components stay unknown with unchanged fixed weights.
+    ``attempt`` is the frozen causal attempt record captured at creation.
     """
     from .impact_efficiency import assess
     from .setup_scoring import EVIDENCE_WEIGHTS, TRADEABILITY_WEIGHTS, combine, engine, score
@@ -105,6 +107,19 @@ def variants(signal, now):
         result["without_execution_target_replacement"] = dict(
             status="NOT_COMPARABLE", reason="Missing structural control"
         )
+    # Shadow filter: accept only the first attempt at this frozen level. A lower-bound
+    # ordinal of two or more is still a known repeat; a possible first is unknown.
+    ordinal = (attempt or {}).get("attempt_ordinal")
+    exact = (attempt or {}).get("attempt_ordinal_status") == "EXACT"
+    if number(ordinal) and (ordinal >= 2 or exact):
+        result["first_attempt_only"] = dict(
+            score=signal.quality,
+            gates=sorted(set(signal.gates + (["NOT_FIRST_ATTEMPT"] if ordinal >= 2 else []))),
+            target="execution_tp1",
+            scope="Actual v2.2 plan; shadow rejection of repeated attempts at one frozen level",
+        )
+    else:
+        result["first_attempt_only"] = dict(status="NOT_COMPARABLE", reason="Attempt ordinal UNKNOWN")
     for row in result.values():
         row.setdefault("status", "OBSERVED")
         row["accepted"] = not row["gates"] if row.get("gates") is not None else None
@@ -151,6 +166,20 @@ def register(store, signal, now):
     if plan["decision_ms"] != decision:
         return
     full = e["v22"]
+    from .forward_power import attempt as attempt_record
+    from .forward_power import bucket
+
+    tried = attempt_record(store, signal.id) or {}
+    sign = 1 if signal.direction == "LONG" else -1
+    risk = abs(signal.entry - signal.stop)
+    executable = e.get("entry_quality", {}).get("executable_price")
+    notional = signal.risk.get("notional")
+    exit_side = "bid" if sign > 0 else "ask"
+    depth = {
+        band: notional / row[exit_side]
+        for band, row in (e.get("book", {}).get("depth") or {}).items()
+        if number(notional) and isinstance(row, dict) and number(row.get(exit_side)) and row[exit_side] > 0
+    }
     payload = dict(
         signal_id=signal.id,
         path_id=path_signal.id,
@@ -173,10 +202,37 @@ def register(store, signal, now):
         stop_state=e.get("stop_viability", {}).get("state", "UNKNOWN"),
         impact_state=e.get("impact_efficiency", {}).get("state", "UNKNOWN"),
         ofi_state=e.get("event_ofi", {}).get("state", "UNKNOWN"),
-        variants=variants(signal, decision),
+        variants=variants(signal, decision, tried),
         frozen_path=plan,
         research_only=True,
         production_authority=False,
+        # Evidence-power fields (2.2.3); research only, never ML features.
+        flow_confirmed=True,
+        price_tick=e.get("price_tick"),
+        exposure_cluster=e.get("opportunity_priority", {}).get("cluster_id", "UNKNOWN"),
+        structural_decision_ms=e.get("frozen_structure", {}).get("available_ms", e.get("trigger_bar_end")),
+        structural_planned_entry=signal.entry,
+        confirmed_executable_price=executable,
+        confirmation_cost_r=sign * (executable - signal.entry) / risk
+        if number(executable) and risk > 0
+        else None,
+        attempt_ordinal=tried.get("attempt_ordinal"),
+        attempt_ordinal_status=tried.get("attempt_ordinal_status", "UNKNOWN"),
+        attempt_ordinal_cohort=bucket(tried.get("attempt_ordinal"))
+        if tried.get("attempt_ordinal_status") == "EXACT"
+        else "REPEAT_LOWER_BOUND"
+        if (tried.get("attempt_ordinal") or 0) >= 2
+        else "UNKNOWN",
+        pullback_ordinal=tried.get("pullback_ordinal"),
+        pullback_ordinal_cohort=bucket(tried.get("pullback_ordinal"))
+        if tried.get("pullback_ordinal_status") == "EXACT"
+        else "UNKNOWN",
+        prior_attempt_outcomes_known=len(tried.get("prior_attempt_outcomes_known", [])),
+        stop_exit_depth=dict(
+            exit_side=exit_side,
+            notional_to_depth=depth,
+            scope="Decision-time visible depth near mid; not depth at stop time",
+        ),
     )
     store.db.execute(
         "INSERT OR IGNORE INTO policy_opportunities VALUES(?,?,?,?,?,?)",
@@ -295,8 +351,16 @@ def report(store, now, limit=5000):
             "stop_state",
             "impact_state",
             "ofi_state",
+            "attempt_ordinal_cohort",
+            "pullback_ordinal_cohort",
         ):
             cohorts.setdefault(key + ":" + dimension + ":" + str(o.get(dimension, "UNKNOWN")), []).append(m)
+    from .forward_power import report_section
+
+    try:
+        power = report_section(store, now, limit, MIN_COHORT)
+    except Exception as exc:
+        power = dict(status="UNAVAILABLE", error_type=type(exc).__name__)
     return dict(
         label="FORWARD OBSERVATION / NOT VERIFIED ACCOUNT PERFORMANCE",
         epoch=store.get("forward_evidence_epoch_v1"),
@@ -318,6 +382,7 @@ def report(store, now, limit=5000):
         limit=limit,
         provenance_groups=list(PROVENANCES),
         limitation="OHLC research paths are lower bounds, not prints or fills. No pooling across policy, source or provenance. Missing metrics remain unknown.",
+        evidence_power=power,
     )
 
 
@@ -341,10 +406,18 @@ def record_promotion(store, record, now):
     if required - record.keys() or record.get("automatic") or record["evaluation_end"] > now:
         raise ValueError("Complete manual research review required; no automatic promotion")
     ident = hashlib.sha256(json.dumps(record, sort_keys=True).encode()).hexdigest()[:32]
+    from .forward_power import preregistration_status
+
+    # Flagged, never blocked: neither status grants production authority.
+    prereg = preregistration_status(store, record)
     with store.db:
         store.db.execute(
             "INSERT OR IGNORE INTO policy_promotions VALUES(?,?,?)",
-            (ident, now, json.dumps(record | dict(manual=True, production_authority=False))),
+            (
+                ident,
+                now,
+                json.dumps(record | dict(manual=True, production_authority=False, preregistration=prereg)),
+            ),
         )
     return ident
 

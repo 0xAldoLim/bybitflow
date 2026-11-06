@@ -263,6 +263,14 @@ class ResearchScheduler:
                         finally:
                             if api is not runtime.api:
                                 await api.close()
+                    from .forward_power import sweep as sweep_power
+
+                    # Paired research stages enroll before any advance can finish
+                    # their parent. A failure here never blocks existing research.
+                    try:
+                        sweep_power(runtime.store, now_ms())
+                    except Exception:
+                        runtime.store.db.health.increment("evidence_power_errors")
                     from .setup_research import advance_mixed_batch
 
                     # Oldest due market across both research policies; neither

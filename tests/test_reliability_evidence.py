@@ -85,7 +85,7 @@ def test_forward_outcomes_restart_idempotent_and_no_label_overwrite(signal, sett
     advance(store, s.id + ":forward", bars[1:], NOW + 240000)
     assert forward.ingest_paths(store, NOW + 240000) == 1
     result = [tuple(r) for r in store.db.execute("SELECT * FROM policy_results")]
-    assert len(result) == 7 and forward.ingest_paths(store, NOW + 240001) == 0
+    assert len(result) == len(forward.POLICIES) == 8 and forward.ingest_paths(store, NOW + 240001) == 0
     assert [tuple(r) for r in store.db.execute("SELECT * FROM policy_results")] == result
     report = forward.report(store, NOW + 240001)
     assert report["opportunities"] == 1
@@ -174,7 +174,7 @@ def test_config_digest_is_redacted_stable_and_version_has_schema(settings):
     assert not any(v in json.dumps(first) for v in ("TOPSECRET", "secret.invalid", "data_dir", "equity"))
     store = Store(settings.data_dir)
     result = status(store, settings)
-    assert result["version"] == "2.2.2" and result["database"]["level"] == "011"
+    assert result["version"] == "2.2.3" and result["database"]["level"] == "012"
     store.close()
 
 

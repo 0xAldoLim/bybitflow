@@ -84,11 +84,32 @@ class Settings(BaseSettings):
     admin_token: SecretStr = SecretStr("")
     dashboard_url: str = "http://127.0.0.1:8000"
     cooldown_minutes: int = Field(240, ge=15)
+    # Research-only evidence-power measurements; never production or Discord inputs.
+    forward_delay_seconds: list[int] = Field(default_factory=lambda: [60, 180, 600])
+    forward_power_max_per_hour: int = Field(60, ge=0, le=1000)
+    forward_control_max_per_hour: int = Field(20, ge=0, le=500)
+    forward_power_max_rows: int = Field(200_000, ge=1000, le=2_000_000)
+    forward_attempt_window_hours: int = Field(72, ge=1, le=720)
+    forward_stats_bootstrap: int = Field(2000, ge=200, le=20000)
+    forward_stats_seed: int = 20221103
+    forward_cluster_window_minutes: int = Field(60, ge=1, le=1440)
 
     @field_validator("equity", mode="before")
     @classmethod
     def empty_equity(cls, value):
         return None if value == "" else value
+
+    @field_validator("forward_delay_seconds")
+    @classmethod
+    def valid_delays(cls, value):
+        if (
+            not value
+            or len(value) > 6
+            or any(not 1 <= d <= 3600 for d in value)
+            or len(set(value)) != len(value)
+        ):
+            raise ValueError("Delays require 1–6 unique values within 1–3600 seconds")
+        return sorted(value)
 
     @field_validator("post_terminal_checkpoints")
     @classmethod

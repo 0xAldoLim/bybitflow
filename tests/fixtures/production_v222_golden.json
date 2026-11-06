@@ -1,0 +1,704 @@
+{
+ "confirmed": {
+  "discord": {
+   "allowed_mentions": {
+    "parse": []
+   },
+   "embeds": [
+    {
+     "color": 5032356,
+     "description": "**Setup Score 46.5/100 \u00b7 D**\nCore intraday \u00b7 1\u20134 hours \u00b7 Trend pullback \u00b7 Bybit",
+     "fields": [
+      {
+       "inline": true,
+       "name": "Entry",
+       "value": "100.01 observed ask\nPlan 100 \u00b7 zone 99\u2013101"
+      },
+      {
+       "inline": true,
+       "name": "Stop loss",
+       "value": "98\nHealthy stop"
+      },
+      {
+       "inline": true,
+       "name": "Target",
+       "value": "106"
+      },
+      {
+       "inline": false,
+       "name": "Trade plan",
+       "value": "Net reward:risk 2.65R \u00b7 stop/noise 2.01\u00d7 \u00b7 target/setup ATR 2.99\u00d7\nEntry until <t:1000:t> \u00b7 tracking until <t:14520:f>"
+      },
+      {
+       "inline": false,
+       "name": "Assessment",
+       "value": "Evidence Mixed \u00b7 Tradeability Mixed\nLocation 0 \u00b7 Structure 67 \u00b7 Mechanism 84\nFollow-through 84 \u00b7 Target Unknown \u00b7 Stop 73 \u00b7 Execution 77"
+      },
+      {
+       "inline": false,
+       "name": "Flow and execution",
+       "value": "Efficient directional impact \u00b7 directional delta 50.0%\nPrice response 30.0 bps \u00b7 impact persistence 100%\nQuote Quote fresh \u00b7 spread Unknown \u00b7 OFI Unknown (Unknown)"
+      },
+      {
+       "inline": false,
+       "name": "Target and context",
+       "value": "Reachability Unknown \u00b7 path Unknown\nStrongest observed barrier 2.49R from entry\nMarket Unknown \u00b7 cross venue Unknown\nShared market exposure Unknown"
+      },
+      {
+       "inline": false,
+       "name": "Strengths / limiting factors",
+       "value": "+ Structure: valid\n+ Flow response: efficient directional impact\n\u2022 Location: unknown\n\u2022 Target path: evidence unavailable"
+      },
+      {
+       "inline": false,
+       "name": "Why this setup",
+       "value": "Trend pullback with a frozen structural reference. Efficient directional impact; the execution target is unknown under the historical-horizon assumption. Component scores describe the evidence; they do not estimate success probability."
+      },
+      {
+       "inline": false,
+       "name": "Invalidation",
+       "value": "Planned stop 98, or failure of the frozen structural premise. Feed interruptions pause monitoring. No account entry or automatic execution is assumed."
+      }
+     ],
+     "footer": {
+      "text": "golden-confirmed \u00b7 Deterministic setup quality; not a win probability"
+     },
+     "timestamp": "1970-01-01T00:02:00+00:00",
+     "title": "NEW SETUP \u00b7 TESTUSDT LONG",
+     "url": "http://127.0.0.1:8000/#signal/golden-confirmed"
+    }
+   ]
+  },
+  "final_tier": "RESEARCH",
+  "gates": [],
+  "plan": [
+   100.0,
+   98.0,
+   106.0,
+   108.0,
+   [
+    99.0,
+    101.0
+   ]
+  ],
+  "quality": 46.5,
+  "raw_tier": "D",
+  "risk": {
+   "accepted": true,
+   "adverse_mark_distance_fraction": 0.3233333333333333,
+   "cost_components": {
+    "additional_impact_per_base": 0,
+    "cost_per_base": 0.18330000000000002,
+    "entry_price_basis": "Frozen planned candle-close price; not a verified executable fill",
+    "fee_per_base": 0.11330000000000001,
+    "funding_per_base": 0.03,
+    "impact_treatment": "Residual VWAP beyond best quote replaces entry reserve only if larger",
+    "policy": "round-trip-reserve-v1",
+    "residual_entry_impact_per_base": null,
+    "slippage_per_base": 0.04,
+    "spread_added_per_base": 0.0,
+    "spread_treatment": "No separate spread charge. Current entry estimate uses executable bid/ask; frozen proxy costs remain assumed"
+   },
+   "cost_per_base": 0.18330000000000002,
+   "estimated_margin": null,
+   "fee_bps_assumption": 5.5,
+   "funding_reserve_bps": 3.0,
+   "gross_rr": 3.0,
+   "illustrative_leverage": 3.0,
+   "impact": {
+    "impact_bps": 1.0,
+    "quantity": 9.99900009999,
+    "vwap": 100.01
+   },
+   "liquidation_model": "isolated-margin stress approximation; not Bybit account liquidation price",
+   "maintenance_margin_assumption": 0.01,
+   "net_rr": 2.664178079054642,
+   "notional": 1000.0,
+   "portfolio_status": "not assessed; no equity configured",
+   "quantity": null,
+   "reasons": [],
+   "risk_fraction": 0.0025,
+   "slippage_bps_assumption": 2.0,
+   "warning": "Stops, fills and maximum losses are not guaranteed in gaps or extreme volatility"
+  },
+  "setup_assessment": {
+   "assumption": "RESEARCH-GROUNDED ASSUMPTIONS; not validated alpha or win probabilities",
+   "available_ms": 120000,
+   "confidence_cap": 80,
+   "coverage_complete": true,
+   "evidence": {
+    "components": {
+     "context": {
+      "available_ms": 120000,
+      "explanation": "Available factor/venue context; unknown is not adverse",
+      "observations": {},
+      "policy": "setup-context-v22",
+      "score": null,
+      "source": "bybit",
+      "state": "UNKNOWN",
+      "symbol": "TESTUSDT"
+     },
+     "location": {
+      "available_ms": 120000,
+      "distance_to_poc_atr": null,
+      "explanation": "unknown; original trend pullback reference",
+      "policy": "setup-location-v22",
+      "profile_position": null,
+      "profile_ready": false,
+      "range_position": 0.5010000000000006,
+      "score": 0.0,
+      "source": "bybit",
+      "state": "UNKNOWN",
+      "structural_reference": 99,
+      "symbol": "TESTUSDT"
+     },
+     "mechanism": {
+      "score": 84.5,
+      "state": "EFFICIENT_DIRECTIONAL_IMPACT"
+     },
+     "structure": {
+      "available_ms": 120000,
+      "explanation": "Frozen family-specific structural premise",
+      "family": "trend_pullback",
+      "frozen_reference": 99,
+      "policy": "setup-structure-v22",
+      "reasons": [],
+      "score": 66.66666666666666,
+      "source": "bybit",
+      "state": "VALID",
+      "structural_age_ms": 60000,
+      "structure_event_id": null,
+      "symbol": "TESTUSDT"
+     }
+    },
+    "known_weight": 85,
+    "possible_score_upper": 57.016666666666666,
+    "score": 42.016666666666666,
+    "supported_score": 42.016666666666666,
+    "weights": {
+     "context": 15,
+     "location": 30,
+     "mechanism": 30,
+     "structure": 25
+    }
+   },
+   "evidence_score": 42.016666666666666,
+   "grade": "D",
+   "optional_readiness": {
+    "capacity": false,
+    "ofi": false,
+    "path": false,
+    "profile": false
+   },
+   "policy": "setup-score-v22",
+   "research_ablations": {
+    "available_ms": 120000,
+    "policy": "fixed-component-ablations-v22",
+    "research_only": true,
+    "scope": "Score/gate ablations of the same frozen execution plan, not simulated alternative target construction",
+    "source": "bybit",
+    "symbol": "TESTUSDT",
+    "variants": {
+     "v22_full": {
+      "gates": [],
+      "score": 46.5
+     },
+     "without_ofi": {
+      "gates": [],
+      "score": 46.5
+     },
+     "without_stop_viability": {
+      "gates": [],
+      "score": 41.2
+     },
+     "without_target_reachability": {
+      "gates": [],
+      "score": 46.5
+     }
+    }
+   },
+   "score_profile": "bybitflow-v22-setup-1",
+   "setup_score": 46.5,
+   "source": "bybit",
+   "strengths": [
+    "Structure: valid",
+    "Flow response: efficient directional impact",
+    "Stop viability: healthy stop",
+    "Execution: acceptable"
+   ],
+   "symbol": "TESTUSDT",
+   "tradeability": {
+    "components": {
+     "execution": {
+      "available_ms": 120000,
+      "cost_risk_fraction": 0.09120024875621867,
+      "net_rr": 2.64745105861567,
+      "policy": "setup-execution-v22",
+      "price": 100.01,
+      "quote_state": "QUOTE_FRESH",
+      "relative_spread": null,
+      "score": 76.7801353905058,
+      "source": "bybit",
+      "state": "ACCEPTABLE",
+      "symbol": "TESTUSDT",
+      "zone_relation": "INSIDE_ZONE"
+     },
+     "follow_through": {
+      "score": 84.5,
+      "state": "EFFICIENT_DIRECTIONAL_IMPACT"
+     },
+     "stop_geometry": {
+      "assumption": "Noise-conflicted stops earn less credit; infeasible noise-safe geometry is rejected, never widened",
+      "available_ms": 120000,
+      "cost_risk_fraction": 0.09120024875621867,
+      "coverage_complete": true,
+      "maximum_structural_distance": 4.5,
+      "noise_safe_net_rr": 4.907146252574865,
+      "ordinary_noise": 1,
+      "policy": "stop-viability-v1",
+      "reasons": [],
+      "residual_impact": 0,
+      "score": 72.82608695652179,
+      "source": "bybit",
+      "spread_bps": 2.0,
+      "state": "HEALTHY_STOP",
+      "stop": 98,
+      "stop_distance": 2.010000000000005,
+      "stop_execution_atr": 4.02000000000001,
+      "stop_noise_ratio": 2.010000000000005,
+      "stop_setup_atr": 1.0050000000000026,
+      "stop_wick_q75": null,
+      "stop_wick_q80": null,
+      "stop_wick_q90": null,
+      "structural_anchor": 98.5,
+      "symbol": "TESTUSDT"
+     },
+     "target_reachability": {
+      "available_ms": 120000,
+      "path": {
+       "available_ms": 120000,
+       "barrier_count": 1,
+       "barrier_strength": [
+        {
+         "price": 105.0,
+         "volume_fraction": null
+        }
+       ],
+       "barriers": [
+        105.0
+       ],
+       "coverage_complete": false,
+       "limitation": "Executed volume concentration, not a probability; visible depth is transient",
+       "nearest_barrier_distance_r": 2.482587064676608,
+       "path_difficulty_score": null,
+       "policy": "volume-weighted-path-v22",
+       "score": null,
+       "source": "bybit",
+       "state": "UNKNOWN",
+       "strongest_barrier": {
+        "price": 105.0,
+        "volume_fraction": null
+       },
+       "strongest_barrier_distance_r": 2.4949999999999974,
+       "symbol": "TESTUSDT",
+       "visible_opposing_depth": 10001000.0,
+       "volume_density": null
+      },
+      "policy": "target-reachability-v1",
+      "reachability": {
+       "available_ms": 120000,
+       "capacity": {},
+       "coverage_complete": false,
+       "distance": 5.989999999999995,
+       "executable_price": 100.01,
+       "policy": "target-reachability-v1",
+       "score": null,
+       "source": "bybit",
+       "state": "UNKNOWN",
+       "symbol": "TESTUSDT",
+       "target": 106,
+       "target_execution_atr": 11.97999999999999,
+       "target_noise": 5.989999999999995,
+       "target_setup_atr": 2.9949999999999974
+      },
+      "score": null,
+      "source": "bybit",
+      "state": "UNKNOWN",
+      "symbol": "TESTUSDT"
+     }
+    },
+    "known_weight": 70,
+    "possible_score_upper": 85.27124446940552,
+    "score": 55.27124446940552,
+    "supported_score": 55.27124446940552,
+    "weights": {
+     "execution": 20,
+     "follow_through": 30,
+     "stop_geometry": 20,
+     "target_reachability": 30
+    }
+   },
+   "tradeability_score": 55.27124446940552,
+   "weaknesses": [
+    "Location: unknown",
+    "Target path: evidence unavailable"
+   ]
+  }
+ },
+ "flow_failed": {
+  "discord": {
+   "allowed_mentions": {
+    "parse": []
+   },
+   "embeds": [
+    {
+     "color": 5032356,
+     "description": "**Setup Score 0.0/100 \u00b7 F**\nCore intraday \u00b7 1\u20134 hours \u00b7 Trend pullback \u00b7 Bybit",
+     "fields": [
+      {
+       "inline": true,
+       "name": "Entry",
+       "value": "100.01 observed ask\nPlan 100 \u00b7 zone 99\u2013101"
+      },
+      {
+       "inline": true,
+       "name": "Stop loss",
+       "value": "98\nHealthy stop"
+      },
+      {
+       "inline": true,
+       "name": "Target",
+       "value": "106"
+      },
+      {
+       "inline": false,
+       "name": "Trade plan",
+       "value": "Net reward:risk 2.65R \u00b7 stop/noise 2.01\u00d7 \u00b7 target/setup ATR 2.99\u00d7\nEntry until <t:1000:t> \u00b7 tracking until <t:14520:f>"
+      },
+      {
+       "inline": false,
+       "name": "Assessment",
+       "value": "Evidence Mixed \u00b7 Tradeability Mixed\nLocation 0 \u00b7 Structure 67 \u00b7 Mechanism 84\nFollow-through 84 \u00b7 Target Unknown \u00b7 Stop 73 \u00b7 Execution 77"
+      },
+      {
+       "inline": false,
+       "name": "Flow and execution",
+       "value": "Efficient directional impact \u00b7 directional delta 50.0%\nPrice response 30.0 bps \u00b7 impact persistence 100%\nQuote Quote fresh \u00b7 spread Unknown \u00b7 OFI Unknown (Unknown)"
+      },
+      {
+       "inline": false,
+       "name": "Target and context",
+       "value": "Reachability Unknown \u00b7 path Unknown\nStrongest observed barrier 2.49R from entry\nMarket Unknown \u00b7 cross venue Unknown\nShared market exposure Unknown"
+      },
+      {
+       "inline": false,
+       "name": "Strengths / limiting factors",
+       "value": "+ Structure: valid\n+ Flow response: efficient directional impact\n\u2022 Location: unknown\n\u2022 Target path: evidence unavailable"
+      },
+      {
+       "inline": false,
+       "name": "Why this setup",
+       "value": "Trend pullback with a frozen structural reference. Efficient directional impact; the execution target is unknown under the historical-horizon assumption. Component scores describe the evidence; they do not estimate success probability."
+      },
+      {
+       "inline": false,
+       "name": "Invalidation",
+       "value": "Planned stop 98, or failure of the frozen structural premise. Feed interruptions pause monitoring. No account entry or automatic execution is assumed."
+      }
+     ],
+     "footer": {
+      "text": "golden-flow_failed \u00b7 Deterministic setup quality; not a win probability"
+     },
+     "timestamp": "1970-01-01T00:02:00+00:00",
+     "title": "NEW SETUP \u00b7 TESTUSDT LONG",
+     "url": "http://127.0.0.1:8000/#signal/golden-flow_failed"
+    }
+   ]
+  },
+  "final_tier": "REJECTED",
+  "gates": [
+   "executed order flow did not confirm family trigger"
+  ],
+  "plan": [
+   100.0,
+   98.0,
+   106.0,
+   108.0,
+   [
+    99.0,
+    101.0
+   ]
+  ],
+  "quality": 0.0,
+  "raw_tier": "F",
+  "risk": {
+   "accepted": true,
+   "adverse_mark_distance_fraction": 0.3233333333333333,
+   "cost_components": {
+    "additional_impact_per_base": 0,
+    "cost_per_base": 0.18330000000000002,
+    "entry_price_basis": "Frozen planned candle-close price; not a verified executable fill",
+    "fee_per_base": 0.11330000000000001,
+    "funding_per_base": 0.03,
+    "impact_treatment": "Residual VWAP beyond best quote replaces entry reserve only if larger",
+    "policy": "round-trip-reserve-v1",
+    "residual_entry_impact_per_base": null,
+    "slippage_per_base": 0.04,
+    "spread_added_per_base": 0.0,
+    "spread_treatment": "No separate spread charge. Current entry estimate uses executable bid/ask; frozen proxy costs remain assumed"
+   },
+   "cost_per_base": 0.18330000000000002,
+   "estimated_margin": null,
+   "fee_bps_assumption": 5.5,
+   "funding_reserve_bps": 3.0,
+   "gross_rr": 3.0,
+   "illustrative_leverage": 3.0,
+   "impact": {
+    "impact_bps": 1.0,
+    "quantity": 9.99900009999,
+    "vwap": 100.01
+   },
+   "liquidation_model": "isolated-margin stress approximation; not Bybit account liquidation price",
+   "maintenance_margin_assumption": 0.01,
+   "net_rr": 2.664178079054642,
+   "notional": 1000.0,
+   "portfolio_status": "not assessed; no equity configured",
+   "quantity": null,
+   "reasons": [],
+   "risk_fraction": 0.0025,
+   "slippage_bps_assumption": 2.0,
+   "warning": "Stops, fills and maximum losses are not guaranteed in gaps or extreme volatility"
+  },
+  "setup_assessment": {
+   "assumption": "RESEARCH-GROUNDED ASSUMPTIONS; not validated alpha or win probabilities",
+   "available_ms": 120000,
+   "confidence_cap": 0,
+   "coverage_complete": false,
+   "evidence": {
+    "components": {
+     "context": {
+      "available_ms": 120000,
+      "explanation": "Available factor/venue context; unknown is not adverse",
+      "observations": {},
+      "policy": "setup-context-v22",
+      "score": null,
+      "source": "bybit",
+      "state": "UNKNOWN",
+      "symbol": "TESTUSDT"
+     },
+     "location": {
+      "available_ms": 120000,
+      "distance_to_poc_atr": null,
+      "explanation": "unknown; original trend pullback reference",
+      "policy": "setup-location-v22",
+      "profile_position": null,
+      "profile_ready": false,
+      "range_position": 0.5010000000000006,
+      "score": 0.0,
+      "source": "bybit",
+      "state": "UNKNOWN",
+      "structural_reference": 99,
+      "symbol": "TESTUSDT"
+     },
+     "mechanism": {
+      "score": 84.5,
+      "state": "EFFICIENT_DIRECTIONAL_IMPACT"
+     },
+     "structure": {
+      "available_ms": 120000,
+      "explanation": "Frozen family-specific structural premise",
+      "family": "trend_pullback",
+      "frozen_reference": 99,
+      "policy": "setup-structure-v22",
+      "reasons": [],
+      "score": 66.66666666666666,
+      "source": "bybit",
+      "state": "VALID",
+      "structural_age_ms": 60000,
+      "structure_event_id": null,
+      "symbol": "TESTUSDT"
+     }
+    },
+    "known_weight": 85,
+    "possible_score_upper": 57.016666666666666,
+    "score": 42.016666666666666,
+    "supported_score": 42.016666666666666,
+    "weights": {
+     "context": 15,
+     "location": 30,
+     "mechanism": 30,
+     "structure": 25
+    }
+   },
+   "evidence_score": 42.016666666666666,
+   "grade": "F",
+   "optional_readiness": {
+    "capacity": false,
+    "ofi": false,
+    "path": false,
+    "profile": false
+   },
+   "policy": "setup-score-v22",
+   "research_ablations": {
+    "available_ms": 120000,
+    "policy": "fixed-component-ablations-v22",
+    "research_only": true,
+    "scope": "Score/gate ablations of the same frozen execution plan, not simulated alternative target construction",
+    "source": "bybit",
+    "symbol": "TESTUSDT",
+    "variants": {
+     "v22_full": {
+      "gates": [
+       "executed order flow did not confirm family trigger"
+      ],
+      "score": 0.0
+     },
+     "without_ofi": {
+      "gates": [
+       "executed order flow did not confirm family trigger"
+      ],
+      "score": 0.0
+     },
+     "without_stop_viability": {
+      "gates": [
+       "executed order flow did not confirm family trigger"
+      ],
+      "score": 0.0
+     },
+     "without_target_reachability": {
+      "gates": [
+       "executed order flow did not confirm family trigger"
+      ],
+      "score": 0.0
+     }
+    }
+   },
+   "score_profile": "bybitflow-v22-setup-1",
+   "setup_score": 0.0,
+   "source": "bybit",
+   "strengths": [
+    "Structure: valid",
+    "Flow response: efficient directional impact",
+    "Stop viability: healthy stop",
+    "Execution: acceptable"
+   ],
+   "symbol": "TESTUSDT",
+   "tradeability": {
+    "components": {
+     "execution": {
+      "available_ms": 120000,
+      "cost_risk_fraction": 0.09120024875621867,
+      "net_rr": 2.64745105861567,
+      "policy": "setup-execution-v22",
+      "price": 100.01,
+      "quote_state": "QUOTE_FRESH",
+      "relative_spread": null,
+      "score": 76.7801353905058,
+      "source": "bybit",
+      "state": "ACCEPTABLE",
+      "symbol": "TESTUSDT",
+      "zone_relation": "INSIDE_ZONE"
+     },
+     "follow_through": {
+      "score": 84.5,
+      "state": "EFFICIENT_DIRECTIONAL_IMPACT"
+     },
+     "stop_geometry": {
+      "assumption": "Noise-conflicted stops earn less credit; infeasible noise-safe geometry is rejected, never widened",
+      "available_ms": 120000,
+      "cost_risk_fraction": 0.09120024875621867,
+      "coverage_complete": true,
+      "maximum_structural_distance": 4.5,
+      "noise_safe_net_rr": 4.907146252574865,
+      "ordinary_noise": 1,
+      "policy": "stop-viability-v1",
+      "reasons": [],
+      "residual_impact": 0,
+      "score": 72.82608695652179,
+      "source": "bybit",
+      "spread_bps": 2.0,
+      "state": "HEALTHY_STOP",
+      "stop": 98,
+      "stop_distance": 2.010000000000005,
+      "stop_execution_atr": 4.02000000000001,
+      "stop_noise_ratio": 2.010000000000005,
+      "stop_setup_atr": 1.0050000000000026,
+      "stop_wick_q75": null,
+      "stop_wick_q80": null,
+      "stop_wick_q90": null,
+      "structural_anchor": 98.5,
+      "symbol": "TESTUSDT"
+     },
+     "target_reachability": {
+      "available_ms": 120000,
+      "path": {
+       "available_ms": 120000,
+       "barrier_count": 1,
+       "barrier_strength": [
+        {
+         "price": 105.0,
+         "volume_fraction": null
+        }
+       ],
+       "barriers": [
+        105.0
+       ],
+       "coverage_complete": false,
+       "limitation": "Executed volume concentration, not a probability; visible depth is transient",
+       "nearest_barrier_distance_r": 2.482587064676608,
+       "path_difficulty_score": null,
+       "policy": "volume-weighted-path-v22",
+       "score": null,
+       "source": "bybit",
+       "state": "UNKNOWN",
+       "strongest_barrier": {
+        "price": 105.0,
+        "volume_fraction": null
+       },
+       "strongest_barrier_distance_r": 2.4949999999999974,
+       "symbol": "TESTUSDT",
+       "visible_opposing_depth": 10001000.0,
+       "volume_density": null
+      },
+      "policy": "target-reachability-v1",
+      "reachability": {
+       "available_ms": 120000,
+       "capacity": {},
+       "coverage_complete": false,
+       "distance": 5.989999999999995,
+       "executable_price": 100.01,
+       "policy": "target-reachability-v1",
+       "score": null,
+       "source": "bybit",
+       "state": "UNKNOWN",
+       "symbol": "TESTUSDT",
+       "target": 106,
+       "target_execution_atr": 11.97999999999999,
+       "target_noise": 5.989999999999995,
+       "target_setup_atr": 2.9949999999999974
+      },
+      "score": null,
+      "source": "bybit",
+      "state": "UNKNOWN",
+      "symbol": "TESTUSDT"
+     }
+    },
+    "known_weight": 70,
+    "possible_score_upper": 85.27124446940552,
+    "score": 55.27124446940552,
+    "supported_score": 55.27124446940552,
+    "weights": {
+     "execution": 20,
+     "follow_through": 30,
+     "stop_geometry": 20,
+     "target_reachability": 30
+    }
+   },
+   "tradeability_score": 55.27124446940552,
+   "weaknesses": [
+    "Location: unknown",
+    "Target path: evidence unavailable"
+   ]
+  }
+ }
+}

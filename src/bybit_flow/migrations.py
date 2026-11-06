@@ -121,7 +121,7 @@ def recording_symbol_projection(store):
 
 
 def registry():
-    from . import funnel, identity, observations, packing, path_research, setup_research
+    from . import forward_power, funnel, identity, observations, packing, path_research, setup_research
     from .ml import store as features
 
     return (
@@ -149,6 +149,13 @@ def registry():
             recording_symbol_projection,
             repeatable=False,
             sql=RECORDING_SYMBOL_PROJECTION_SQL,
+        ),
+        Migration(
+            "012",
+            "evidence-power-research",
+            forward_power.migrate,
+            repeatable=False,
+            sql=forward_power.POWER_SQL,
         ),
     )
 

@@ -118,7 +118,7 @@ def test_recording_symbol_index_upgrade_preserves_existing_evidence(settings, mo
             "SELECT * FROM migration_registry WHERE migration_id<=?", (previous_level,)
         )
     ] == before["migration_registry"]
-    assert migrations.status(store)["level"] == "011"
+    assert migrations.status(store)["level"] == "012"
     assert store.db.execute("SELECT 1 FROM sqlite_master WHERE name='ml_recording_symbols_time'").fetchone()
     assert (
         store.db.execute("SELECT symbol FROM ml_recording_symbols WHERE snapshot_id='frozen'").fetchone()[0]

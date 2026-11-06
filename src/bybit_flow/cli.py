@@ -32,6 +32,11 @@ def main():
         "policy-review", help="Record a manual policy research review; no production authority"
     )
     review.add_argument("record", type=Path)
+    prereg = sub.add_parser(
+        "policy-preregister",
+        help="Store an immutable, hashed research pre-registration; no production authority",
+    )
+    prereg.add_argument("record", type=Path)
     sub.add_parser("forward-report", help="Prospective policy observations; never account performance")
     market = sub.add_parser("test-market", help="Genuine public REST and trade WebSocket smoke test")
     market.add_argument("--exchange", choices=["binance", "bybit", "okx"])
@@ -119,16 +124,23 @@ def main():
             print(json.dumps(status(store) | {"deployment": provenance_status(store, settings)}, indent=2))
         elif args.command == "policy-review":
             from .forward_evidence import record_promotion
+            from .forward_power import preregistration_status
 
+            review_record = json.loads(args.record.read_text(encoding="utf-8"))
             print(
                 json.dumps(
                     {
-                        "review_id": record_promotion(
-                            store, json.loads(args.record.read_text(encoding="utf-8")), now_ms()
-                        ),
+                        "review_id": record_promotion(store, review_record, now_ms()),
+                        "preregistration": preregistration_status(store, review_record),
                         "production_changed": False,
                     }
                 )
+            )
+        elif args.command == "policy-preregister":
+            from .forward_power import preregister
+
+            print(
+                json.dumps(preregister(store, json.loads(args.record.read_text(encoding="utf-8")), now_ms()))
             )
         elif args.command == "forward-report":
             from .forward_evidence import report

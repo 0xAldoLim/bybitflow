@@ -213,6 +213,13 @@ class Store:
             register_setup_paths(self, signal, now_ms(), stage="delivery")
         start(self, signal, now_ms())
         # Shadow research cannot roll back an acknowledged production decision.
+        from .forward_power import on_save as record_power
+
+        try:
+            with self.db:
+                record_power(self, signal, now_ms(), created=not old)
+        except Exception:
+            self.db.health.increment("evidence_power_errors")
         from .forward_evidence import register as register_forward
 
         try:
