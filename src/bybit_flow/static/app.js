@@ -146,6 +146,7 @@ function setupAssessment(s, research) {
   ];
   return panel("Setup Score · v2.2",
     `<p><strong>${number(v.setup_score, 1)} / 100 · ${escape(s.raw_tier)}</strong> · Deterministic setup quality, not a win probability.</p>` +
+    `<p>Evidence coverage: ${number(v.evidence?.known_weight, 0)}% · tradeability coverage: ${number(v.tradeability?.known_weight, 0)}%. Missing evidence earns no supporting credit; coverage is not a win probability. The published score is unchanged.</p>` +
     `<p>Target ${number(s.tp1, 8)} · structural objective ${number(e.structural_tp1, 8)} · reachability ${escape(target.state || "UNKNOWN")} · stop ${escape(stop.state || "UNKNOWN")}</p>` +
     `<p>Flow response ${escape(flow.state || "UNKNOWN")} · OFI ${escape(e.event_ofi?.state || "UNAVAILABLE")}</p>` +
     table(["Supporting component", "Score", "Evidence state"], components.map(([name, r]) => [
@@ -306,7 +307,9 @@ async function render(background = false) {
         latest = ml.models[0];
       const stale = ml.status === "STALE";
       const modelReport = latest?.report || {};
-      body = panel(
+      body = panel("ML readiness", table(["Stage", "State", "Explanation"],
+        (ml.readiness_stages?.stages || []).map(r => [escape(r.stage), escape(r.state), escape(r.detail)])) +
+        `<p>${escape(ml.readiness_stages?.note || "Awaiting readiness diagnostics")}</p>`) + panel(
         "Learning data",
         table(["Exchange", "Recorded-print outcomes", "Recovered setup outcomes", "Historical bootstrap"],
           ["binance", "bybit", "okx"].map(source => [escape(source),

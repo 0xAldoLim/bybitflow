@@ -1,5 +1,19 @@
 # Release notes
 
+## Operational readiness repair
+
+- Capacity upkeep can audit checksum-damaged recordings as explicit gaps so one
+  bad segment cannot indefinitely block later evidence processing. Strict replay
+  still rejects checksum failures; affected evidence is never treated as complete.
+- ML readiness stages distinguish collection, training, compatibility and
+  production validation. Setup details show evidence coverage without rescoring.
+- Maintenance failures surface directly on the dashboard.
+- Optional existing-container login startup, isolated fill-journal review and
+  SQLite backup-copy integrity verification. No additional collection pipeline.
+
+See [operating readiness](OPERATING_READINESS.md). Strategy, scoring, Discord
+qualification and model promotion rules remain unchanged.
+
 ## 2.2.3 — evidence power (research only)
 
 - Delayed-entry stages `delay60`, `delay180` and `delay600` after the durable

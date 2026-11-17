@@ -333,6 +333,9 @@ class Store:
             source.execute("BEGIN")
             source.execute("SELECT count(*) FROM sqlite_master").fetchone()
             source.backup(dest, pages=1000)
+            # Verify the independent copy, never checkpoint or scan the live DB.
+            if dest.execute("PRAGMA quick_check").fetchall() != [("ok",)]:
+                raise ValueError("Backup integrity verification failed; do not restore this copy")
 
     def enable_runtime(self):
         from .db_runtime import MetadataWriter

@@ -43,6 +43,9 @@ and model rankings are research measures, not validated win probabilities.
 [Get started](#first-time-setup) | [Start and stop](#start-stop-and-check-status) |
 [Troubleshooting](#troubleshooting) | [Release notes](docs/RELEASE_NOTES.md)
 
+See [operating readiness](docs/OPERATING_READINESS.md) for optional login startup,
+ML readiness stages, evidence coverage, fill-journal review and verified backups.
+
 Version **2.2.1 — Reliability & Evidence Loop** adds prospective shadow-policy
 reports, ordered migrations, bounded operational telemetry, storage growth
 forecasts and separate deployment/maintenance workflows. It preserves the v2.2

@@ -73,11 +73,20 @@ def main():
     research.add_argument("--json", action="store_true")
     backup = sub.add_parser("backup")
     backup.add_argument("target", type=Path)
+    fills = sub.add_parser(
+        "review-fills", help="Review reported linear-contract fills without changing ML labels"
+    )
+    fills.add_argument("csv", type=Path)
     sub.add_parser("retention-plan")
     sub.add_parser("sample-alert")
     ml = sub.add_parser("ml", help="Offline supervised research; use ml --help")
     ml.add_argument("arguments", nargs=argparse.REMAINDER)
     args = parser.parse_args()
+    if args.command == "review-fills":
+        from .fill_review import review
+
+        print(json.dumps(review(args.csv), indent=2))
+        return
     settings = Settings()
     from .observability import configure_logging
 

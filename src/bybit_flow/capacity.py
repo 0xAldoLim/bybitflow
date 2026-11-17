@@ -57,7 +57,7 @@ def step(settings, store, *, at_ms=None, max_segments=16):
     # substitute wall time and incorrectly mark later positions incomplete.
     labels = label_recordings(
         store,
-        worker_rows(store, after_ms=cursor, manifests=batch),
+        worker_rows(store, after_ms=cursor, manifests=batch, audit_corrupt=True),
         settings,
         incremental=True,
         observed_until_ms=None if more else now,

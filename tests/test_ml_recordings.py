@@ -76,6 +76,44 @@ def test_integrity_failure_precedes_any_output(settings):
         next(worker_rows(store))
 
 
+def test_upkeep_audits_corruption_as_gap_preserving_bytes_and_no_false_win(settings, signal):
+    store = Store(settings.data_dir)
+    recorder = Recorder(store, settings)
+    FeatureStore(store).capture(signal, 1000, "decision")
+    recorder.flush(
+        [
+            event(500),
+            event(
+                1500,
+                "ws/publicTrade.TESTUSDT",
+                {"data": [dict(T=1500, p="100", v="1000", i="entry", S="Buy")]},
+            ),
+        ]
+    )
+    recorder.flush([event(2000), event(2500)])
+    path = Path(store.rows("segments")[0]["raw"])
+    damaged = path.read_bytes() + b"corruption"
+    path.write_bytes(damaged)
+    recorder.flush(
+        [
+            event(
+                5000,
+                "ws/publicTrade.TESTUSDT",
+                {"data": [dict(T=5000, p="116", v="1000", i="exit", S="Buy")]},
+            )
+        ]
+    )
+    rows = list(worker_rows(store, audit_corrupt=True))
+    assert any(r["source"] == "control/gap" and r["receipt_ms"] == 2000 for r in rows)
+    assert any(r["receipt_ms"] == 5000 for r in rows)
+    assert path.read_bytes() == damaged
+    assert "raw segment integrity mismatch" in Path(store.get("ml_recordings")["audit"]).read_text()
+    result = label_recordings(store, rows, settings)
+    assert result["complete"] == 0
+    assert result["outcomes"][0]["net_r"] is None
+    store.close()
+
+
 def test_unreadable_pack_becomes_audited_gap_without_fabricating_outcome(settings):
     store = Store(settings.data_dir)
     recorder = Recorder(store, settings)

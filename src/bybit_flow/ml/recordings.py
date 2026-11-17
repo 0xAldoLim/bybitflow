@@ -2,7 +2,8 @@
 
 Strict CLI replay still rejects unordered inputs. The unattended worker can move
 past clock jumps without sorting events or learning outcomes across missing tape.
-Integrity failures remain fatal and preflight finishes before any label is written.
+Integrity failures remain fatal by default. Capacity upkeep can explicitly audit
+checksum damage as a gap; preflight finishes before any label is written.
 """
 
 import hashlib
@@ -30,12 +31,12 @@ def replay_start(store, after_ms=None):
     return start
 
 
-def worker_rows(store, after_ms=None, *, manifests=None):
+def worker_rows(store, after_ms=None, *, manifests=None, audit_corrupt=False):
     from ..leases import RangeLease
 
     start = replay_start(store, after_ms)
     with RangeLease(store, start, now_ms(), "ML verified replay") as lease:
-        yield from _worker_rows(store, lease, after_ms, manifests=manifests)
+        yield from _worker_rows(store, lease, after_ms, manifests=manifests, audit_corrupt=audit_corrupt)
 
 
 def committed_manifests(store, retained_after):
@@ -55,7 +56,7 @@ def committed_manifests(store, retained_after):
             yield json.loads(payload)
 
 
-def _worker_rows(store, lease=None, after_ms=None, *, manifests=None):
+def _worker_rows(store, lease=None, after_ms=None, *, manifests=None, audit_corrupt=False):
     # SQLite publication happens after gzip, parquet and manifest have closed.
     retained_after = replay_start(store, after_ms)
     if manifests is None:
@@ -79,7 +80,14 @@ def _worker_rows(store, lease=None, after_ms=None, *, manifests=None):
                 reason = "unreadable packed recording archive"
             if reason is None:
                 if hashlib.sha256(data).hexdigest() != manifest["sha256"]:
-                    raise ValueError("Raw segment integrity mismatch")
+                    if not audit_corrupt:
+                        raise ValueError("Raw segment integrity mismatch")
+                    # Never decode damaged bytes. The durable manifest bounds become
+                    # an explicit gap; overlapping outcomes remain incomplete.
+                    spans.append(
+                        dict(start=start, end=end, manifest=manifest, reason="raw segment integrity mismatch")
+                    )
+                    continue
                 if manifest_for(path) != manifest:
                     raise ValueError("Committed recording manifest mismatch")
                 previous, low, high, count = -1, None, None, 0

@@ -148,11 +148,13 @@ def create_app(settings=None):
 
     @app.get("/api/ml")
     async def ml_research(request: Request):
+        from .ml.operator_readiness import project
         from .ml.registry import Registry
 
-        return await asyncio.to_thread(
+        result = await asyncio.to_thread(
             read_report, settings.data_dir, lambda store: Registry(store).cached_summary(settings.ml_enabled)
         )
+        return result | dict(readiness_stages=project(result))
 
     @app.get("/api/funnel")
     async def funnel_view(request: Request):

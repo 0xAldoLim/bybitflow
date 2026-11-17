@@ -41,6 +41,19 @@ def warnings(settings, store, scanner, recorder, now):
             dict(code=code, severity=severity, title=title, message=message, action=action, at_ms=at_ms)
         )
 
+    capacity = store.get("capacity_health", {})
+    if capacity.get("state") in {"ERROR", "PROTECTED_CAPACITY_BLOCKED"}:
+        add(
+            "MAINTENANCE_BLOCKED",
+            "Storage maintenance needs attention",
+            "Existing safe maintenance reports "
+            + capacity["state"]
+            + (" (" + capacity["error_type"] + ")" if capacity.get("error_type") else ""),
+            "Inspect maintenance diagnostics. Protected evidence is preserved; repeated retries alone may not free capacity.",
+            severity="error",
+            at_ms=capacity.get("at_ms"),
+        )
+
     if not settings.scan_enabled:
         add(
             "SCAN_DISABLED",
