@@ -42,7 +42,7 @@ def warnings(settings, store, scanner, recorder, now):
         )
 
     capacity = store.get("capacity_health", {})
-    if capacity.get("state") in {"ERROR", "PROTECTED_CAPACITY_BLOCKED"}:
+    if capacity.get("state") == "ERROR" and 0 <= now - capacity.get("at_ms", 0) <= 180_000:
         add(
             "MAINTENANCE_BLOCKED",
             "Storage maintenance needs attention",
