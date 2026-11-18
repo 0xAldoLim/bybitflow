@@ -542,7 +542,7 @@ def test_first_attempt_only_variant(signal, settings, instrument):
 def test_fresh_database_has_append_only_evidence_power_schema(settings):
     store = Store(settings.data_dir)
     receipts = status(store)
-    assert receipts["level"] == "012"
+    assert receipts["level"] == "013"
     for name in power.IMMUTABLE:
         assert store.db.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)

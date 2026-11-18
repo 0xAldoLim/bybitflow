@@ -121,7 +121,16 @@ def recording_symbol_projection(store):
 
 
 def registry():
-    from . import forward_power, funnel, identity, observations, packing, path_research, setup_research
+    from . import (
+        forward_power,
+        funnel,
+        identity,
+        observations,
+        packing,
+        path_research,
+        raw_retirement,
+        setup_research,
+    )
     from .ml import store as features
 
     return (
@@ -156,6 +165,13 @@ def registry():
             forward_power.migrate,
             repeatable=False,
             sql=forward_power.POWER_SQL,
+        ),
+        Migration(
+            "013",
+            "raw-retirement-proof-guards",
+            raw_retirement.migrate,
+            repeatable=False,
+            sql="\n".join(raw_retirement.GUARD_SQL),
         ),
     )
 

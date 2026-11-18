@@ -1,5 +1,13 @@
 # Release notes
 
+## 2.2.6 — verified raw recording retirement
+
+- Bounded maintenance can retire raw recordings for finalized non-trainable
+  outcomes or intervals with no committed consumer. Durable outcomes, active
+  plans, and complete-label recordings remain protected.
+- Retirement has its own pre- and post-run verification, tombstones, and failure
+  state. Historical broad cleanup failures remain in the original audit.
+
 ## 2.2.5 — storage outlook
 
 - The dashboard and doctor show cached permanent and raw storage categories,

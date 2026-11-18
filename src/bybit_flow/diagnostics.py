@@ -158,6 +158,7 @@ async def doctor(settings, store, network=True):
     outlook = storage_outlook(store, now_ms(), settings.max_storage_gb * 1e9)
     checks["operational_warnings"] = operational_warnings(store, now_ms(), outlook)
     checks["storage_outlook"] = outlook
+    checks["raw_retirement"] = store.get("raw_retirement_state_v1", {})
     checks["operations"] = store.get("operational_health", {})
     checks["storage_forecast"] = store.get("storage_forecast", {"status": "UNKNOWN"})
     checks["recovery_jobs"] = project(store, now_ms())

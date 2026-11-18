@@ -298,6 +298,7 @@ def create_app(settings=None):
                 storage_outlook=storage_outlook(reader, now_ms(), settings.max_storage_gb * 1e9),
                 cleanup_reconciliation=reader.get("cleanup_reconciliation", {}),
                 cleanup_recovery=reader.get("cleanup_recovery_latest", {}),
+                raw_retirement=reader.get("raw_retirement_state_v1", {}),
                 capacity=reader.get("capacity_health", {}),
             ),
         )

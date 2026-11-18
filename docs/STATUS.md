@@ -1,5 +1,9 @@
 # Feature status
 
+Release 2.2.6 adds independent, verified retirement for finalized incomplete raw
+recordings and old raw intervals without a committed consumer. Release 2.2.5 adds
+the storage outlook and measured runway.
+
 Release 2.2.4 adds evidence-based reconciliation of failed raw retention and an
 explicit scanner state for recording storage backpressure.
 

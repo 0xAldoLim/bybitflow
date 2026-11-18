@@ -6,7 +6,7 @@ import os
 import uuid
 import zipfile
 from collections import Counter
-from contextlib import ExitStack
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
 
 from .cleanup_reconciliation import (
@@ -91,11 +91,16 @@ def originals(store, m):
     return files
 
 
-def archive_health(store, path, members, run_id):
-    migrate(store)
+def archive_health(store, path, members, run_id, *, persist=True):
+    if persist:
+        migrate(store)
     path = managed(store, path, "packs")
     stat = path.stat()
-    previous = store.db.execute("SELECT payload FROM archive_health WHERE archive=?", (str(path),)).fetchone()
+    previous = (
+        store.db.execute("SELECT payload FROM archive_health WHERE archive=?", (str(path),)).fetchone()
+        if persist
+        else None
+    )
     old = json.loads(previous[0]) if previous else {}
     fingerprint = hashlib.sha256(
         json.dumps([(m["id"], m.get("sha256")) for m in members], sort_keys=True).encode()
@@ -127,6 +132,8 @@ def archive_health(store, path, members, run_id):
     )
 
     def failure(exc, ident):
+        if not persist:
+            return
         record_failure(
             store,
             exc,
@@ -204,7 +211,8 @@ def archive_health(store, path, members, run_id):
         if errors
         else "NO_REPAIR_NEEDED",
     )
-    save_health(store, health)
+    if persist:
+        save_health(store, health)
     return health
 
 
@@ -584,7 +592,7 @@ def inventory_status(store, plan):
     }
 
 
-def tombstone(store, m, classes, run_id, archive=None, health=None):
+def tombstone(store, m, classes, run_id, archive=None, health=None, *, retirement=None):
     row = dict(
         at_ms=now_ms(),
         segment_id=m["id"],
@@ -604,6 +612,8 @@ def tombstone(store, m, classes, run_id, archive=None, health=None):
     )
     if classes[0] == "DELETABLE_CORRUPT_UNRECOVERABLE":
         row["reason"] = "Verified unrecoverable corruption; no active/unresolved/leased consumer"
+    if retirement:
+        row.update(retirement)
     store.db.execute("INSERT OR IGNORE INTO kv VALUES(?,?)", ("pruned_segment:" + m["id"], json.dumps(row)))
 
 
@@ -612,6 +622,7 @@ def replacement(store, path, retained, health, leases):
     batch = "writer_batch_v212:replacement:" + target.stem
     store.put(batch, dict(paths=[str(target)], at_ms=now_ms()))
     source = None
+    created = False
     try:
         source = zipfile.ZipFile(path)
     except zipfile.BadZipFile:
@@ -619,6 +630,7 @@ def replacement(store, path, retained, health, leases):
     try:
         expected = {}
         with zipfile.ZipFile(target, "x", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as out:
+            created = True
             for m in retained:
                 for lease in leases:
                     lease.heartbeat()
@@ -644,6 +656,10 @@ def replacement(store, path, retained, health, leases):
         for lease in leases:
             lease.heartbeat(force=True)
         return target
+    except BaseException:
+        if created:
+            target.unlink(missing_ok=True)
+        raise
     finally:
         if source:
             source.close()
@@ -652,10 +668,9 @@ def replacement(store, path, retained, health, leases):
             store.db.execute("DELETE FROM kv WHERE key=?", (batch,))
 
 
-def execute(store, settings, plan, dry_run=False):
-    """Serialize cleanup owners; exact range leases still protect evidence readers."""
-    if dry_run:
-        return _execute(store, settings, plan, dry_run=True)
+@contextmanager
+def cleanup_claim(store, run_id):
+    """Serialize both retirement paths without sharing their verification states."""
     owner = uuid.uuid4().hex
     key = "cleanup_run_claim_v212"
     now = now_ms()
@@ -665,18 +680,33 @@ def execute(store, settings, plan, dry_run=False):
         previous = json.loads(row[0]) if row else {}
         if previous.get("expires_ms", 0) > now:
             store.db.rollback()
-            return dict(status="cleanup already running", run_id=previous.get("run_id"), freed_bytes=0)
-        claim = dict(owner=owner, run_id=plan["run_id"], at_ms=now, expires_ms=now + 600000)
+            yield None
+            return
+        claim = dict(owner=owner, run_id=run_id, at_ms=now, expires_ms=now + 600000)
         store.db.execute("INSERT OR REPLACE INTO kv VALUES(?,?)", (key, json.dumps(claim)))
         store.db.commit()
     except BaseException:
         store.db.rollback()
         raise
     try:
-        return _execute(store, settings, plan, owner=owner)
+        yield owner
     finally:
         with store.db:
             store.db.execute("DELETE FROM kv WHERE key=? AND json_extract(payload,'$.owner')=?", (key, owner))
+
+
+def execute(store, settings, plan, dry_run=False):
+    """Serialize cleanup owners; exact range leases still protect evidence readers."""
+    if dry_run:
+        return _execute(store, settings, plan, dry_run=True)
+    with cleanup_claim(store, plan["run_id"]) as owner:
+        if owner is None:
+            return dict(
+                status="cleanup already running",
+                run_id=store.get("cleanup_run_claim_v212", {}).get("run_id"),
+                freed_bytes=0,
+            )
+        return _execute(store, settings, plan, owner=owner)
 
 
 def _execute(store, settings, plan, dry_run=False, owner=None):

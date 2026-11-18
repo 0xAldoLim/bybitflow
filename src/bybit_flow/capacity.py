@@ -39,6 +39,7 @@ def manifest_batch(store, after_ms, boundary, limit=16, max_input_bytes=64_000_0
 def step(settings, store, *, at_ms=None, max_segments=16):
     from .ml.labels import label_recordings
     from .ml.recordings import replay_start, worker_rows
+    from .raw_retirement import automatic as retire_unused
     from .retention import prune_recordings
 
     now = now_ms() if at_ms is None else at_ms
@@ -57,6 +58,14 @@ def step(settings, store, *, at_ms=None, max_segments=16):
         inventory_at_ms=inventory.get("at_ms"),
         cleanup_verification_state=verification.get("status"),
     )
+    targeted = retire_unused(store, settings, used, now)
+    if targeted:
+        result["raw_retirement"] = {
+            k: targeted.get(k) for k in ("status", "run_id", "freed_bytes", "retired_segments", "reason")
+        }
+        if targeted.get("freed_bytes"):
+            used = directory_bytes(store.root)
+            result["used_bytes"] = used
     reconciliation = reconcile_failed_cleanup(store)
     if storage_blocked(reconciliation):
         return result | cleanup_blocked_health(reconciliation)

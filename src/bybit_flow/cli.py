@@ -43,7 +43,7 @@ def main():
     sub.add_parser("test-discord", help="Send a connection test, never a trade signal")
     sub.add_parser("test-signal", help="Send an explicitly labeled synthetic pipeline test; no ML records")
     storage = sub.add_parser("storage", help="Managed evidence budget")
-    storage.add_argument("operation", choices=["status", "cleanup", "compact"])
+    storage.add_argument("operation", choices=["status", "cleanup", "compact", "retire-unused"])
     storage.add_argument("--dry-run", action="store_true")
     storage.add_argument(
         "--force",
@@ -97,6 +97,11 @@ def main():
         import uvicorn
 
         uvicorn.run("bybit_flow.app:app", host=args.host, port=args.port, workers=1, access_log=False)
+        return
+    if args.command == "storage" and args.operation == "retire-unused" and args.dry_run:
+        from .raw_retirement import dry_run
+
+        print(json.dumps(dry_run(settings.data_dir, settings), indent=2))
         return
     store = Store(settings.data_dir)
     try:
@@ -177,6 +182,7 @@ def main():
             print(json.dumps(asyncio.run(test_signal(settings, store)), indent=2))
         elif args.command == "storage":
             from .packing import compact
+            from .raw_retirement import run as retire_unused
             from .retention import prune_recordings, storage_status
 
             result = (
@@ -184,6 +190,8 @@ def main():
                 if args.operation == "status"
                 else compact(store, dry_run=args.dry_run)
                 if args.operation == "compact"
+                else retire_unused(store, settings)
+                if args.operation == "retire-unused"
                 else prune_recordings(store, settings, dry_run=args.dry_run, force=args.force)
             )
             print(json.dumps(result, indent=2))

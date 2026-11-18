@@ -200,9 +200,26 @@ Keep the original data and audit. Restore evidence only through a separately
 verified recovery procedure. A capacity increase can restore recording headroom
 with operator approval, but does not clear a failed verification.
 
+Use the separate targeted retirement command to preview and retire raw recordings
+for finalized non-trainable outcomes or old intervals without a current consumer.
+The preview reports estimated eligibility by class. Execution verifies each raw
+file against its manifest and rechecks protection under a range lease.
+
+```bat
+docker compose exec -T desk bybit-flow storage retire-unused --dry-run
+docker compose exec -T desk bybit-flow storage retire-unused
+```
+
+Each run retires a bounded batch and writes verification receipts under
+`ml/raw-retirement` in the data volume. Complete-label recordings, active plans,
+unresolved outcomes, and recent or leased evidence stay protected. Maintenance
+can attempt a batch at most every six hours above 85% storage usage when the
+recorder is healthy. A failed targeted verification stops subsequent targeted
+batches. Broad cleanup continues to honor its own verification history.
+
 The storage outlook uses the existing hourly file inventory and periodic retention
-classification. Raw eligibility describes the last measured plan. A failed
-verification still blocks reclaiming those bytes. The outlook shows the current
+classification. Raw eligibility describes the last measured broad plan. A failed
+broad verification still blocks that plan. The outlook shows the current
 raw footprint alongside permanent data and warns at 70% permanent usage, or at
 80% total usage with at least 60% permanent usage. Runway uses observed net
 growth, including retention, only when at least 80% of the hourly samples are
