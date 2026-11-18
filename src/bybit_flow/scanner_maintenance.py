@@ -24,6 +24,8 @@ class MaintenanceCoordinator:
         self.runtime = runtime
 
     async def storage_loop(self):
+        from .capacity import error_health
+
         runtime = self.runtime
         from .retention import maintain as storage_maintain
         from .retention import storage_status
@@ -48,5 +50,5 @@ class MaintenanceCoordinator:
                 result = await asyncio.to_thread(maintain)
                 runtime.store.put("storage_health", result)
             except Exception as exc:
-                runtime.store.put("storage_health", dict(error_type=type(exc).__name__, at_ms=now_ms()))
+                runtime.store.put("storage_health", error_health(exc))
             await asyncio.sleep(60)

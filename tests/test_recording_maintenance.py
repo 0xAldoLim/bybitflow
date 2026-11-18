@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from bybit_flow.cleanup_reconciliation import LATCH, audit_path, reconcile_failed_cleanup
 from bybit_flow.diagnostics import failure_summary, record_failure
 from bybit_flow.ml.store import FeatureStore
 from bybit_flow.packing import compact, raw_bytes
@@ -36,6 +37,80 @@ def tape(store, settings, at):
 def packed(store, settings):
     ms = [tape(store, settings, i) for i in (1000, 2000, 3000)]
     return ms, Path(compact(store, limit=3)["archive"])
+
+
+def failed_run(store, settings, signal, monkeypatch):
+    from bybit_flow import recording_maintenance as maintenance
+
+    raw = Path(tape(store, settings, 1000)["raw"])
+    features = FeatureStore(store)
+    ident = features.capture(signal, 2_000_000, "decision")
+    features.label(ident, dict(policy="prints-v1", complete=False, classification="incomplete"), 2_100_000)
+    artifact = store.root / "ml" / "datasets" / "frozen.bin"
+    artifact.parent.mkdir(parents=True, exist_ok=True)
+    artifact.write_bytes(b"original")
+    plan = planning(store, settings, 8 * 3600000, force=True, max_reclaim_bytes=0)
+
+    def interrupted(*args):
+        raise RuntimeError("Cleanup ownership expired/lost; stopped")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(maintenance, "verify_ml", interrupted)
+        with pytest.raises(RuntimeError, match="ownership expired"):
+            execute(store, settings, plan)
+    assert raw.exists()
+    return store.get(LATCH), raw, artifact, ident
+
+
+def test_reconcile_frozen_inventory_and_reclaim_at_99_percent(settings, signal, monkeypatch):
+    from bybit_flow.capacity import step
+
+    with_store = Store(settings.data_dir)
+    failed, raw, _, _ = failed_run(with_store, settings, signal, monkeypatch)
+    later = FeatureStore(with_store).capture(signal.model_copy(update={"id": "later"}), 2_020_000, "decision")
+    FeatureStore(with_store).label(later, dict(policy="prints-v1", complete=False), 2_110_000)
+    assert reconcile_failed_cleanup(with_store)["state"] == "SAFE_TO_RETRY"
+    assert with_store.get(LATCH) == failed
+    monkeypatch.setattr(
+        "bybit_flow.capacity.directory_bytes", lambda root: 0.99 * settings.max_storage_gb * 1e9
+    )
+    result = step(settings, with_store)
+    assert result["state"] == "OBSERVED"
+    assert result["freed_bytes"] > 0 and not raw.exists()
+    assert with_store.get(LATCH)["status"] == "PASSED"
+    assert with_store.get("cleanup_recovery:" + result["run_id"])["original_failure"] == failed
+    assert with_store.get("cleanup_failure:" + failed["run_id"]) == failed
+    with_store.close()
+
+
+@pytest.mark.parametrize("damage", ["row", "payload", "artifact", "missing", "corrupt", "legacy"])
+def test_failed_cleanup_requires_durable_proof(settings, signal, monkeypatch, damage):
+    store = Store(settings.data_dir)
+    failed, raw, artifact, ident = failed_run(store, settings, signal, monkeypatch)
+    audit = audit_path(store, failed["run_id"])
+    if damage in {"row", "payload"}:
+        statement = (
+            "DELETE FROM ml_labels WHERE snapshot_id=?"
+            if damage == "row"
+            else ("UPDATE ml_labels SET payload='{}' WHERE snapshot_id=?")
+        )
+        with store.db:
+            store.db.execute(statement, (ident,))
+    elif damage == "artifact":
+        artifact.write_bytes(b"changed")
+    elif damage == "missing":
+        audit.unlink()
+    elif damage == "corrupt":
+        audit.write_bytes(b"invalid")
+    else:
+        failed.pop("pre_audit_sha256")
+        store.put(LATCH, failed)
+    state = "AUDIT_UNAVAILABLE" if damage in {"missing", "corrupt", "legacy"} else "HARD_BLOCKED"
+    assert reconcile_failed_cleanup(store)["state"] == state
+    result = execute(store, settings, planning(store, settings, 8 * 3600000, force=True))
+    assert result["reconciliation"]["state"] == state
+    assert raw.exists() and store.get(LATCH) == failed
+    store.close()
 
 
 @pytest.mark.parametrize(

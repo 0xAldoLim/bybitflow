@@ -295,6 +295,9 @@ def create_app(settings=None):
                 operations=reader.get("operational_health", {}),
                 time_series=samples(reader),
                 storage_growth=reader.get("storage_forecast", {}),
+                cleanup_reconciliation=reader.get("cleanup_reconciliation", {}),
+                cleanup_recovery=reader.get("cleanup_recovery_latest", {}),
+                capacity=reader.get("capacity_health", {}),
             ),
         )
 
@@ -314,12 +317,15 @@ def create_app(settings=None):
         active_rows = await asyncio.to_thread(read_report, settings.data_dir, decision_rows)
         from .operational import warnings as operational_warnings
 
+        operator = warnings(settings, store, scanner, rec, now_ms())
+        priorities = operational_warnings(store, now_ms())
+        if any(w["code"] == "STORAGE_INCIDENT" for w in operator):
+            priorities = [w for w in priorities if w["code"] != "STORAGE_EXHAUSTION_FORECAST"]
         return dict(
             decisions=decisions(active_rows, now_ms(), current_quotes(scanner, active_rows, now_ms())),
-            operator_priorities=operational_warnings(store, now_ms()),
+            operator_priorities=priorities,
             storage_growth=store.get("storage_forecast", {}),
-            warnings=warnings(settings, store, scanner, rec, now_ms())
-            + operational_warnings(store, now_ms()),
+            warnings=operator + priorities,
             scanner=scanner.status,
             exchange=scanner.exchange,
             watchlist=store.get("watchlist", []),

@@ -87,6 +87,31 @@ async def test_recording_storage_limit_reports_actionable_reason(settings):
     store.close()
 
 
+async def test_recorder_retries_pending_batch_after_capacity_returns(settings):
+    settings = settings.model_copy(update={"max_storage_gb": 0.11, "recorder_segment_rows": 100})
+    store = Store(settings.data_dir)
+    fixture = store.root / "budget-fixture.bin"
+    with fixture.open("wb") as stream:
+        stream.truncate(110_000_000)
+    rec = Recorder(store, settings)
+    for event_ms in range(100):
+        rec.offer("test", "T", event_ms, {})
+    task = asyncio.create_task(rec.run())
+    try:
+        async with asyncio.timeout(10):
+            while rec.state != "STORAGE_BACKPRESSURE":
+                await asyncio.sleep(0.01)
+            fixture.unlink()
+            while not rec.written:
+                await asyncio.sleep(0.01)
+        assert rec.healthy and rec.state == "NORMAL" and rec.written == 100
+        assert len(store.rows("segments")) == 1
+    finally:
+        rec.running = False
+        await asyncio.wait_for(task, 5)
+        store.close()
+
+
 def test_pit_membership_and_facts(settings):
     store = Store(settings.data_dir)
     store.membership(100, "T", True, {})

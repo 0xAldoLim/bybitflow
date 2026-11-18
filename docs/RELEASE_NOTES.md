@@ -1,5 +1,16 @@
 # Release notes
 
+## 2.2.4 — storage reliability
+
+- A failed retention run can be retried after its frozen SQLite rows, eligible
+  identities and immutable ML artifacts have been verified. The failed run stays
+  in the audit history. Legacy audits without frozen row fingerprints require
+  independent evidence before cleanup can resume.
+- The dashboard groups the effects of recording storage pressure into one
+  incident. Discovery waits for recording capacity and retries automatically.
+- The application continues to observe the configured storage budget and existing
+  evidence protections. Trading and model authority policies are unchanged.
+
 ## Operational readiness repair
 
 - Capacity upkeep can audit checksum-damaged recordings as explicit gaps so one

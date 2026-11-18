@@ -9,6 +9,7 @@ import sqlite3
 import time
 from pathlib import Path
 
+from .cleanup_reconciliation import LATCH, reconcile_failed_cleanup, storage_blocked
 from .storage import Store, directory_bytes, now_ms
 
 
@@ -42,16 +43,32 @@ def step(settings, store, *, at_ms=None, max_segments=16):
 
     now = now_ms() if at_ms is None else at_ms
     used = directory_bytes(store.root)
+    budget = settings.max_storage_gb * 1e9
     previous = store.get("capacity_health", {})
-    if used < settings.max_storage_gb * 1e9 * 0.85:
-        return dict(at_ms=now, state="NORMAL", used_bytes=used)
+    inventory = store.get("storage_status", {})
+    verification = store.get(LATCH, {})
+    result = dict(
+        at_ms=now,
+        used_bytes=used,
+        budget_bytes=budget,
+        reclaimable_bytes=inventory.get("deletable_bytes"),
+        protected_bytes=inventory.get("protected_bytes"),
+        permanent_bytes=inventory.get("permanent_bytes"),
+        inventory_at_ms=inventory.get("at_ms"),
+        cleanup_verification_state=verification.get("status"),
+    )
+    reconciliation = reconcile_failed_cleanup(store)
+    if storage_blocked(reconciliation):
+        return result | cleanup_blocked_health(reconciliation)
+    if used < budget * 0.85:
+        return result | dict(state="NORMAL")
     # A healthy regular materializer owns the same work. Do not replay every poll.
     if now - previous.get("last_success_ms", 0) < 60_000:
         return previous | dict(at_ms=now)
     cursor = store.get("primary_materialization", {}).get("cursor_ms")
     start = replay_start(store, cursor)
     batch, more, input_bytes = manifest_batch(store, start, now, max_segments)
-    result = dict(at_ms=now, state="MATERIALIZING", segments=len(batch), input_bytes=input_bytes)
+    result.update(state="MATERIALIZING", segments=len(batch), input_bytes=input_bytes)
     store.put("capacity_health", result)
     # A truncated batch is NOT the end of recorded history. In particular, do not
     # substitute wall time and incorrectly mark later positions incomplete.
@@ -64,9 +81,20 @@ def step(settings, store, *, at_ms=None, max_segments=16):
     )
     prune = prune_recordings(store, settings, force=True, max_reclaim_bytes=256_000_000)
     used = directory_bytes(store.root)
-    blocked = used >= settings.max_storage_gb * 1e9 and not prune.get("freed_bytes", 0)
+    if prune.get("status") == "cleanup verification blocked":
+        return result | cleanup_blocked_health(prune["reconciliation"]) | dict(used_bytes=used)
+    running = prune.get("status") == "cleanup already running"
+    blocked = used >= budget and not prune.get("freed_bytes", 0) and not running
+    permanent = used - sum(directory_bytes(store.root / folder) for folder in ("segments", "packs"))
+    recording_audit = store.get("ml_recordings", {})
     result.update(
-        state="PROTECTED_CAPACITY_BLOCKED" if blocked else "CATCHING_UP" if more else "OBSERVED",
+        state="CLEANUP_RUNNING"
+        if running
+        else "PROTECTED_CAPACITY_BLOCKED"
+        if blocked
+        else "CATCHING_UP"
+        if more
+        else "OBSERVED",
         last_success_ms=now_ms(),
         cursor_ms=store.get("primary_materialization", {}).get("cursor_ms"),
         more=more,
@@ -74,15 +102,53 @@ def step(settings, store, *, at_ms=None, max_segments=16):
         complete=labels["complete"],
         freed_bytes=prune.get("freed_bytes", 0),
         used_bytes=used,
-        reason="Protected evidence exceeds budget; preserve it and report capacity" if blocked else None,
+        permanent_bytes=permanent,
+        run_id=prune.get("run_id"),
+        cleanup_verification_state=store.get(LATCH, {}).get("status"),
+        recoverability=reconciliation["state"],
+        audited_recording_gaps=recording_audit.get("excluded", 0) if batch else 0,
+        reason=(
+            "Permanent data alone fills the recording budget"
+            if permanent >= budget
+            else "Protected and permanent data leave insufficient recording capacity"
+        )
+        if blocked
+        else None,
     )
     store.put("capacity_health", result)
     return result
 
 
+def cleanup_blocked_health(reconciliation):
+    return dict(
+        state="CLEANUP_VERIFICATION_BLOCKED",
+        cause_code="CLEANUP_EVIDENCE_INVARIANT",
+        cleanup_verification_state="FAILED",
+        reason=reconciliation["reason"],
+        run_id=reconciliation["failed_run"],
+        recoverability=reconciliation["state"],
+    )
+
+
+def error_health(exc):
+    from .db_runtime import busy
+    from .diagnostics import cause_code
+
+    deferred = isinstance(exc, sqlite3.OperationalError) and busy(exc)
+    # Do not persist arbitrary exception text, which can contain paths or SQL.
+    return dict(
+        at_ms=now_ms(),
+        state="DEFERRED_SQLITE_BUSY" if deferred else "ERROR",
+        error_type=type(exc).__name__,
+        cause_code="SQLITE_BUSY" if deferred else cause_code(exc),
+        reason="SQLite writer busy; retry scheduled"
+        if deferred
+        else "Storage maintenance could not complete",
+    )
+
+
 def main():
     from .config import Settings
-    from .db_runtime import busy
 
     settings = Settings()
     while True:
@@ -93,14 +159,12 @@ def main():
             result = step(settings, store)
         except BlockingIOError:
             result = dict(at_ms=now_ms(), state="DEFERRED_PRIMARY_OWNER")
-        except sqlite3.OperationalError as exc:
-            result = dict(
-                at_ms=now_ms(),
-                state="DEFERRED_SQLITE_BUSY" if busy(exc) else "ERROR",
-                error_type=type(exc).__name__,
-            )
         except Exception as exc:
-            result = dict(at_ms=now_ms(), state="ERROR", error_type=type(exc).__name__)
+            result = error_health(exc)
+            if store:
+                result.update(
+                    used_bytes=directory_bytes(store.root), budget_bytes=settings.max_storage_gb * 1e9
+                )
         finally:
             if store:
                 try:

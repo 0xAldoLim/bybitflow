@@ -42,16 +42,45 @@ def warnings(settings, store, scanner, recorder, now):
         )
 
     capacity = store.get("capacity_health", {})
-    if capacity.get("state") == "ERROR" and 0 <= now - capacity.get("at_ms", 0) <= 180_000:
+    maintenance = store.get("storage_health", {})
+    storage = store.get("storage_status", {})
+    verification = store.get("cleanup_verification_v212", {})
+    reconciliation = store.get("cleanup_reconciliation", {})
+    scan_state = scanner.status.get("state")
+    storage_paused = not recorder.healthy and (
+        getattr(recorder, "state", None) == "STORAGE_BACKPRESSURE" or scan_state == "blocked_by_storage"
+    )
+    latch_failed = verification.get("status") == "FAILED"
+    current = max((capacity, maintenance), key=lambda row: row.get("at_ms", 0))
+    maintenance_failed = current.get("state") == "ERROR" or (
+        current.get("state") is None and current.get("error_type")
+    )
+    if storage_paused or latch_failed or maintenance_failed:
+        if latch_failed:
+            reason = (
+                reconciliation.get("reason")
+                if reconciliation.get("failed_run") == verification.get("run_id")
+                else "Waiting for verification of the failed cleanup audit"
+            )
+        elif storage_paused and capacity.get("state") == "PROTECTED_CAPACITY_BLOCKED":
+            reason = "The remaining protected and permanent data leaves insufficient recording capacity"
+        else:
+            reason = recorder.reason if storage_paused else current.get("reason") or "Safe maintenance failed"
+        if storage_paused:
+            reason += ". Recorder and new market scanning are paused. New setups cannot qualify"
+        title = "Recording storage blocked" if storage_paused else "Storage maintenance needs attention"
+        action = (
+            "Review the failed cleanup audit and frozen evidence. Cleanup can resume after verification."
+            if latch_failed
+            else "Review the storage budget, retention status and protected evidence."
+        )
         add(
-            "MAINTENANCE_BLOCKED",
-            "Storage maintenance needs attention",
-            "Existing safe maintenance reports "
-            + capacity["state"]
-            + (" (" + capacity["error_type"] + ")" if capacity.get("error_type") else ""),
-            "Inspect maintenance diagnostics. Protected evidence is preserved; repeated retries alone may not free capacity.",
+            "STORAGE_INCIDENT",
+            title,
+            reason.rstrip(".") + ".",
+            action,
             severity="error",
-            at_ms=capacity.get("at_ms"),
+            at_ms=max(current.get("at_ms", 0), verification.get("at_ms", 0)),
         )
 
     if not settings.scan_enabled:
@@ -69,20 +98,6 @@ def warnings(settings, store, scanner, recorder, now):
             "Discord cannot receive new setup cards.",
             "Check FLOW_RESEARCH_ALERTS and the signal webhook configuration.",
             severity="error",
-        )
-
-    capacity = store.get("capacity_health", {})
-    if (
-        capacity.get("state") == "PROTECTED_CAPACITY_BLOCKED"
-        and 0 <= now - capacity.get("at_ms", 0) <= 180_000
-    ):
-        add(
-            "PROTECTED_CAPACITY_BLOCKED",
-            "Protected evidence fills the storage budget",
-            "Safe cleanup cannot currently free enough space. Recording remains blocked while required evidence is preserved.",
-            "Review storage capacity. Outcome processing retries automatically; restarting the application or syncing the clock does not increase available recording space.",
-            severity="error",
-            at_ms=capacity.get("at_ms"),
         )
 
     clock = store.get("clock_health", {})
@@ -147,7 +162,9 @@ def warnings(settings, store, scanner, recorder, now):
             at_ms=clock.get("at_ms"),
         )
 
-    if scanner.status.get("state") == "error":
+    if scan_state == "error" and not (
+        storage_paused and scanner.status.get("error_category") == "RECORDING_UNAVAILABLE"
+    ):
         add(
             "SCAN_ERROR",
             "Market scan interrupted",
@@ -158,7 +175,7 @@ def warnings(settings, store, scanner, recorder, now):
             severity="error",
             at_ms=scanner.status.get("at_ms"),
         )
-    if not recorder.healthy:
+    if not recorder.healthy and not storage_paused:
         add(
             "RECORDING_BLOCKED",
             "Recording blocked",
@@ -166,19 +183,12 @@ def warnings(settings, store, scanner, recorder, now):
             "Check Data health and available disk space. Use safe retention; preserve active setup evidence.",
             severity="error",
         )
-    storage = store.get("storage_status", {})
-    maintenance = store.get("storage_health", {})
-    if maintenance.get("error_type"):
-        add(
-            "STORAGE_MAINTENANCE",
-            "Automatic storage maintenance interrupted",
-            "The latest safe-retention cycle failed; protected evidence remains preserved.",
-            "Maintenance retries automatically. Check service logs if this persists; do not delete the database, models or protected setup history.",
-            severity="error",
-            at_ms=maintenance.get("at_ms"),
-        )
     usage = storage.get("usage_percent", 0)
-    if isinstance(usage, (int, float)) and usage >= 90:
+    if (
+        not (storage_paused or latch_failed or maintenance_failed)
+        and isinstance(usage, (int, float))
+        and usage >= 90
+    ):
         add(
             "STORAGE_PRESSURE",
             "Recording storage nearly full",
@@ -197,6 +207,7 @@ def warnings(settings, store, scanner, recorder, now):
     if (
         settings.scan_enabled
         and quotes
+        and not (storage_paused and quotes.get("error_category") == "RECORDING_UNAVAILABLE")
         and (
             quotes.get("error_type")
             or now - quotes.get("at_ms", 0) > max(180_000, settings.quote_sample_seconds * 3000)

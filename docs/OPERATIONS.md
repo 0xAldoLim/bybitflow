@@ -188,3 +188,14 @@ websockets, Pydantic, NumPy, PyArrow, and DuckDB. The trainer adds scikit-learn,
 LightGBM, and CPU PyTorch. Tests use pytest, pytest-asyncio, and Ruff. Pinned
 versions are recorded in the lock files; dependency licenses remain with their
 projects. Exchange data is governed by source terms, not the repository license.
+# Storage verification and recovery
+
+When cleanup verification fails, maintenance checks the saved pre-run inventory
+before allowing another deletion pass. The inventory binds the failed run to
+frozen row counts and hashes, eligible candidate identities and immutable artifacts.
+Later inserts are allowed. A successful review records the original failure and
+the new run. `HARD_BLOCKED` identifies changed evidence. `AUDIT_UNAVAILABLE`
+identifies missing proof, including older inventories with no frozen row hashes.
+Keep the original data and audit. Restore evidence only through a separately
+verified recovery procedure. A capacity increase can restore recording headroom
+with operator approval, but does not clear a failed verification.

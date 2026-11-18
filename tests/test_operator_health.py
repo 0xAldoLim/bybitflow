@@ -267,11 +267,35 @@ def test_storage_maintenance_failure_is_visible_and_clears_after_success(setting
         store.put("storage_status", dict(usage_percent=91, retention_enabled=True, at_ms=now))
         store.put("storage_health", dict(error_type="OperationalError", at_ms=now))
         result = warnings(settings, store, scanner, recorder, now)
-        assert {w["code"] for w in result} == {"STORAGE_PRESSURE", "STORAGE_MAINTENANCE"}
+        assert [w["code"] for w in result] == ["STORAGE_INCIDENT"]
         assert recorder.healthy  # A maintenance diagnostic cannot stop recording or release evidence.
         store.put("storage_health", dict(state="NORMAL", at_ms=now + 1))
         result = warnings(settings, store, scanner, recorder, now + 1)
         assert [w["code"] for w in result] == ["STORAGE_PRESSURE"]
         assert "Automatic safe retention" in result[0]["action"]
+    finally:
+        store.close()
+
+
+async def test_storage_dependency_preserves_scanner_selection_and_aggregates_warnings(settings):
+    from bybit_flow.scanner_discovery import MarketDiscoveryCoordinator
+
+    settings, store, scanner, recorder, now = context(settings)
+    try:
+        recorder.healthy, recorder.state, recorder.reason = False, "STORAGE_BACKPRESSURE", "Budget exhausted"
+        scanner.recorder, scanner.store, scanner.scan_lock = recorder, store, asyncio.Lock()
+        scanner.settings = settings
+        scanner.status.update(deep_symbols=["BTCUSDT"])
+        # The stub has no exchange client, so any discovery request fails this test.
+        status = await MarketDiscoveryCoordinator(scanner).scan_once()
+        assert status["state"] == "blocked_by_storage"
+        assert scanner.status["deep_symbols"] == ["BTCUSDT"]
+        store.put("storage_status", dict(usage_percent=100, at_ms=now))
+        store.put("capacity_health", dict(state="ERROR", at_ms=1))
+        store.put("quote_health", dict(error_category="RECORDING_UNAVAILABLE", error_type="RuntimeError"))
+        store.put("clock_health", dict(source="binance", at_ms=now, skew_ms=2000))
+        result = warnings(settings, store, scanner, recorder, now)
+        assert {w["code"] for w in result} == {"STORAGE_INCIDENT", "CLOCK_DRIFT"}
+        assert "New setups cannot qualify" in result[0]["message"]
     finally:
         store.close()

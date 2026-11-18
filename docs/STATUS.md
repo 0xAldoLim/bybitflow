@@ -1,5 +1,8 @@
 # Feature status
 
+Release 2.2.4 adds evidence-based reconciliation of failed raw retention and an
+explicit scanner state for recording storage backpressure.
+
 Release 2.2.3 adds research-only evidence-power measurements: delayed-entry,
 structure-only, trade-through and attempt cohorts with clustered, day-resampled
 statistics and pre-registration. It makes no production change and no

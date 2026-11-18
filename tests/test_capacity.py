@@ -95,6 +95,14 @@ def test_low_pressure_does_no_replay_or_training(settings, monkeypatch):
     store.close()
 
 
+def test_permanent_capacity_exhaustion_is_not_a_worker_failure(settings, monkeypatch):
+    store = Store(settings.data_dir)
+    monkeypatch.setattr("bybit_flow.capacity.directory_bytes", lambda root: settings.max_storage_gb * 1e9)
+    assert step(settings, store)["state"] == "PROTECTED_CAPACITY_BLOCKED"
+    assert not store.get("recording_retention", {}).get("freed_bytes")
+    store.close()
+
+
 def test_recording_failure_is_not_mislabeled_as_exchange_failure():
     from bybit_flow.operator_health import recovery_detail
     from bybit_flow.recovery import error_category

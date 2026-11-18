@@ -9,6 +9,14 @@ from collections import Counter
 from contextlib import ExitStack
 from pathlib import Path
 
+from .cleanup_reconciliation import (
+    AUDIT_LIMIT,
+    LATCH,
+    TABLES,
+    audit_path,
+    frozen_rows,
+    reconcile_failed_cleanup,
+)
 from .diagnostics import cause_code, record_failure
 from .storage import directory_bytes, now_ms
 
@@ -291,6 +299,10 @@ def ml_inventory(store, asof, artifacts=False, *, row_limits=None):
         by_source=ready,
         eligible=identities,
         models={r[0]: r[1] for r in store.db.execute("SELECT id,sha256 FROM ml_models")},
+        model_content={
+            r[0]: hashlib.sha256(r[1].encode()).hexdigest()
+            for r in store.db.execute("SELECT id,manifest FROM ml_models")
+        },
         row_limits=row_limits,
     )
     if artifacts:
@@ -304,18 +316,23 @@ def ml_inventory(store, asof, artifacts=False, *, row_limits=None):
 
 
 def verify_ml(before, after):
+    if (
+        before["by_source"].keys() != after["by_source"].keys()
+        or before["eligible"].keys() != after["eligible"].keys()
+    ):
+        raise RuntimeError("Cleanup source inventory changed")
     for source in before["by_source"]:
         for field in ("trainable_current_schema", "sequence_ready_16", "unique_complete_candidates"):
             if before["by_source"][source][field] != after["by_source"][source][field]:
                 raise RuntimeError(f"Cleanup ML verification FAILED: {source} {field}")
         if before["eligible"][source] != after["eligible"][source]:
             raise RuntimeError(f"Cleanup eligible identities FAILED: {source}")
-    for field in ("models", "artifacts"):
+    for field in ("models", "model_content", "artifacts"):
         if field not in after:
             continue
         for key, value in before.get(field, {}).items():
             if after.get(field, {}).get(key) != value:
-                raise RuntimeError("Cleanup immutable artifact verification FAILED: " + key)
+                raise RuntimeError(f"Cleanup immutable {field} verification FAILED: " + key)
 
 
 def planning(store, settings, now=None, force=False, max_reclaim_bytes=None):
@@ -677,8 +694,9 @@ def _execute(store, settings, plan, dry_run=False, owner=None):
         )
     if store.get("cleanup_hold_v212"):
         return dict(status="maintenance hold", freed_bytes=0)
-    if store.get("cleanup_verification_v212", {}).get("status") == "FAILED":
-        raise RuntimeError("Previous cleanup verification FAILED; cleanup remains stopped")
+    reconciliation = reconcile_failed_cleanup(store, fresh=True)
+    if reconciliation["state"] not in {"NO_FAILURE", "SAFE_TO_RETRY"}:
+        return dict(status="cleanup verification blocked", freed_bytes=0, reconciliation=reconciliation)
     asof = now_ms()
     # Availability/decision time can predate insertion (historical labeling).
     # Freeze insertion boundaries as well as causal time: concurrent additions
@@ -687,13 +705,39 @@ def _execute(store, settings, plan, dry_run=False, owner=None):
         "SELECT coalesce((SELECT max(rowid) FROM ml_snapshots),0),"
         "coalesce((SELECT max(rowid) FROM ml_labels),0)"
     ).fetchone()
-    row_limits = dict(zip(("ml_snapshots", "ml_labels"), limits))
+    row_limits = dict(zip(TABLES, limits))
     before = ml_inventory(store, asof, artifacts=True, row_limits=row_limits)
-    directory = store.root / "ml" / "maintenance"
+    rows_before = frozen_rows(store, row_limits)
+    before.update(run_id=plan["run_id"], frozen_rows=rows_before)
+    audit = audit_path(store, plan["run_id"])
+    directory = audit.parent
     directory.mkdir(parents=True, exist_ok=True)
-    (directory / (plan["run_id"].replace(":", "-") + "-pre.json")).write_text(
-        json.dumps(before, sort_keys=True)
-    )
+    encoded = json.dumps(before, sort_keys=True).encode()
+    if len(encoded) > AUDIT_LIMIT:
+        raise ValueError("Pre-cleanup audit exceeds the verification limit")
+    with audit.open("xb") as stream:
+        stream.write(encoded)
+        stream.flush()
+        os.fsync(stream.fileno())
+    audit_hash = hashlib.sha256(encoded).hexdigest()
+    if reconciliation["state"] == "SAFE_TO_RETRY":
+        store.put(
+            "cleanup_recovery:" + plan["run_id"],
+            dict(
+                original_failure=store.get(LATCH),
+                reconciliation=reconciliation,
+                new_run=plan["run_id"],
+            ),
+        )
+        store.put(
+            "cleanup_recovery_latest",
+            dict(
+                failed_run=reconciliation["failed_run"],
+                state=reconciliation["state"],
+                at_ms=reconciliation["at_ms"],
+                new_run=plan["run_id"],
+            ),
+        )
     state = dict(
         status="pruning",
         at_ms=asof,
@@ -712,25 +756,6 @@ def _execute(store, settings, plan, dry_run=False, owner=None):
         state["freed_bytes"] += size
         state["freed_by_class"][category] = state["freed_by_class"].get(category, 0) + size
 
-    def row_inventory():
-        h = hashlib.sha256()
-        counts = {}
-        for table, query in (
-            ("ml_snapshots", "SELECT id FROM ml_snapshots WHERE rowid<=? ORDER BY id"),
-            (
-                "ml_labels",
-                "SELECT snapshot_id,policy FROM ml_labels WHERE rowid<=? ORDER BY snapshot_id,policy",
-            ),
-        ):
-            h.update(table.encode())
-            counts[table] = 0
-            for row in store.db.execute(query, (row_limits[table],)):
-                h.update(json.dumps(tuple(row)).encode())
-                counts[table] += 1
-        return dict(digest=h.hexdigest(), counts=counts)
-
-    rows_before = row_inventory()
-
     def done():
         # An expired/replaced claim never authorizes another destructive step.
         checked = now_ms()
@@ -744,12 +769,12 @@ def _execute(store, settings, plan, dry_run=False, owner=None):
         # Inserts above the frozen boundary cannot replace a missing original.
         # Scalar counts avoid hashing every historical ID before every segment;
         # the full identity digest is checked again before successful completion.
-        for table in ("ml_snapshots", "ml_labels"):
+        for table in TABLES:
             count = store.db.execute(
                 f"SELECT count(*) FROM {table} INDEXED BY sqlite_autoindex_{table}_1 WHERE rowid<=?",
                 (row_limits[table],),
             ).fetchone()[0]
-            if count != rows_before["counts"][table]:
+            if count != rows_before[table]["count"]:
                 raise RuntimeError("Cleanup durable ML row identities changed; stopped")
         maximum = plan.get("max_reclaim_bytes")
         return maximum is not None and state["freed_bytes"] >= maximum
@@ -999,7 +1024,7 @@ def _execute(store, settings, plan, dry_run=False, owner=None):
                     state["skipped_unverifiable"] += 1
                     if isinstance(exc, RuntimeError):
                         raise
-        if rows_before != row_inventory():
+        if rows_before != frozen_rows(store, row_limits):
             raise RuntimeError("Cleanup durable ML row identities changed; stopped")
         after = ml_inventory(store, asof, artifacts=True, row_limits=row_limits)
         verify_ml(before, after)
@@ -1007,7 +1032,7 @@ def _execute(store, settings, plan, dry_run=False, owner=None):
             json.dumps(after, sort_keys=True)
         )
         store.put(
-            "cleanup_verification_v212",
+            LATCH,
             dict(status="PASSED", run_id=plan["run_id"], before=before, after=after),
         )
         state.update(
@@ -1034,7 +1059,13 @@ def _execute(store, settings, plan, dry_run=False, owner=None):
         )
         return old | state
     except Exception as exc:
-        store.put(
-            "cleanup_verification_v212", dict(status="FAILED", run_id=plan["run_id"], reason=str(exc)[:500])
+        failure = dict(
+            status="FAILED",
+            run_id=plan["run_id"],
+            at_ms=now_ms(),
+            reason=str(exc)[:500],
+            pre_audit_sha256=audit_hash,
         )
+        store.put(LATCH, failure)
+        store.put("cleanup_failure:" + plan["run_id"], failure)
         raise

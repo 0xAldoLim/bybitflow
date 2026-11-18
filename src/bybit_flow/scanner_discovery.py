@@ -397,9 +397,12 @@ class MarketDiscoveryCoordinator:
         from .discovery import depth_shortlist, horizon_pre_ranks
 
         async with runtime.scan_lock:
+            if self.storage_blocked():
+                self.report_storage_block()
+                return runtime.status
             await runtime.select_source()
             scan_started = now_ms()
-            for key in ("error_type", "reason", "live_feed_preserved"):
+            for key in ("error_type", "reason", "live_feed_preserved", "error_category", "retry_at_ms"):
                 runtime.status.pop(key, None)
             runtime.status.update(state="scanning", started_ms=scan_started, at_ms=scan_started)
             runtime.store.put("scanner", runtime.status)
@@ -808,6 +811,27 @@ class MarketDiscoveryCoordinator:
                 )
             return runtime.status
 
+    def storage_blocked(self):
+        recorder = getattr(self.runtime, "recorder", None)
+        return (
+            recorder is not None
+            and not recorder.healthy
+            and getattr(recorder, "state", None) == "STORAGE_BACKPRESSURE"
+        )
+
+    def report_storage_block(self):
+        runtime = self.runtime
+        now = now_ms()
+        runtime.status.update(
+            state="blocked_by_storage",
+            at_ms=now,
+            retry_at_ms=now + 1000 * min(runtime.settings.scan_seconds, 30),
+            reason="Waiting for recording storage to become available",
+            error_category="RECORDING_UNAVAILABLE",
+        )
+        runtime.status.pop("error_type", None)
+        runtime.store.put("scanner", runtime.status)
+
     async def scan_loop(self):
         runtime = self.runtime
         await runtime.lifecycle_bootstrapped.wait()
@@ -819,10 +843,17 @@ class MarketDiscoveryCoordinator:
                 # can retry without changing any existing setup plan.
                 async with asyncio.timeout(max(900, runtime.settings.scan_seconds * 3)):
                     await runtime.scan_once()
+                if runtime.status.get("state") == "blocked_by_storage":
+                    await asyncio.sleep(min(delay, 30))
+                    continue
                 runtime.store.put("scan_health", success_health(now_ms()))
             except Exception as exc:
                 delay = min(delay, 60)
                 health = failure_health(runtime.store.get("scan_health", {}), exc, now_ms(), delay)
+                if health["error_category"] == "RECORDING_UNAVAILABLE" and self.storage_blocked():
+                    self.report_storage_block()
+                    await asyncio.sleep(min(delay, 30))
+                    continue
                 runtime.store.put("scan_health", health)
                 runtime.status = dict(state="error", error_type=type(exc).__name__, at_ms=now_ms())
                 runtime.status.update(

@@ -60,6 +60,10 @@ def raw_stream(path):
 
 
 def compact(store, limit=300, dry_run=False):
+    from .cleanup_reconciliation import LATCH
+
+    if not dry_run and store.get(LATCH, {}).get("status") == "FAILED":
+        return {"status": "cleanup verification blocked", "segments": 0}
     migrate(store)
     from .leases import overlaps
     from .storage import now_ms

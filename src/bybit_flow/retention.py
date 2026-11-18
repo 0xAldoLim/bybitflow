@@ -236,6 +236,12 @@ def prune_recordings(store, settings, at_ms=None, dry_run=False, force=False, ma
     claim = store.get("cleanup_run_claim_v212", {})
     if not dry_run and claim.get("expires_ms", 0) > now_ms():
         return dict(status="cleanup already running", run_id=claim.get("run_id"), freed_bytes=0)
+    if not dry_run:
+        from .cleanup_reconciliation import reconcile_failed_cleanup, storage_blocked
+
+        reconciliation = reconcile_failed_cleanup(store)
+        if storage_blocked(reconciliation):
+            return dict(status="cleanup verification blocked", freed_bytes=0, reconciliation=reconciliation)
     usage = directory_bytes(store.root)
     if not force and usage < settings.max_storage_gb * 1e9 * 0.85:
         return dict(
@@ -300,6 +306,8 @@ def protection_ranges(store, now):
 
 def maintain(store, settings):
     """Pressure policy is budget-relative, including controlled 10 GB deployments."""
+    from .capacity import cleanup_blocked_health
+    from .cleanup_reconciliation import LATCH, reconcile_failed_cleanup, storage_blocked
     from .leases import reap
     from .packing import compact
 
@@ -315,13 +323,28 @@ def maintain(store, settings):
         else "NORMAL"
     )
     result = dict(at_ms=now_ms(), state=state, usage_before=usage)
-    if settings.recording_retention_enabled and usage >= 0.7:
+    reconciliation = reconcile_failed_cleanup(store)
+    if settings.recording_retention_enabled and storage_blocked(reconciliation):
+        result.update(cleanup_blocked_health(reconciliation))
+        result["usage_after"] = usage
+        store.put("storage_maintenance", result)
+        return result
+    if (
+        settings.recording_retention_enabled
+        and usage >= 0.7
+        and store.get(LATCH, {}).get("status") != "FAILED"
+    ):
         result["compaction"] = compact(store, limit=600 if usage >= 0.85 else 100)
     if settings.recording_retention_enabled and usage >= 0.85:
         result["pruning"] = prune_recordings(store, settings)
     after = directory_bytes(store.root) / (settings.max_storage_gb * 1e9)
     result["usage_after"] = after
-    if after >= 0.95:
+    cleanup = result.get("pruning", {})
+    if cleanup.get("status") == "cleanup verification blocked":
+        result.update(cleanup_blocked_health(cleanup["reconciliation"]))
+    elif cleanup.get("status") == "cleanup already running":
+        result.update(state="CLEANUP_RUNNING", run_id=cleanup.get("run_id"))
+    elif after >= 0.95:
         result["state"] = "STORAGE_BACKPRESSURE"
     store.put("storage_maintenance", result)
     return result
