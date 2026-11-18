@@ -277,6 +277,22 @@ def test_storage_maintenance_failure_is_visible_and_clears_after_success(setting
         store.close()
 
 
+def test_healthy_recording_keeps_failed_cleanup_visible_without_recording_incident(settings):
+    settings, store, scanner, recorder, now = context(settings)
+    try:
+        store.put("cleanup_verification_v212", dict(status="FAILED", run_id="old"))
+        store.put(
+            "cleanup_reconciliation",
+            dict(failed_run="old", state="AUDIT_UNAVAILABLE", reason="No frozen row hashes"),
+        )
+        report = warnings(settings, store, scanner, recorder, now)
+        assert [w["code"] for w in report] == ["CLEANUP_VERIFICATION_BLOCKED"]
+        assert "Recording is active" in report[0]["message"]
+        assert report[0]["severity"] == "warning"
+    finally:
+        store.close()
+
+
 async def test_storage_dependency_preserves_scanner_selection_and_aggregates_warnings(settings):
     from bybit_flow.scanner_discovery import MarketDiscoveryCoordinator
 

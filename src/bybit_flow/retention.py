@@ -221,6 +221,8 @@ def storage_status(store, settings):
     result.update(
         deletable_bytes=deletable,
         scheduled_deletable_bytes=deletable,
+        raw_reclaimable_bytes=deletable,
+        raw_protected_bytes=plan["protected_bytes"],
         protected_bytes=max(0, used - deletable) if used >= budget * 0.85 else None,
         eligibility_measurement="scheduled cleanup under current pressure; null protection means not measured",
     )

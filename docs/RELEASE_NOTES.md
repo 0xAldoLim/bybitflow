@@ -1,5 +1,12 @@
 # Release notes
 
+## 2.2.5 — storage outlook
+
+- The dashboard and doctor show cached permanent and raw storage categories,
+  retention eligibility, and estimated time to budget thresholds.
+- Permanent-data pressure warns before recording stalls. A failed cleanup audit
+  remains visible when the recorder has space and continues normally.
+
 ## 2.2.4 — storage reliability
 
 - A failed retention run can be retried after its frozen SQLite rows, eligible

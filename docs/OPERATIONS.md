@@ -199,3 +199,12 @@ identifies missing proof, including older inventories with no frozen row hashes.
 Keep the original data and audit. Restore evidence only through a separately
 verified recovery procedure. A capacity increase can restore recording headroom
 with operator approval, but does not clear a failed verification.
+
+The storage outlook uses the existing hourly file inventory and periodic retention
+classification. Raw eligibility describes the last measured plan. A failed
+verification still blocks reclaiming those bytes. The outlook shows the current
+raw footprint alongside permanent data and warns at 70% permanent usage, or at
+80% total usage with at least 60% permanent usage. Runway uses observed net
+growth, including retention, only when at least 80% of the hourly samples are
+available for the window. Missing or stale observations remain unknown, and a
+change in uptime or recording load can invalidate an extrapolation.

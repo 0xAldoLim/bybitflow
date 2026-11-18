@@ -10,7 +10,16 @@ from test_v22_research import candle
 from bybit_flow import forward_evidence as forward
 from bybit_flow.config import Settings
 from bybit_flow.decision_view import overview, rows
-from bybit_flow.operational import HOUR, Priority, allowed, classify, forecast, persist, warnings
+from bybit_flow.operational import (
+    HOUR,
+    Priority,
+    allowed,
+    classify,
+    forecast,
+    persist,
+    storage_outlook,
+    warnings,
+)
 from bybit_flow.provenance import config_snapshot, status
 from bybit_flow.quality_v22 import apply
 from bybit_flow.recovery_status import failure_code, project, state
@@ -131,8 +140,48 @@ def test_storage_forecast_needs_real_history_and_keeps_categories():
     last = dict(total=34, database=15, wal=1, raw_segments=18)
     result = forecast([(0, first), (24 * HOUR, last)], 100)
     assert result["windows"]["24h"]["database"] == 12
-    assert result["windows"]["7d"] == "UNKNOWN" and result["days_to_budget"] == 2.75
+    assert result["windows"]["7d"] == "UNKNOWN" and result["days_to_budget"] == "UNKNOWN"
+    assert not result["sample_coverage"]["24h"]["sufficient"]
+    full = [(hour * HOUR, dict(total=10 + hour)) for hour in range(25)]
+    measured = forecast(full, 100)
+    assert measured["sample_coverage"]["24h"]["sufficient"] and measured["days_to_budget"] == 2.75
     assert forecast([(0, last), (24 * HOUR, first)], 100)["days_to_budget"] == "UNKNOWN"
+
+
+def test_storage_outlook_is_cached_and_separates_eligibility_from_cleanup_authority():
+    now = 500 * HOUR
+    gb = 10**9
+
+    class Cached:
+        def get(self, key, default=None):
+            return records.get(key, default)
+
+    records = {
+        "cleanup_verification_v212": {"status": "FAILED"},
+        "storage_status": dict(at_ms=now, raw_reclaimable_bytes=1 * gb, raw_protected_bytes=2 * gb),
+        "storage_forecast": dict(
+            at_ms=now,
+            categories=dict(
+                total=31 * gb, raw_segments=3 * gb, database=25 * gb, datasets=2 * gb, maintenance_audit=gb
+            ),
+            windows={"7d": dict(total=gb, raw_segments=0.75 * gb)},
+            sample_coverage={"7d": dict(sufficient=True)},
+        ),
+    }
+    snapshot = deepcopy(records)
+    store = Cached()
+    report = storage_outlook(store, now, 40 * gb)
+    assert report["permanent_bytes"] == 28 * gb and report["database_bytes"] == 25 * gb
+    assert report["raw_protected_bytes"] == 2 * gb and report["raw_reclaimable_bytes"] == gb
+    assert report["cleanup_blocked"]
+    assert report["runway_days"] == {"80": 1, "85": 3, "95": 7, "100": 9}
+    assert report["permanent_growth_per_day"] == {"24h": "UNKNOWN", "7d": 0.25 * gb, "30d": "UNKNOWN"}
+    assert warnings(store, now, report)[0]["code"] == "PERMANENT_STORAGE_PRESSURE"
+    assert not storage_outlook(store, now, 50 * gb)["permanent_pressure"]
+    assert storage_outlook(store, now + 3 * HOUR, 40 * gb)["status"] == "UNKNOWN"
+    assert records == snapshot
+    records["storage_forecast"]["sample_coverage"] = {}
+    assert storage_outlook(store, now, 40 * gb)["runway_days"]["100"] == "UNKNOWN"
 
 
 def test_bounded_telemetry_and_passive_checkpoint(settings):
@@ -174,7 +223,7 @@ def test_config_digest_is_redacted_stable_and_version_has_schema(settings):
     assert not any(v in json.dumps(first) for v in ("TOPSECRET", "secret.invalid", "data_dir", "equity"))
     store = Store(settings.data_dir)
     result = status(store, settings)
-    assert result["version"] == "2.2.4" and result["database"]["level"] == "012"
+    assert result["version"] == "2.2.5" and result["database"]["level"] == "012"
     store.close()
 
 

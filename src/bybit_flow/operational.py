@@ -12,6 +12,7 @@ from .storage import now_ms
 
 MINUTE = 60_000
 HOUR = 60 * MINUTE
+STORAGE_THRESHOLDS = (80, 85, 95, 100)
 
 
 class Priority(IntEnum):
@@ -125,11 +126,23 @@ def category_bytes(root):
     return result
 
 
+def growth_window(windows, coverage):
+    return next(
+        (
+            name
+            for name in ("7d", "24h", "30d")
+            if coverage.get(name, {}).get("sufficient") and isinstance(windows.get(name), dict)
+        ),
+        None,
+    )
+
+
 def forecast(history, budget):
     if not history:
         return dict(status="UNKNOWN", windows={}, days_to_budget="UNKNOWN")
     end, current = history[-1]
     windows = {}
+    coverage = {}
     for title, duration in (("24h", 24 * HOUR), ("7d", 7 * 24 * HOUR), ("30d", 30 * 24 * HOUR)):
         old = next(((at, p) for at, p in reversed(history) if at <= end - duration), None)
         windows[title] = (
@@ -137,17 +150,90 @@ def forecast(history, budget):
             if old is None
             else {key: (current[key] - old[1].get(key, 0)) * 24 * HOUR / (end - old[0]) for key in current}
         )
-    rate = next((windows[w]["total"] for w in ("7d", "24h", "30d") if isinstance(windows[w], dict)), None)
+        expected = duration // HOUR
+        observed = sum(end - duration < at <= end for at, _ in history)
+        coverage[title] = dict(
+            observed=observed,
+            expected=expected,
+            sufficient=old is not None and end - old[0] <= duration + 2 * HOUR and observed / expected >= 0.8,
+        )
+    window = growth_window(windows, coverage)
+    rate = windows[window]["total"] if window else None
     days = max(0, budget - current["total"]) / rate if rate is not None and rate > 0 else "UNKNOWN"
     return dict(
         status="OBSERVED" if rate is not None else "UNKNOWN",
         windows=windows,
+        sample_coverage=coverage,
         window_units="bytes per day, including eligible retention reductions",
         days_to_budget=days,
         budget_bytes=budget,
         categories=current,
         at_ms=end,
         limitation="Linear observed-growth forecast, not a retention guarantee; database contains both metadata and immutable derived evidence",
+    )
+
+
+def storage_outlook(store, now, budget):
+    """Project cached inventories only. Eligibility never authorizes deletion."""
+    growth = store.get("storage_forecast", {})
+    retention = store.get("storage_status", {})
+    verification = store.get("cleanup_verification_v212", {})
+    result = dict(
+        status="UNKNOWN",
+        budget_bytes=budget,
+        at_ms=growth.get("at_ms"),
+        retention_at_ms=retention.get("at_ms"),
+        cleanup_verification=verification.get("status"),
+        cleanup_blocked=verification.get("status") == "FAILED",
+    )
+    if 0 <= now - (retention.get("at_ms") or 0) <= 2 * HOUR:
+        result.update(
+            raw_reclaimable_bytes=retention.get("raw_reclaimable_bytes"),
+            raw_protected_bytes=retention.get("raw_protected_bytes"),
+        )
+    sizes = growth.get("categories", {})
+    if "total" not in sizes or not 0 <= now - (result["at_ms"] or 0) <= 2 * HOUR:
+        return result
+
+    raw = sizes.get("raw_segments", 0) + sizes.get("packed_archives", 0)
+    used = sizes["total"]
+    permanent = max(0, used - raw)
+    permanent_rates = {}
+    windows = growth.get("windows", {})
+    for name in ("24h", "7d", "30d"):
+        row = windows.get(name)
+        permanent_rates[name] = (
+            row["total"] - row.get("raw_segments", 0) - row.get("packed_archives", 0)
+            if isinstance(row, dict)
+            else "UNKNOWN"
+        )
+    coverage = growth.get("sample_coverage", {})
+    window = growth_window(windows, coverage)
+    rate = windows[window]["total"] if window else 0
+    runway = {
+        str(p): (
+            0 if used >= budget * p / 100 else (budget * p / 100 - used) / rate if rate > 0 else "UNKNOWN"
+        )
+        for p in STORAGE_THRESHOLDS
+    }
+    return result | dict(
+        status="OBSERVED",
+        used_bytes=used,
+        permanent_bytes=permanent,
+        raw_bytes=raw,
+        database_bytes=sizes.get("database", 0),
+        wal_bytes=sizes.get("wal", 0),
+        models_bytes=sizes.get("models", 0),
+        datasets_bytes=sizes.get("datasets", 0),
+        research_exports_bytes=sizes.get("research_exports", 0),
+        maintenance_audit_bytes=sizes.get("maintenance_audit", 0),
+        other_permanent_bytes=sizes.get("other", 0),
+        permanent_growth_per_day=permanent_rates,
+        sample_coverage=coverage,
+        runway_days=runway,
+        runway_window=window if rate > 0 else None,
+        permanent_pressure=permanent >= budget * 0.70
+        or (permanent >= budget * 0.60 and used >= budget * 0.80),
     )
 
 
@@ -310,11 +396,31 @@ async def monitor(runtime):
         previous_busy, last_sample, lag = busy, now, 0.0
 
 
-def warnings(store, now):
+def warnings(store, now, outlook=None):
     row = store.get("operational_health", {})
-    if not 0 <= now - row.get("at_ms", 0) <= 90_000:
-        return []
     result = []
+    if outlook and outlook.get("permanent_pressure"):
+        permanent, budget, raw = (
+            outlook[key] / 1e9 for key in ("permanent_bytes", "budget_bytes", "raw_bytes")
+        )
+        days = outlook["runway_days"]["100"]
+        runway = (
+            f"{days:.1f} days ({outlook['runway_window']} trend)"
+            if isinstance(days, (int, float)) and days
+            else ("budget reached" if days == 0 else "unknown")
+        )
+        result.append(
+            dict(
+                code="PERMANENT_STORAGE_PRESSURE",
+                severity="warning",
+                title="Permanent storage pressure",
+                message=f"Permanent data uses {permanent:.2f} GB of {budget:.2f} GB. Current raw footprint is {raw:.2f} GB. Estimated runway: {runway}.",
+                action="Review storage growth and plan recording headroom or verified archival of redundant derived artifacts.",
+                at_ms=outlook["at_ms"],
+            )
+        )
+    if not 0 <= now - row.get("at_ms", 0) <= 90_000:
+        return result
 
     def add(code, value, expected, action):
         result.append(
@@ -371,7 +477,7 @@ def warnings(store, now):
             "Inspect source history, retry reasons and coverage. Do not fabricate completion or overwrite labels.",
         )
     growth = store.get("storage_forecast", {})
-    days = growth.get("days_to_budget")
+    days = outlook.get("runway_days", {}).get("100") if outlook is not None else growth.get("days_to_budget")
     if isinstance(days, (int, float)) and days < 7:
         add(
             "STORAGE_EXHAUSTION_FORECAST",

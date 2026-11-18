@@ -282,7 +282,7 @@ def create_app(settings=None):
 
     @app.get("/api/operations")
     async def operations_report():
-        from .operational import samples
+        from .operational import samples, storage_outlook
         from .provenance import status
         from .recovery_status import project
 
@@ -295,6 +295,7 @@ def create_app(settings=None):
                 operations=reader.get("operational_health", {}),
                 time_series=samples(reader),
                 storage_growth=reader.get("storage_forecast", {}),
+                storage_outlook=storage_outlook(reader, now_ms(), settings.max_storage_gb * 1e9),
                 cleanup_reconciliation=reader.get("cleanup_reconciliation", {}),
                 cleanup_recovery=reader.get("cleanup_recovery_latest", {}),
                 capacity=reader.get("capacity_health", {}),
@@ -315,16 +316,19 @@ def create_app(settings=None):
         from .decision_view import rows as decision_rows
 
         active_rows = await asyncio.to_thread(read_report, settings.data_dir, decision_rows)
+        from .operational import storage_outlook
         from .operational import warnings as operational_warnings
 
         operator = warnings(settings, store, scanner, rec, now_ms())
-        priorities = operational_warnings(store, now_ms())
+        outlook = storage_outlook(store, now_ms(), settings.max_storage_gb * 1e9)
+        priorities = operational_warnings(store, now_ms(), outlook)
         if any(w["code"] == "STORAGE_INCIDENT" for w in operator):
             priorities = [w for w in priorities if w["code"] != "STORAGE_EXHAUSTION_FORECAST"]
         return dict(
             decisions=decisions(active_rows, now_ms(), current_quotes(scanner, active_rows, now_ms())),
             operator_priorities=priorities,
             storage_growth=store.get("storage_forecast", {}),
+            storage_outlook=outlook,
             warnings=operator + priorities,
             scanner=scanner.status,
             exchange=scanner.exchange,

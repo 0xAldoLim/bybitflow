@@ -159,6 +159,29 @@ function setupAssessment(s, research) {
     `<details><summary>Frozen delivery quote and assessment</summary>${json(snap)}</details>` +
     `<details><summary>Fixed exit research · no production authority</summary>${json(research || {state: "PENDING"})}</details>`);
 }
+
+function storageOutlook(data) {
+  const s = data.storage_outlook || {};
+  const gb = (bytes) => bytes == null ? "Unknown" : `${number(bytes / 1e9, 2)} GB`;
+  const categories = [
+    ["Permanent data", s.permanent_bytes], ["SQLite database", s.database_bytes], ["SQLite WAL", s.wal_bytes],
+    ["ML datasets", s.datasets_bytes], ["ML models", s.models_bytes], ["Research exports", s.research_exports_bytes],
+    ["Maintenance audits", s.maintenance_audit_bytes], ["Other permanent data", s.other_permanent_bytes],
+    ["Raw recordings", s.raw_bytes], ["Raw protected by retention", s.raw_protected_bytes],
+    ["Raw eligible under retention rules", s.raw_reclaimable_bytes],
+  ];
+  const runway = [80, 85, 95, 100].map(p => {
+    const days = s.runway_days?.[p];
+    return [p + "%", typeof days === "number" ? (days === 0 ? "Reached" : `${number(days, 1)} days`) : "Unknown"];
+  });
+  return panel("Storage outlook",
+    `<p>${gb(s.used_bytes ?? data.storage?.used_bytes)} used / ${gb(s.budget_bytes ?? data.storage?.budget_bytes)} budget</p>` +
+    (s.cleanup_blocked ? "<p>Cleanup is blocked pending verification of the failed audit.</p>" : "") +
+    table(["Category", "Size"], categories.map(([label, bytes]) => [label, gb(bytes)])) +
+    table(["Budget threshold", "Estimated runway"], runway) +
+    `<p>Storage measured ${escape(utc(s.at_ms))} · raw eligibility measured ${escape(utc(s.retention_at_ms))}</p>` +
+    `<details><summary>Observed growth</summary>${json({permanent_per_day: s.permanent_growth_per_day, trend: data.storage_growth})}</details>`);
+}
 function watchTable(rows) {
   return rows.length
     ? table(
@@ -289,7 +312,7 @@ async function render(background = false) {
         (f.unavailable ? panel("Forward policy observations", empty("Report temporarily unavailable", f.unavailable)) : panel("Forward policy observations", `<p>${escape(f.label)}</p><p>${number(f.opportunities, 0)} prospective opportunities · ${escape(f.epoch ? utc(f.epoch.start_ms) : "Begins after this release is deployed")}</p>` +
           table(["Policy / provenance / source", "Complete / observed", "Mean / median net R", "MFE / MAE", "Evidence"], Object.entries(f.policies || {}).map(([key,v]) => [escape(key), `${v.accepted.complete_samples} / ${v.all_observed}`, `${number(v.accepted.mean_net_r)} / ${number(v.accepted.median_net_r)}`, `${number(v.accepted.mean_mfe)} / ${number(v.accepted.mean_mae)}`, escape(v.accepted.status)])) +
           `<details><summary>Score bands and cohorts</summary>${json({score_bands: f.score_bands, cohorts: f.cohorts, limitation: f.limitation})}</details>`, "Descriptive observations · no auto promotion")) +
-        panel("Storage outlook", `<p>${number(data.storage?.used_bytes / 1e9)} / ${number(data.storage?.budget_bytes / 1e9)} GB · observed-growth days to budget: ${escape(data.storage_growth?.days_to_budget ?? "UNKNOWN")}</p><details><summary>Category growth</summary>${json(data.storage_growth || {status: "UNKNOWN"})}</details>`);
+        storageOutlook(data);
     } else if (page === "watchlist")
       body = panel(
         "Eligible markets",

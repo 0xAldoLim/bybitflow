@@ -55,7 +55,20 @@ def warnings(settings, store, scanner, recorder, now):
     maintenance_failed = current.get("state") == "ERROR" or (
         current.get("state") is None and current.get("error_type")
     )
-    if storage_paused or latch_failed or maintenance_failed:
+    if latch_failed and recorder.healthy:
+        audit_reason = (
+            reconciliation.get("reason")
+            if reconciliation.get("failed_run") == verification.get("run_id")
+            else None
+        ) or "Waiting for verification of the failed cleanup audit"
+        add(
+            "CLEANUP_VERIFICATION_BLOCKED",
+            "Cleanup verification blocked",
+            audit_reason.rstrip(".") + ". Recording is active.",
+            "Review the failed cleanup audit and frozen evidence before retrying cleanup.",
+            at_ms=reconciliation.get("at_ms", verification.get("at_ms")),
+        )
+    if storage_paused or maintenance_failed:
         if latch_failed:
             reason = (
                 reconciliation.get("reason")
@@ -184,11 +197,7 @@ def warnings(settings, store, scanner, recorder, now):
             severity="error",
         )
     usage = storage.get("usage_percent", 0)
-    if (
-        not (storage_paused or latch_failed or maintenance_failed)
-        and isinstance(usage, (int, float))
-        and usage >= 90
-    ):
+    if not (storage_paused or maintenance_failed) and isinstance(usage, (int, float)) and usage >= 90:
         add(
             "STORAGE_PRESSURE",
             "Recording storage nearly full",

@@ -149,12 +149,15 @@ async def doctor(settings, store, network=True):
     else:
         for name in names:
             checks[name] = store.get("probe:" + name, {"status": "NOT_TESTED"})
+    from .operational import storage_outlook
     from .operational import warnings as operational_warnings
     from .provenance import status as provenance_status
     from .recovery_status import project
 
     checks["deployment"] = provenance_status(store, settings)
-    checks["operational_warnings"] = operational_warnings(store, now_ms())
+    outlook = storage_outlook(store, now_ms(), settings.max_storage_gb * 1e9)
+    checks["operational_warnings"] = operational_warnings(store, now_ms(), outlook)
+    checks["storage_outlook"] = outlook
     checks["operations"] = store.get("operational_health", {})
     checks["storage_forecast"] = store.get("storage_forecast", {"status": "UNKNOWN"})
     checks["recovery_jobs"] = project(store, now_ms())
