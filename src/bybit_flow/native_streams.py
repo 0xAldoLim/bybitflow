@@ -165,7 +165,7 @@ class NativeStreams:
             now_ms(),
             complete=complete,
         )
-        if recorded is False and source.startswith("ws/"):
+        if recorded is False and source.startswith("ws/") and getattr(self.recorder, "required", True):
             # Optional streams may shed persistence under pressure, but their tape
             # must never remain qualified as continuously recorded evidence.
             if symbol in self.tapes:

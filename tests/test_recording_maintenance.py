@@ -105,11 +105,40 @@ def test_failed_cleanup_requires_durable_proof(settings, signal, monkeypatch, da
     else:
         failed.pop("pre_audit_sha256")
         store.put(LATCH, failed)
-    state = "AUDIT_UNAVAILABLE" if damage in {"missing", "corrupt", "legacy"} else "HARD_BLOCKED"
+    unverifiable = damage in {"missing", "corrupt", "legacy"}
+    if unverifiable:
+        # An integrity failure with no usable audit still blocks. Only a run
+        # that was merely interrupted may be replaced by a fresh audited run.
+        failed["reason"] = "Cleanup durable ML row identities changed; stopped"
+        store.put(LATCH, failed)
+    state = "AUDIT_UNAVAILABLE" if unverifiable else "HARD_BLOCKED"
     assert reconcile_failed_cleanup(store)["state"] == state
     result = execute(store, settings, planning(store, settings, 8 * 3600000, force=True))
     assert result["reconciliation"]["state"] == state
     assert raw.exists() and store.get(LATCH) == failed
+    store.close()
+
+
+@pytest.mark.parametrize("damage", ["missing", "corrupt", "legacy"])
+def test_interrupted_cleanup_without_usable_audit_is_replaced_by_a_fresh_run(
+    settings, signal, monkeypatch, damage
+):
+    store = Store(settings.data_dir)
+    failed, raw, _, _ = failed_run(store, settings, signal, monkeypatch)
+    audit = audit_path(store, failed["run_id"])
+    if damage == "missing":
+        audit.unlink()
+    elif damage == "corrupt":
+        audit.write_bytes(b"invalid")
+    else:
+        failed.pop("pre_audit_sha256")
+        store.put(LATCH, failed)
+    reconciliation = reconcile_failed_cleanup(store, fresh=True)
+    assert reconciliation["state"] == "SAFE_TO_RETRY" and reconciliation["interrupted"] is True
+    result = execute(store, settings, planning(store, settings, 8 * 3600000, force=True))
+    assert result.get("status") != "cleanup verification blocked"
+    assert store.get(LATCH)["status"] == "PASSED"
+    assert store.get("cleanup_failure:" + failed["run_id"])["run_id"] == failed["run_id"]
     store.close()
 
 

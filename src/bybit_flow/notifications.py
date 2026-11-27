@@ -416,6 +416,13 @@ class Notifier:
         )
         return visible
 
+    def meets_min_tier(self, signal):
+        from .scorecard import TIERS
+
+        minimum = getattr(self.settings, "min_alert_tier", "F")
+        tier = signal.raw_tier if signal.raw_tier in TIERS else "F"
+        return TIERS.index(tier) <= TIERS.index(minimum)
+
     async def send_research(self, signal, update=False):
 
         channel = (
@@ -438,6 +445,11 @@ class Notifier:
 
         if not update and signal.horizon_profile == "EXTENDED_SWING":
             return "shadow-only horizon"
+
+        if not update and not self.meets_min_tier(signal):
+            # The grade decides delivery. Follow-ups for already delivered
+            # setups are unaffected.
+            return "blocked:BELOW_MIN_ALERT_TIER"
 
         if signal.validation_status == "validated" and not self.settings.research_alerts:
             return await self.send_public(signal, update)

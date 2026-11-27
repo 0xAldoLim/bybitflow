@@ -20,6 +20,11 @@ def main():
     sub.add_parser(
         "v8-effectiveness", help="Research-only outcomes of blocked vs comparable passed V8 decisions"
     )
+    card = sub.add_parser(
+        "scorecard", help="Outcomes of alerts actually delivered, by grade; observed prices, not fills"
+    )
+    card.add_argument("--days", type=int, default=0, help="Only alerts created in the last N days")
+    card.add_argument("--json", action="store_true")
     signals = sub.add_parser("signals", help="Signal pipeline counters and delivery diagnostics")
     signals.add_argument("operation", choices=["status"])
     sub.add_parser("version", help="Product version, immutable cutover and v20 readiness")
@@ -156,6 +161,11 @@ def main():
             print(
                 json.dumps(preregister(store, json.loads(args.record.read_text(encoding="utf-8")), now_ms()))
             )
+        elif args.command == "scorecard":
+            from .scorecard import render, scorecard
+
+            result = scorecard(store, now_ms() - args.days * 86_400_000 if args.days else 0)
+            print(json.dumps(result, indent=2) if args.json else render(result))
         elif args.command == "forward-report":
             from .forward_evidence import report
 

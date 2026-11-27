@@ -1,5 +1,27 @@
 # Release notes
 
+## 2.3.0 — alerts no longer depend on recording; delivery follows the grade
+
+Based on the [independent audit of 2026-11-27](audits/2026-11-27-independent-audit.md).
+
+- **Raw recording is best effort.** A full storage budget, queue overflow or
+  writer error drops the affected raw rows as explicit coverage gaps. Scanning,
+  lifecycle tracking and Discord delivery continue. `FLOW_RECORDING_REQUIRED=true`
+  restores the previous behaviour, where a recording failure stops the scanner.
+- **An interrupted cleanup no longer blocks storage forever.** A run that lost
+  its claim and has no usable pre-run audit is replaced by a fresh, fully audited
+  run. A readable audit that shows changed frozen evidence still blocks.
+- **Delivery follows the Setup Score grade.** `FLOW_MIN_ALERT_TIER` (default `C`)
+  is the lowest grade sent to Discord. Previously every gate-passing setup was
+  sent, including grades D, E and F. Follow-ups for already delivered setups are
+  unaffected. Set `F` for the previous behaviour.
+- **`bybit-flow scorecard`** reports targets, stops and expiries of delivered
+  alerts by grade, family and horizon, with a break-even comparison.
+- **`scripts/start.ps1` repairs the Docker Desktop stale-socket crash** that
+  kept the stack offline after unclean shutdowns.
+- Score weights, gates, stops, targets and model authority are unchanged. The
+  audit found no measurable edge in delivered alerts; see its recommendations.
+
 ## 2.2.6 — verified raw recording retirement
 
 - Bounded maintenance can retire raw recordings for finalized non-trainable

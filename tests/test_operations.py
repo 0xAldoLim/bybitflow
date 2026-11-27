@@ -14,6 +14,13 @@ from bybit_flow.replay import replay
 from bybit_flow.storage import Recorder, Store
 
 
+@pytest.fixture
+def settings(settings):
+    # These tests cover the legacy fail-closed recorder (FLOW_RECORDING_REQUIRED=true).
+    # The best-effort default is covered in test_best_effort_recording.py.
+    return settings.model_copy(update={"recording_required": True})
+
+
 async def test_recorder_raw_and_normalized_roundtrip(settings):
     store = Store(settings.data_dir)
     rec = Recorder(store, settings)

@@ -188,6 +188,16 @@ def warnings(settings, store, scanner, recorder, now):
             severity="error",
             at_ms=scanner.status.get("at_ms"),
         )
+    if recorder.healthy and getattr(recorder, "state", None) == "STORAGE_FULL_NOT_RECORDING":
+        add(
+            "RECORDING_SKIPPED_STORAGE_FULL",
+            "Raw recording paused: storage budget full",
+            "Scanning, lifecycle tracking and Discord alerts continue. Raw ticks are not being "
+            "saved, so tick-based research labels for this period will be incomplete.",
+            "Free space or raise FLOW_MAX_STORAGE_GB if you want raw recording back. No action is "
+            "needed for alerts.",
+            at_ms=getattr(recorder, "last_error_ms", None),
+        )
     if not recorder.healthy and not storage_paused:
         add(
             "RECORDING_BLOCKED",

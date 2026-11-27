@@ -6,6 +6,7 @@ __pycache__/
 .ruff_cache/
 *.egg-info/
 data/
+analysis/audit/*.json
 dist/
 build/
 

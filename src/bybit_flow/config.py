@@ -64,6 +64,9 @@ class Settings(BaseSettings):
     tape_max_trades: int = Field(50_000, ge=1000, le=200_000)
     max_storage_gb: float = Field(10, gt=0.1)
     recording_retention_enabled: bool = True
+    # False (default): raw recording is best effort and never stops scanning or alerts.
+    # True: legacy fail-closed behaviour, where a full disk or slow writer halts the scanner.
+    recording_required: bool = False
     ml_two_stage: bool = False
     horizon_profiles: list[Literal["SHORT_INTRADAY", "CORE_INTRADAY", "SWING", "EXTENDED_SWING"]] = Field(
         default_factory=lambda: ["CORE_INTRADAY", "SHORT_INTRADAY", "SWING", "EXTENDED_SWING"]
@@ -77,6 +80,9 @@ class Settings(BaseSettings):
     ml_raw_retention_minutes: int = Field(60, ge=15, le=1440)
     rest_requests_per_second: float = Field(3, gt=0, le=10)
     research_alerts: bool = False
+    # Lowest Setup Score grade delivered to Discord. Lower grades stay on the
+    # dashboard and in research records. "F" restores the old send-everything behaviour.
+    min_alert_tier: Literal["SSS", "SS", "S", "A", "B", "C", "D", "E", "F"] = "C"
     sss_research: bool = False
     research_webhook: SecretStr = SecretStr("")
     monitoring_webhook: SecretStr = SecretStr("")

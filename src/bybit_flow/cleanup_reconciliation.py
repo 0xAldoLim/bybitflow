@@ -11,6 +11,7 @@ LATCH = "cleanup_verification_v212"
 TABLES = ("ml_snapshots", "ml_labels")
 RECHECK_MS = 900_000
 AUDIT_LIMIT = 8_000_000
+INTERRUPTED = "Cleanup ownership expired/lost"
 
 
 def frozen_rows(store, limits, *, deadline=None):
@@ -116,6 +117,18 @@ def reconcile_failed_cleanup(store, *, fresh=False):
                 state="SAFE_TO_RETRY", reason="Frozen ML rows, eligible identities and artifacts verified"
             )
 
+    if evidence["state"] == "AUDIT_UNAVAILABLE" and str(failed.get("reason", "")).startswith(INTERRUPTED):
+        # The run lost its claim (restart, sleep, timeout): an interruption, not a
+        # failed comparison. With no usable pre-run audit there is nothing left
+        # to reconcile, ever, and blocking every later cleanup only fills the
+        # disk. The next run takes and verifies its own fresh pre/post audit.
+        # A readable audit that shows changed frozen evidence still hard-blocks.
+        evidence.update(
+            state="SAFE_TO_RETRY",
+            interrupted=True,
+            unverifiable=evidence["reason"],
+            reason="Interrupted run has no usable pre-run audit; a fresh audited run replaces it",
+        )
     store.put("cleanup_reconciliation", evidence)
     return evidence
 

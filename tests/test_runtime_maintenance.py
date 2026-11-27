@@ -9,6 +9,13 @@ from bybit_flow.packing import compact
 from bybit_flow.storage import Recorder, Store
 
 
+@pytest.fixture
+def settings(settings):
+    # These tests cover the legacy fail-closed recorder (FLOW_RECORDING_REQUIRED=true).
+    # The best-effort default is covered in test_best_effort_recording.py.
+    return settings.model_copy(update={"recording_required": True})
+
+
 async def test_native_subscription_recovers_after_recorder_failure(settings):
     from types import SimpleNamespace
     from unittest.mock import Mock

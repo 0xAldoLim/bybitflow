@@ -220,6 +220,7 @@ in CMD, PowerShell and Linux/macOS shells.
 | Check version and deployment metadata | `docker compose exec desk bybit-flow version` |
 | Check feeds, recording and diagnostics | `docker compose exec desk bybit-flow doctor` |
 | Inspect signal qualification and delivery | `docker compose exec desk bybit-flow signals status` |
+| See how delivered alerts actually ended, by grade | `docker compose exec desk bybit-flow scorecard` |
 | Inspect prospective policy observations | `docker compose exec desk bybit-flow forward-report` |
 | Pre-register a research comparison | `docker compose exec desk bybit-flow policy-preregister prereg.json` |
 | Inspect ML readiness and worker status | `docker compose exec trainer bybit-flow ml status` |

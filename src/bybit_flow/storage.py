@@ -389,6 +389,12 @@ class Recorder:
         self.last_offered_receipt_ms = None
         self.receipt_clock_adjustments = 0
         self.backpressure_waits = self.backpressure_wait_ms = self.last_backpressure_ms = 0
+        # Raw recording feeds research and ML only. Live books, tapes, lifecycle
+        # and alerts are in memory, so by default a recording failure sheds raw
+        # events as explicit gaps instead of stopping the scanner.
+        self.required = bool(getattr(settings, "recording_required", False))
+        self.suspended_until_ms = 0
+        self.suspensions = 0
         from collections import deque
 
         self.enqueued = deque(maxlen=120)
@@ -435,7 +441,13 @@ class Recorder:
             backpressure_waits=self.backpressure_waits,
             backpressure_wait_ms=self.backpressure_wait_ms,
             last_backpressure_ms=self.last_backpressure_ms,
+            recording_required=self.required,
+            suspended_until_ms=self.suspended_until_ms,
+            suspensions=self.suspensions,
         )
+
+    def suspended(self, at=None):
+        return not self.required and (at if at is not None else now_ms()) < self.suspended_until_ms
 
     def pressure(self):
         return max(
@@ -444,6 +456,8 @@ class Recorder:
 
     async def wait_for_capacity(self, timeout=2):
         """Bound socket backpressure before consuming another market message."""
+        if not self.required:
+            return  # offer() sheds load; the live feed is never paused for the disk.
         if not self.healthy:
             raise RuntimeError("Recording unavailable")
         if self.pressure() < 0.5:
@@ -486,6 +500,9 @@ class Recorder:
             and 0 < self.last_offered_receipt_ms - receipt <= RECEIPT_QUANTIZATION_MS
         ):
             receipt = self.last_offered_receipt_ms
+        if self.suspended(receipt):
+            self._gap(source, symbol, receipt, self.state)
+            return False
         optional = symbol not in self.critical_symbols and "control/" not in source
         pressure = self.pressure()
         if pressure >= 0.7 and optional:
@@ -521,6 +538,10 @@ class Recorder:
             self.overflow_count += 1
             self.last_overflow_ms = self.last_error_ms = receipt
             self.last_error_type = "QueueFull"
+            if not self.required:
+                self.state = "RECORDER_BACKPRESSURE"
+                self._gap(source, symbol, receipt, "RECORDER_BACKPRESSURE")
+                return False
             self.healthy, self.reason = False, "recording queue overflow; collection continuity lost"
             self.state = "RECORDER_BACKPRESSURE"
             self._gap(source, symbol, receipt, "RECORDER_BACKPRESSURE")
@@ -712,6 +733,37 @@ class Recorder:
                     if not due:
                         await asyncio.sleep(0)
                 except Exception as exc:
+                    if not self.required:
+                        # Best effort: drop the unwritable rows as a durable gap and
+                        # keep the scanner alive. Recording resumes on its own.
+                        full = isinstance(exc, StorageBudgetExceeded)
+                        self.last_error_ms, self.last_error_type = now_ms(), type(exc).__name__
+                        self.retries += 1
+                        self.suspensions += 1
+                        self.state = "STORAGE_FULL_NOT_RECORDING" if full else "RECORDER_RECOVERY"
+                        self.reason = (
+                            "Storage budget full; alerts continue without raw recording"
+                            if full
+                            else type(exc).__name__ + ": raw recording skipped; alerts continue"
+                        )
+                        for row in batch:
+                            self._gap(row["source"], row["symbol"], row["receipt_ms"], self.state)
+                        while not self.queue.empty():
+                            row = self.queue.get_nowait()
+                            self._gap(row["source"], row["symbol"], row["receipt_ms"], self.state)
+                        batch, batch_bytes, batch_id = [], 0, None
+                        self.pending_bytes = 0
+                        self.suspended_until_ms = now_ms() + (60_000 if full else 15_000)
+                        last_flush = time.monotonic()
+                        try:
+                            self.store.put("recorder_gap", dict(at_ms=self.last_error_ms, reason=self.reason))
+                            self.store.put("recorder_health", self.metrics())
+                        except sqlite3.OperationalError:
+                            self.store.db.health.increment("recorder_status_busy_retries")
+                        if not self.running:
+                            break
+                        await asyncio.sleep(1)
+                        continue
                     self.healthy = False
                     self.last_error_ms, self.last_error_type = now_ms(), type(exc).__name__
                     self.retries += 1
