@@ -52,6 +52,7 @@ import math
 import os
 import statistics as st
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from decimal import Decimal
@@ -138,7 +139,7 @@ def outcome_features(signal):
 # ---------------------------------------------------------------- candles
 
 
-def download(symbols, days, directory, pause=0.25):
+def download(symbols, days, directory, pause=0.6):
     """Public Binance USDT-M 5m candles. No key, no account."""
     directory = Path(directory)
     directory.mkdir(parents=True, exist_ok=True)
@@ -146,11 +147,18 @@ def download(symbols, days, directory, pause=0.25):
     def get(path, **query):
         url = "https://fapi.binance.com" + path + "?" + urllib.parse.urlencode(query)
         error = None
-        for attempt in range(5):
+        for attempt in range(12):
             try:
                 request = urllib.request.Request(url, headers={"User-Agent": "research-backtest"})
                 with urllib.request.urlopen(request, timeout=25) as response:
                     return json.load(response)
+            except urllib.error.HTTPError as exc:
+                error = exc
+                if exc.code in {418, 429}:
+                    # Rate limited. The live scanner shares this address, so back off fully.
+                    time.sleep(max(60, int(exc.headers.get("Retry-After") or 0)))
+                else:
+                    time.sleep(2 * (attempt + 1))
             except Exception as exc:  # noqa: BLE001 - retried, then raised
                 error = exc
                 time.sleep(2 * (attempt + 1))
@@ -184,7 +192,7 @@ def download(symbols, days, directory, pause=0.25):
         meta[symbol] = dict(tick=tick, onboard=info[symbol]["onboardDate"])
     from concurrent.futures import ThreadPoolExecutor
 
-    with ThreadPoolExecutor(4) as pool:  # Well inside the public request-weight limit.
+    with ThreadPoolExecutor(2) as pool:  # Slow on purpose: the live scanner shares the rate limit.
         list(pool.map(fetch, wanted))
     meta_path.write_text(json.dumps(meta))
     return sorted(meta)

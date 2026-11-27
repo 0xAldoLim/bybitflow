@@ -9,7 +9,8 @@ states on every alert what its rule has demonstrated.
 
 **No rule is proven profitable.** 92,174 replayed setups, 12 liquid perpetuals,
 58 rules tried: 50 rejected, 8 with too few setups to judge. A replication of
-the one lead on 48 further symbols (22,068 setups) also found nothing.
+the one lead on 48 further symbols (22,068 setups) and a test on 40 mid-cap
+symbols (51,919 setups) also accepted nothing.
 
 ### Round 1: the scanner's rules and plain momentum
 
@@ -87,16 +88,44 @@ which flatters any long-biased result. It did not help.
 bybit-flow acceptance replicate --candles analysis/backtest/candles-replication
 ```
 
-## Mid-cap perpetuals
+## Mid-cap perpetuals: nothing accepted, one directional finding
 
-Declared before it was run: the same swing and core intraday rules, unchanged,
-on 40 mid-cap USDT perpetuals (`MIDCAP_SYMBOLS` in `acceptance.py`): ranked 101
-to 250 by 24h quote volume, listed at least one year, never used above.
+Declared before it was run (commit `fe9ddb5`): the same swing and core intraday
+rules, unchanged, on 40 mid-cap USDT perpetuals (`MIDCAP_SYMBOLS` in
+`acceptance.py`): ranked 101 to 250 by 24h quote volume, listed at least one
+year, never used above.
 
-Costs are declared higher. The set's median half-spread measured 2.06 bps
+Costs were declared higher. The set's median half-spread measured 2.06 bps
 against 0.52 bps for the large caps, so slippage is 4 bps per side instead of 2:
 19 bps round trip for market orders, and 9.5 bps on any stop or time exit of a
 resting-order variant. Same protocol, same criteria, same significance bar.
+
+Result: 51,919 setups on 40 symbols, 2024-02-13 to 2026-11-27, no replay
+errors. **Nothing accepted.** 32 rules rejected, 8 with too few setups.
+
+| Rule | Test setups | +1R before −1R | Net per trade | Held out |
+|---|---:|---:|---:|---:|
+| Core intraday, all four families as published | 34,129 | 46.0% to 50.4% | −0.12R to −0.20R | all negative |
+| Core intraday trend pullback, **mirrored** | 3,939 | **54.0% (z +5.0)** | −0.06R | −0.08R |
+| Swing liquidity sweep, as published | 2,326 | **53.3% (z +3.2)** | +0.02R, lower bound −0.06R | −0.02R |
+| Swing liquidity sweep, limit entry 0.25R better | 1,395 | 52.5% | +0.07R, lower bound −0.06R | −0.03R |
+| Swing trend pullback, as published | 626 | 51.5% | −0.02R | −0.01R |
+
+Two rules cleared the corrected significance bar for *direction* and still
+failed, because direction is only half the criterion:
+
+- **Swing liquidity sweeps on mid-caps** point the right way 53.3% of the time.
+  After 19 bps that is worth +0.02R with a lower bound below zero, and the
+  held-out quarter is slightly negative. Real tilt, not a profit.
+- **Intraday trend pullbacks are wrong more often than right, everywhere.** The
+  published rule reaches +1R first 46.0% of the time on mid-caps (z −5.0), 46.6%
+  on the large caps and 45% with a limit entry. Fading it is right 54% of the
+  time, which is the strongest directional result in this whole exercise. It
+  still loses 0.06R per trade at market-order costs.
+
+The second point is a finding about the scanner as it runs today: the core
+intraday trend pullback is the one family with evidence that it is
+systematically on the wrong side, not merely uninformative.
 
 Caveats fixed in advance: these symbols have one to three years of history, so
 samples are smaller; current volume rank selects coins that are liquid today,
@@ -169,9 +198,11 @@ What remains worth doing, in order:
 1. ~~Resolve the one lead with more data.~~ Done above: swing trend pullback
    did not replicate on 48 fresh symbols. There is no open lead among the
    candle-structure rules.
-2. **Trade less liquid markets.** The 12 symbols here are the hardest place to
-   find an edge. The same rules on mid-cap perpetuals are a different test, with
-   wider spreads to model honestly.
+2. ~~Trade less liquid markets.~~ Done above: 40 mid-caps, nothing accepted.
+   It produced the one open question worth a declared test: fading the core
+   intraday trend pullback with resting orders on both sides. At 54% and a 1R
+   target the gross edge is about 0.08R, and the cost of the trade decides it.
+   That variant was not declared, so it has not been tested.
 3. **Use information that is not in candles.** Liquidation clusters, order-book
    state at decision time and spot-perpetual basis are what the supplied
    microstructure literature actually describes. They need recorded data, which
