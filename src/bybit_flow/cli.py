@@ -133,8 +133,9 @@ def main():
                 rows, errors = acceptance.run(symbols, args.candles, args.workers, horizons)
                 if args.rows:
                     args.rows.write_text(json.dumps(rows))
-            for name in sorted(p.stem for p in args.candles.glob("*.json") if not p.stem.startswith("_")):
-                rows += acceptance.baseline_rows(name, args.candles)
+            names = sorted(p.stem for p in args.candles.glob("*.json") if not p.stem.startswith("_"))
+            acceptance.download_funding(names, args.candles)
+            rows += acceptance.all_baselines(args.candles)
             acceptance.REPORT_FILE.write_text(json.dumps(acceptance.evaluate(rows, cost, errors), indent=1))
             acceptance.MODEL_FILE.write_text(json.dumps(acceptance.fit_grades(rows, cost), indent=1))
         report = acceptance._load(acceptance.REPORT_FILE)

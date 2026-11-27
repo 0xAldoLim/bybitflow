@@ -24,6 +24,23 @@ Protocol, fixed before looking at results:
   matching reversal rules. They are not scanner rules: a baseline that passes
   is a lead to implement, and it counts toward the multiple-testing correction.
 
+Second round, declared 2026-11-27 before it was run:
+
+- Swing continuation families (trend pullback, breakout retest) with four
+  exits: fixed 1R, 1.5R and 2R targets, and no target at all (stop or the 48h
+  time exit).
+- Resting-order entries for core intraday and swing: a limit at the setup-bar
+  close ("maker_close") or 0.25R better ("maker_pullback"), filled only if price
+  trades through it within one setup bar. Entry and target exits pay the maker
+  fee; stops and time exits pay taker fee and slippage. Unfilled orders are not
+  trades.
+- Funding extremes: at each funding settlement, fade a rate in the top or bottom
+  tenth of its own trailing 270 settlements. Its mirror follows the crowd.
+- Cross-sectional momentum: at each daily close, long the three strongest and
+  short the three weakest symbols by 7-day return. Its mirror is the reversal.
+
+Every rule ever tried counts toward the multiple-testing correction.
+
 This is a structure-only test: order-flow confirmation and later gates need
 recorded ticks and are not replayed. It bounds what the rule itself contributes.
 """
@@ -54,6 +71,11 @@ HORIZONS = {
     "SWING": ("D", "240", "60", 120, 2880, 1095),
 }
 VARIANTS = ("as_published", "mirrored")
+EXIT_TARGETS = {"target_1r": 1.0, "target_1.5r": 1.5, "target_2r": 2.0}
+CONTINUATION = {"trend_pullback", "breakout_retest"}
+MAKER_HORIZONS = {"CORE_INTRADAY", "SWING"}
+MAKER_OFFSETS = {"maker_close": 0.0, "maker_pullback": 0.25}  # in units of planned risk
+MAKER_FEE_BPS = 2.0
 DEFAULT_SYMBOLS = (
     "BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,XRPUSDT,DOGEUSDT,LINKUSDT,ADAUSDT,AVAXUSDT,LTCUSDT,BCHUSDT,TRXUSDT"
 )
@@ -61,7 +83,16 @@ BASELINE = "BASELINE_DAILY"
 BASELINE_LOOKBACKS = {"momentum_24h": 6, "momentum_72h": 18, "momentum_168h": 42}  # 4h bars
 TIERS = ("SSS", "SS", "S", "A", "B", "C", "D", "E", "F")
 FAMILIES = ("liquidity_sweep", "trend_pullback", "range_rejection", "breakout_retest")
+FUNDING_WINDOW, FUNDING_MIN = 270, 90
 MIN_TEST, MIN_HOLDOUT = 200, 50
+
+
+def taker_cost_bps():
+    """One taker side: fee plus slippage, from the default settings."""
+    from .config import Settings
+
+    fields = Settings.model_fields
+    return fields["taker_fee_bps"].default + fields["slippage_bps"].default
 
 
 # ---------------------------------------------------------------- features
@@ -185,6 +216,30 @@ def first_touch(rows, start, entry, sign, up, down, risk, limit=None, span=2880)
     return "OPEN", 0.0
 
 
+def maker_entry(rows, start, signal, sign, offset, wait_bars, hold_ms):
+    """A resting limit order. No fill, no trade; the fill bar can only stop it out."""
+    planned = abs(signal.entry - signal.stop)
+    limit = signal.entry - sign * offset * planned
+    risk = sign * (limit - signal.stop)
+    target = sign * (signal.tp1 - limit)
+    if risk <= 0 or target <= 0:
+        return None
+    for j in range(start, min(start + wait_bars, len(rows) - 2)):
+        t, _o, high, low = rows[j][:4]
+        if not ((low < limit) if sign > 0 else (high > limit)):
+            continue  # Must trade through the price, not merely touch it.
+        stopped = (low <= signal.stop) if sign > 0 else (high >= signal.stop)
+        even = ("DN", -1) if stopped else first_touch(rows, j + 1, limit, sign, 1, 1, risk)
+        plan = (
+            ("DN", -1)
+            if stopped
+            else first_touch(rows, j + 1, limit, sign, target / risk, 1, risk, t + hold_ms)
+        )
+        exit_cost = MAKER_FEE_BPS if plan[0] == "UP" else taker_cost_bps()
+        return dict(even=even, plan=plan, stop_bps=risk / limit * 1e4, cost_bps=MAKER_FEE_BPS + exit_cost)
+    return None
+
+
 def replay_symbol(args):
     """One symbol, every horizon. Top-level so worker processes can import it."""
     symbol, directory, horizons = args
@@ -260,72 +315,181 @@ def replay_symbol(args):
                 if risk <= 0 or target <= 0:
                     continue
                 deadline = asof + hold * 60_000
-                out.append(
-                    dict(
-                        symbol=symbol,
-                        t=asof,
-                        horizon=horizon,
-                        family=signal.family,
-                        direction=signal.direction,
-                        stop_bps=risk / entry * 1e4,
-                        features=outcome_features(signal),
-                        as_published=dict(
-                            even=first_touch(rows, i, entry, sign, 1, 1, risk),
-                            plan=first_touch(rows, i, entry, sign, target / risk, 1, risk, deadline),
-                        ),
-                        mirrored=dict(
-                            even=first_touch(rows, i, entry, -sign, 1, 1, risk),
-                            plan=first_touch(rows, i, entry, -sign, 2, 1, risk, deadline),
-                        ),
-                    )
-                )
-    return symbol, out, errors
-
-
-def baseline_rows(symbol, directory):
-    """Time-series momentum at each daily close, on the same candles and protocol."""
-    rows = json.loads((Path(directory) / (symbol + ".json")).read_text())
-    bars = aggregate(rows, TIMEFRAMES["240"])
-    times = [r[0] for r in rows]
-    out = []
-    for k in range(max(BASELINE_LOOKBACKS.values()) + 15, len(bars)):
-        bar = bars[k]
-        if bar.end % DAY_MS:
-            continue
-        window = bars[k - 14 : k + 1]
-        ranges = [
-            max(b.high - b.low, abs(b.high - a.close), abs(b.low - a.close))
-            for a, b in zip(window, window[1:])
-        ]
-        risk = 1.5 * sum(ranges) / len(ranges)
-        i = bisect.bisect_left(times, bar.end)
-        if i >= len(rows) - 12 or risk <= 0:
-            continue
-        entry, deadline = rows[i][1], bar.end + 2880 * 60_000
-        for family, lookback in BASELINE_LOOKBACKS.items():
-            move = bar.close - bars[k - lookback].close
-            if not move:
-                continue
-            sign = 1 if move > 0 else -1
-            out.append(
-                dict(
+                even = first_touch(rows, i, entry, sign, 1, 1, risk)
+                row = dict(
                     symbol=symbol,
-                    t=bar.end,
-                    horizon=BASELINE,
-                    family=family,
-                    direction="LONG" if sign > 0 else "SHORT",
+                    t=asof,
+                    horizon=horizon,
+                    family=signal.family,
+                    direction=signal.direction,
                     stop_bps=risk / entry * 1e4,
-                    features={},
+                    features=outcome_features(signal),
                     as_published=dict(
-                        even=first_touch(rows, i, entry, sign, 1, 1, risk),
-                        plan=first_touch(rows, i, entry, sign, 2, 1, risk, deadline),
+                        even=even,
+                        plan=first_touch(rows, i, entry, sign, target / risk, 1, risk, deadline),
                     ),
                     mirrored=dict(
                         even=first_touch(rows, i, entry, -sign, 1, 1, risk),
                         plan=first_touch(rows, i, entry, -sign, 2, 1, risk, deadline),
                     ),
                 )
+                if horizon == "SWING" and signal.family in CONTINUATION:
+                    for name, multiple in EXIT_TARGETS.items():
+                        row[name] = dict(
+                            even=even, plan=first_touch(rows, i, entry, sign, multiple, 1, risk, deadline)
+                        )
+                    row["time_exit"] = dict(
+                        even=even, plan=first_touch(rows, i, entry, sign, 1e9, 1, risk, deadline)
+                    )
+                if horizon in MAKER_HORIZONS:
+                    wait = TIMEFRAMES[setup] // M5
+                    for name, offset in MAKER_OFFSETS.items():
+                        filled = maker_entry(rows, i, signal, sign, offset, wait, hold * 60_000)
+                        if filled:
+                            row[name] = filled
+                out.append(row)
+    return symbol, out, errors
+
+
+def _atr_risk(bars, k):
+    window = bars[k - 14 : k + 1]
+    ranges = [
+        max(b.high - b.low, abs(b.high - a.close), abs(b.low - a.close)) for a, b in zip(window, window[1:])
+    ]
+    return 1.5 * sum(ranges) / len(ranges)
+
+
+def _baseline_row(symbol, family, rows, times, at_ms, sign, risk):
+    """Shared geometry for every baseline: 1.5 x ATR(4h) stop, 2R target, 48h hold."""
+    i = bisect.bisect_left(times, at_ms)
+    if i >= len(rows) - 12 or risk <= 0:
+        return None
+    entry, deadline = rows[i][1], at_ms + 2880 * 60_000
+    return dict(
+        symbol=symbol,
+        t=at_ms,
+        horizon=BASELINE,
+        family=family,
+        direction="LONG" if sign > 0 else "SHORT",
+        stop_bps=risk / entry * 1e4,
+        features={},
+        as_published=dict(
+            even=first_touch(rows, i, entry, sign, 1, 1, risk),
+            plan=first_touch(rows, i, entry, sign, 2, 1, risk, deadline),
+        ),
+        mirrored=dict(
+            even=first_touch(rows, i, entry, -sign, 1, 1, risk),
+            plan=first_touch(rows, i, entry, -sign, 2, 1, risk, deadline),
+        ),
+    )
+
+
+def _load_symbol(symbol, directory):
+    rows = json.loads((Path(directory) / (symbol + ".json")).read_text())
+    return rows, aggregate(rows, TIMEFRAMES["240"]), [r[0] for r in rows]
+
+
+def baseline_rows(symbol, directory):
+    """Time-series momentum at each daily close, on the same candles and protocol."""
+    rows, bars, times = _load_symbol(symbol, directory)
+    out = []
+    for k in range(max(BASELINE_LOOKBACKS.values()) + 15, len(bars)):
+        bar = bars[k]
+        if bar.end % DAY_MS:
+            continue
+        risk = _atr_risk(bars, k)
+        for family, lookback in BASELINE_LOOKBACKS.items():
+            move = bar.close - bars[k - lookback].close
+            if move:
+                row = _baseline_row(symbol, family, rows, times, bar.end, 1 if move > 0 else -1, risk)
+                if row:
+                    out.append(row)
+    return out
+
+
+def download_funding(symbols, directory):
+    """Public funding-rate history; one file per symbol."""
+    directory = Path(directory)
+    for symbol in symbols:
+        target = directory / ("_funding_" + symbol + ".json")
+        if target.exists():
+            continue
+        first = json.loads((directory / (symbol + ".json")).read_text())[0][0]
+        records, cursor = [], first
+        while True:
+            query = urllib.parse.urlencode(dict(symbol=symbol, startTime=cursor, limit=1000))
+            request = urllib.request.Request(
+                "https://fapi.binance.com/fapi/v1/fundingRate?" + query,
+                headers={"User-Agent": "research-backtest"},
             )
+            with urllib.request.urlopen(request, timeout=25) as response:
+                batch = json.load(response)
+            records += [[int(r["fundingTime"]), float(r["fundingRate"])] for r in batch]
+            if len(batch) < 1000:
+                break
+            cursor = records[-1][0] + 1
+            time.sleep(0.5)
+        target.write_text(json.dumps(records))
+
+
+def funding_rows(symbol, directory):
+    """Fade a funding rate that is extreme against its own recent history."""
+    path = Path(directory) / ("_funding_" + symbol + ".json")
+    if not path.exists():
+        return []
+    funding = json.loads(path.read_text())
+    rows, bars, times = _load_symbol(symbol, directory)
+    ends = [b.end for b in bars]
+    out = []
+    for n in range(FUNDING_MIN, len(funding)):
+        at_ms, rate = funding[n]
+        history = sorted(r for _t, r in funding[max(0, n - FUNDING_WINDOW) : n])
+        low, high = history[len(history) // 10], history[len(history) * 9 // 10]
+        if low < rate < high or low == high:
+            continue
+        k = bisect.bisect_right(ends, at_ms) - 1
+        if k < 16:
+            continue
+        # A high rate means longs pay: the crowd is long, so the fade is short.
+        row = _baseline_row(
+            symbol, "funding_extreme", rows, times, at_ms, -1 if rate >= high else 1, _atr_risk(bars, k)
+        )
+        if row:
+            out.append(row)
+    return out
+
+
+def cross_sectional_rows(symbols, directory, lookback=42, legs=3):
+    """Long the strongest and short the weakest symbols by 7-day return, daily."""
+    data = {s: _load_symbol(s, directory) for s in symbols}
+    index = {s: {b.end: k for k, b in enumerate(data[s][1])} for s in symbols}
+    days = sorted({end for s in symbols for end in index[s] if not end % DAY_MS})
+    out = []
+    for day in days:
+        ranked = []
+        for s in symbols:
+            k = index[s].get(day)
+            if k is not None and k >= lookback + 15:
+                bars = data[s][1]
+                ranked.append((bars[k].close / bars[k - lookback].close - 1, s, k))
+        if len(ranked) < 4 * legs:
+            continue
+        ranked.sort()
+        for sign, group in ((1, ranked[-legs:]), (-1, ranked[:legs])):
+            for _ret, s, k in group:
+                rows, bars, times = data[s]
+                row = _baseline_row(s, "cross_momentum_7d", rows, times, day, sign, _atr_risk(bars, k))
+                if row:
+                    out.append(row)
+    return out
+
+
+def all_baselines(directory):
+    directory = Path(directory)
+    symbols = sorted(p.stem for p in directory.glob("*.json") if not p.stem.startswith("_"))
+    out = cross_sectional_rows(symbols, directory)
+    for symbol in symbols:
+        out += baseline_rows(symbol, directory) + funding_rows(symbol, directory)
     return out
 
 
@@ -347,7 +511,13 @@ def run(symbols, directory, workers=None, horizons=tuple(HORIZONS), progress=pri
 
 
 def net_r(row, variant, cost_bps):
-    return row[variant]["plan"][1] - cost_bps / row["stop_bps"]
+    """Net R of one variant. Variants may carry their own stop distance and cost."""
+    v = row[variant]
+    return v["plan"][1] - v.get("cost_bps", cost_bps) / v.get("stop_bps", row["stop_bps"])
+
+
+def variants_of(rows):
+    return sorted({k for r in rows for k, v in r.items() if isinstance(v, dict) and "plan" in v})
 
 
 def clustered(values_by_day):
@@ -406,14 +576,17 @@ def split(rows, fraction=0.75):
 def evaluate(rows, cost_bps, errors=0):
     test, holdout = split(rows)
     keys = sorted({(r["horizon"], r["family"]) for r in rows})
-    tried = max(1, len(keys) * len(VARIANTS))
+    names = {key: variants_of([r for r in rows if (r["horizon"], r["family"]) == key]) for key in keys}
+    tried = max(1, sum(len(v) for v in names.values()))
     z_required = round(st.NormalDist().inv_cdf(1 - 0.05 / tried), 2)
     segments = {}
     for horizon, family in keys:
-        for variant in VARIANTS:
+        for variant in names[(horizon, family)]:
 
             def pick(sample):
-                return [r for r in sample if r["horizon"] == horizon and r["family"] == family]
+                return [
+                    r for r in sample if r["horizon"] == horizon and r["family"] == family and variant in r
+                ]
 
             a, b = summarize(pick(test), variant, cost_bps), summarize(pick(holdout), variant, cost_bps)
             segments[f"{horizon}|{family}|{variant}"] = dict(
