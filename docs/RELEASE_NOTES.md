@@ -1,5 +1,17 @@
 # Release notes
 
+## 2.4.3 — recorded-readings study, hypothesis tags, readable failures
+
+- A study of every stored decision found no recorded order-flow, book or
+  derivatives reading that predicts outcomes under a held-out test. See
+  [recorded readings](audits/2026-11-28-recorded-readings.md).
+- Three readings that lean consistently are recorded on each delivered alert as
+  pre-registered tags and reported by `bybit-flow scorecard`. They never affect
+  delivery.
+- Scanner failure logs now carry the failure message, bounded to one line with
+  credential-bearing URLs removed. Previously only the exception type was
+  logged, which made outages undiagnosable from logs.
+
 ## 2.4.2 — stop delivering the wrong-sided rule
 
 - Core intraday trend pullbacks are no longer sent to Discord

@@ -428,11 +428,12 @@ class Notifier:
 
     def attach_proof(self, signal):
         """Record what this setup's rule has demonstrated; frozen with the alert."""
-        from .acceptance import outcome_grade, rule_evidence
+        from .acceptance import forward_hypotheses, outcome_grade, rule_evidence
 
         if "rule_evidence" not in signal.evidence:
             signal.evidence["rule_evidence"] = rule_evidence(signal)
             signal.evidence["outcome_grade"] = outcome_grade(signal)
+            signal.evidence["forward_hypotheses"] = forward_hypotheses(signal)
         return signal.evidence["rule_evidence"]
 
     @staticmethod

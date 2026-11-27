@@ -282,7 +282,12 @@ class Scanner:
             except Exception as exc:
                 # Keep the last observed context; evaluate still enforces its age.
                 errors += 1
-                log.warning("refresh_failed", extra={"symbol": symbol, "error_type": type(exc).__name__})
+                from .observability import safe_detail
+
+                log.warning(
+                    "refresh_failed",
+                    extra={"symbol": symbol, "error_type": type(exc).__name__, "detail": safe_detail(exc)},
+                )
         self.store.put("refresh_health", dict(at_ms=now_ms(), refreshed=refreshed, errors=errors))
 
     async def refresh_pending(self):

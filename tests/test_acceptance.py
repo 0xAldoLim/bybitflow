@@ -283,3 +283,23 @@ async def test_blocked_rules_are_tracked_but_never_sent(
     assert bool(calls) == (expected == "sent")
     # The setup itself stays in the store either way.
     assert store.db.execute("SELECT count(*) FROM signals WHERE id=?", (signal.id,)).fetchone()[0] == 1
+
+
+def test_forward_hypotheses_are_direction_aware_and_skip_unknowns(signal):
+    from bybit_flow.acceptance import forward_hypotheses
+
+    signal.evidence = {}
+    assert forward_hypotheses(signal) == {}
+    signal.evidence = dict(
+        flow=dict(available=True, absorption_long=True, absorption_short=False, delta_pct=-12.0),
+        context_features=dict(slope=0.2),
+    )
+    assert forward_hypotheses(signal) == dict(
+        absorption_with_trade=True, flow_not_chasing=True, higher_timeframe_with_trade=True
+    )
+    short = signal.model_copy(update={"direction": "SHORT"})
+    assert forward_hypotheses(short) == dict(
+        absorption_with_trade=False, flow_not_chasing=False, higher_timeframe_with_trade=False
+    )
+    signal.evidence["flow"]["available"] = False
+    assert forward_hypotheses(signal) == dict(higher_timeframe_with_trade=True)

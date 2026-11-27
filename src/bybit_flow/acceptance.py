@@ -837,6 +837,30 @@ def rule_evidence(signal, report=None):
     )
 
 
+def forward_hypotheses(signal):
+    """Pre-registered tags, recorded on each alert and never used to decide delivery.
+
+    The recorded-readings study (docs/audits/2026-11-28-recorded-readings.md)
+    found no reading that passed, and three with a consistent lean. They are
+    fixed here so that live alerts can confirm or refute them over time:
+    defended absorption on the trade's side, aggressive flow that is not already
+    running with the trade, and a higher-timeframe slope with the trade.
+    Unknown inputs give no tag.
+    """
+    e = signal.evidence
+    sign = 1 if signal.direction == "LONG" else -1
+    flow = e.get("flow") or {}
+    context = e.get("context_features") or e.get("h4") or {}
+    tags = {}
+    if flow.get("available"):
+        tags["absorption_with_trade"] = bool(flow.get("absorption_long" if sign > 0 else "absorption_short"))
+        if isinstance(flow.get("delta_pct"), (int, float)):
+            tags["flow_not_chasing"] = sign * flow["delta_pct"] <= 0
+    if isinstance(context.get("slope"), (int, float)):
+        tags["higher_timeframe_with_trade"] = sign * context["slope"] > 0
+    return tags
+
+
 def outcome_grade(signal, model=None):
     """Grade from measured outcomes of setups like this one."""
     model = model if model is not None else _load(MODEL_FILE)

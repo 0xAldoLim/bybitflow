@@ -22,6 +22,14 @@ Protocol, fixed before any outcome was computed:
 
 Decisions are not independent (several per structural event), which is why the
 errors are clustered and why this is evidence about readings, not a trade count.
+
+Amended after the first run, for data hygiene only; the readings, thresholds and
+split are unchanged. The export turned out to hold up to 448 snapshots of one
+structural event and 1,619 decisions for one symbol on one day (a duplication
+period in mid-September). So: one decision is kept per symbol, direction,
+family, horizon and hour (the first); stops closer than the round-trip cost are
+dropped, since they cannot be traded; and net R is clipped to [-2, +6] so a few
+degenerate plans cannot set the average.
 """
 
 import bisect
@@ -96,8 +104,13 @@ def readings(record):
 
 def label(records):
     """Attach the candle outcome to each decision."""
-    cache, out, skipped = {}, [], collections.Counter()
-    for r in records:
+    cache, out, skipped, seen = {}, [], collections.Counter(), set()
+    for r in sorted(records, key=lambda x: x["decision_ms"]):
+        key = (r["symbol"], r["direction"], r["family"], r["horizon"], r["decision_ms"] // 3_600_000)
+        if key in seen:
+            skipped["repeat of the same event within the hour"] += 1
+            continue
+        seen.add(key)
         symbol = r["exchange_symbol"] if r["source"] == "binance" and r["exchange_symbol"] else r["symbol"]
         if symbol not in cache:
             path = os.path.join(CANDLES, symbol + ".json")
@@ -140,12 +153,15 @@ def label(records):
             skipped["unresolved"] += 1
             continue
         stop_bps = risk / entry * 1e4
+        if stop_bps < COST_BPS:
+            skipped["stop closer than the round-trip cost"] += 1
+            continue
         out.append(
             dict(
                 t=r["decision_ms"],
                 cluster=(symbol, r["decision_ms"] // DAY),
                 win=even,
-                net_r=(plan if plan is not None else 0.0) - COST_BPS / stop_bps,
+                net_r=max(-2.0, min(6.0, (plan if plan is not None else 0.0) - COST_BPS / stop_bps)),
                 x=readings(r),
                 family=r["family"],
                 horizon=r["horizon"],

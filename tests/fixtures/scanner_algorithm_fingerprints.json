@@ -14,7 +14,7 @@
   "scanner_discovery.record_membership": "6438a7e3fbfe3e8396d4c1ea511b7f9c21f1d6aa914140853092b8324d287ee7",
   "scanner_discovery.depth_context": "be05b3272438dfd30f35365e9d301025dc98d9a316d6d41ba77c2a07567665e4",
   "scanner_discovery.scan_once": "75f61a93d56873afd0bf8c63c2b73f8e3557544d7bc9ac4195e3a47c6418de50",
-  "scanner_discovery.scan_loop": "828d2b1701f583af9a0f7e79bdcb314389d15ddbf476130ed2c7c5534b09c03f",
+  "scanner_discovery.scan_loop": "e6b0eae8a79908a31818a699861b5aa11021443ad43fd66cf484c1c09b86186b",
   "scanner_lifecycle.monitor_alerted": "831f12390bb64886e01ad3089f56d177fb516fb28e34a3a35530ebffa8309dc8",
   "scanner_lifecycle.health_loop": "f30f35a6253f53b1e20f03dc7fef565a9c01f01e274159150a914b18fea63828",
   "scanner_maintenance.storage_loop": "5c27cc9a41feb84d67f26935e451c045a1526095d057dc02af294083bf4b2d6c",

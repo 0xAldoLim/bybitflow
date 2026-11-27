@@ -16,6 +16,7 @@ from .horizons import DURATIONS, PROFILES, assign
 from .ingestion import candle_records, parse_eligible_metadata
 from .models import DAY
 from .native_streams import NativeStreams
+from .observability import safe_detail
 from .orderflow import Book
 from .recovery import failure_health, rest_batch, success_health
 from .storage import now_ms
@@ -878,7 +879,9 @@ class MarketDiscoveryCoordinator:
                 runtime.status["live_feed_preserved"] = preserve_feed
                 runtime.store.put("scanner", runtime.status)
                 log.warning(
-                    "scan_failed", extra={k: health[k] for k in ("error_type", "error_category", "location")}
+                    "scan_failed",
+                    extra={k: health[k] for k in ("error_type", "error_category", "location")}
+                    | {"detail": safe_detail(exc)},
                 )
                 # A transient outage should not suspend collection for a full scan interval.
                 delay = min(delay, 60)

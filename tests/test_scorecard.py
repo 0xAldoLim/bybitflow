@@ -110,3 +110,22 @@ def test_default_minimum_grade_is_c():
     from bybit_flow.config import Settings
 
     assert Settings(_env_file=None).min_alert_tier == "C"
+
+
+def test_scorecard_groups_by_recorded_hypothesis_tags(settings):
+    store = Store(settings.data_dir)
+    add(store, "a", "B", "RESOLVED", "PLANNED_TARGET_CROSSED")
+    add(store, "b", "B", "INVALIDATED", "PLANNED_STOP_CROSSED")
+    add(store, "c", "B", "EXPIRED", "Tracking period ended")
+    for ident, tags in (("a", {"absorption_with_trade": True}), ("b", {"absorption_with_trade": False})):
+        payload = json.loads(
+            store.db.execute("SELECT payload FROM signals WHERE id=?", (ident,)).fetchone()[0]
+        )
+        payload["evidence"] = {"forward_hypotheses": tags}
+        with store.db:
+            store.db.execute("UPDATE signals SET payload=? WHERE id=?", (json.dumps(payload), ident))
+    report = scorecard(store)
+    assert report["by_hypothesis"]["absorption_with_trade"]["target"] == 1
+    assert report["by_hypothesis"]["not absorption_with_trade"]["stop"] == 1
+    assert sum(row["alerts"] for row in report["by_hypothesis"].values()) == 2  # Untagged alert is absent.
+    assert "BY HYPOTHESIS" in render(report)
