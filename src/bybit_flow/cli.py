@@ -48,7 +48,10 @@ def main():
     sub.add_parser("test-discord", help="Send a connection test, never a trade signal")
     sub.add_parser("test-signal", help="Send an explicitly labeled synthetic pipeline test; no ML records")
     storage = sub.add_parser("storage", help="Managed evidence budget")
-    storage.add_argument("operation", choices=["status", "cleanup", "compact", "retire-unused"])
+    storage.add_argument(
+        "operation", choices=["status", "cleanup", "compact", "retire-unused", "slim", "rebuild"]
+    )
+    storage.add_argument("--output", type=Path, help="rebuild: path of the new compact database copy")
     storage.add_argument("--dry-run", action="store_true")
     storage.add_argument(
         "--force",
@@ -108,9 +111,21 @@ def main():
 
         print(json.dumps(dry_run(settings.data_dir, settings), indent=2))
         return
+    if args.command == "storage" and args.operation == "rebuild":
+        from .slim import rebuild
+
+        if not args.output:
+            parser.error("storage rebuild requires --output")
+        print(json.dumps(rebuild(settings.data_dir / "research.sqlite", args.output), indent=2))
+        return
     store = Store(settings.data_dir)
+    store.snapshot_generation = settings.ml_generation_snapshots
     try:
-        if args.command == "research" and str(args.candles) == "trade-quality":
+        if args.command == "storage" and args.operation == "slim":
+            from .slim import slim
+
+            print(json.dumps(slim(store, dry_run=args.dry_run), indent=2))
+        elif args.command == "research" and str(args.candles) == "trade-quality":
             from .trade_quality import audit
 
             if not 1 <= args.days <= 365:

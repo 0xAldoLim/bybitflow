@@ -283,6 +283,13 @@ The existing contract says a lack of alerts is not a reason to weaken gates. The
 mirror rule was missing: a lack of edge is a reason to stop building on top of
 the signal.
 
+## Follow-up, same day
+
+Approved and done after this audit: the trainer was stopped and ML disabled in
+the local configuration; `storage slim` removed 121,821 unread generation
+snapshots and 121,418 unread origin copies; see the
+[scoring review](2026-11-27-scoring-review.md) for the year-long entry test.
+
 ## Reproduce
 
 ```

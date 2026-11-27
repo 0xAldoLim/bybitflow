@@ -7,6 +7,9 @@ __pycache__/
 *.egg-info/
 data/
 analysis/audit/*.json
+analysis/backtest/candles/
+analysis/backtest/results.json
+analysis/backtest/run.log
 dist/
 build/
 

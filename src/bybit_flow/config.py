@@ -68,6 +68,8 @@ class Settings(BaseSettings):
     # True: legacy fail-closed behaviour, where a full disk or slow writer halts the scanner.
     recording_required: bool = False
     ml_two_stage: bool = False
+    # Generation-stage snapshots (about 80 KB per candidate) have no reader. Off by default.
+    ml_generation_snapshots: bool = False
     horizon_profiles: list[Literal["SHORT_INTRADAY", "CORE_INTRADAY", "SWING", "EXTENDED_SWING"]] = Field(
         default_factory=lambda: ["CORE_INTRADAY", "SHORT_INTRADAY", "SWING", "EXTENDED_SWING"]
     )

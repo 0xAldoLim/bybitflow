@@ -123,7 +123,14 @@ class Store:
 
         # Capture before lifecycle overwrites; both accepted and rejected decisions survive.
         features = FeatureStore(self)
-        features.capture(signal, max(now_ms(), signal.created_ms), "generation")
+        if getattr(self, "snapshot_generation", True):
+            features.capture(signal, max(now_ms(), signal.created_ms), "generation")
+        else:
+            # Nothing reads generation snapshots; keep only the identity they registered.
+            from .identity import register_candidate
+
+            with self.db:
+                register_candidate(self, signal)
         if signal.evidence.get("score_components") or (
             (signal.evidence.get("v21_counterfactual") or signal.evidence.get("v22_counterfactual"))
             and "cost_per_base" in signal.risk

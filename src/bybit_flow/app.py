@@ -59,6 +59,7 @@ def create_app(settings=None):
     @asynccontextmanager
     async def lifespan(app):
         store = Store(settings.data_dir)
+        store.snapshot_generation = settings.ml_generation_snapshots
         from .lifecycle import retire_tradingview
 
         store.put("tradingview_retirement", dict(at_ms=now_ms(), retired=retire_tradingview(store)))

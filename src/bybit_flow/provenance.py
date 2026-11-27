@@ -39,6 +39,7 @@ CONFIG_FIELDS = (
     "min_net_rr",
     "ml_enabled",
     "ml_filter_research",
+    "ml_generation_snapshots",
     "ml_print_recovery_enabled",
     "ml_raw_retention_minutes",
     "ml_two_stage",

@@ -1,5 +1,20 @@
 # Release notes
 
+## 2.3.1 — database slimming and the scoring review
+
+- `bybit-flow storage slim` removes permanent rows that nothing reads:
+  generation-stage ML snapshots and origin copies of never-delivered, finished
+  candidates. Decision snapshots, labels, models, signals and Discord receipts
+  are untouched. `--dry-run` reports what would go.
+- `bybit-flow storage rebuild --output PATH` writes a compact, verified copy of
+  the database. Swapping it in is a manual step with the application stopped.
+- Generation-stage snapshots are no longer written
+  (`FLOW_ML_GENERATION_SNAPSHOTS=false`). They were about 80 KB per candidate
+  and had no reader.
+- `analysis/backtest` runs the production entry rules over a year of public
+  candles. The [scoring review](audits/2026-11-27-scoring-review.md) reports the
+  result and what to change.
+
 ## 2.3.0 — alerts no longer depend on recording; delivery follows the grade
 
 Based on the [independent audit of 2026-11-27](audits/2026-11-27-independent-audit.md).
