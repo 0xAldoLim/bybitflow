@@ -28,6 +28,10 @@ def main():
     accept.add_argument(
         "--universe", choices=["replication", "midcap"], default="replication", help="replicate: symbol set"
     )
+    accept.add_argument("--families", default=None, help="replicate: comma-separated setup families")
+    accept.add_argument(
+        "--extra-rules", type=int, default=0, help="replicate: rules declared since the shipped report"
+    )
     accept.add_argument("--horizons", default=None, help="Comma-separated subset to replay")
     accept.add_argument("--symbols", default=None, help="Comma-separated; default is 12 liquid perpetuals")
     accept.add_argument("--candles", type=Path, default=Path("analysis/backtest/candles"))
@@ -142,12 +146,14 @@ def main():
                 default = acceptance.MIDCAP_SYMBOLS if midcap else acceptance.REPLICATION_SYMBOLS
                 symbols = (args.symbols or default).split(",")
                 horizons = tuple((args.horizons or ("SWING,CORE_INTRADAY" if midcap else "SWING")).split(","))
+                families = tuple(args.families.split(",")) if args.families else None
                 rows, errors = acceptance.run(
-                    symbols, args.candles, args.workers, horizons, taker_side=taker_side
+                    symbols, args.candles, args.workers, horizons, taker_side=taker_side, families=families
                 )
                 if args.rows:
                     args.rows.write_text(json.dumps(rows))
-            report = acceptance.evaluate(rows, cost, errors, tried=shipped.get("rules_tried"))
+            tried = (shipped.get("rules_tried") or 0) + args.extra_rules
+            report = acceptance.evaluate(rows, cost, errors, tried=tried)
             if args.output:
                 args.output.write_text(json.dumps(report, indent=1))
             print(acceptance.render(report))

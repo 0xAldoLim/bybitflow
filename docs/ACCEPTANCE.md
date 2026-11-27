@@ -136,6 +136,24 @@ that make real fills worse than modelled.
 bybit-flow acceptance replicate --universe midcap --candles analysis/backtest/candles-midcap
 ```
 
+## Fading the intraday trend pullback
+
+Declared before it was run: one rule, `fade_maker_1r`. When the core intraday
+trend pullback fires, trade against it with a resting limit at the setup-bar
+close. Stop one planned risk unit away, target one unit away as a resting limit,
+4h hold. Both limits must be traded through, not merely touched. Entry and
+target pay the 2 bps maker fee; a stop or time exit pays taker fee and slippage.
+
+The trigger was found wrong-sided on the large-cap and mid-cap sets, so results
+there are contaminated by the discovery and are reported only as context. The
+verdict is taken on the 48 replication symbols, whose core intraday data had
+never been replayed. It is the 59th rule, and the significance bar rises to
+match.
+
+```
+bybit-flow acceptance replicate --horizons CORE_INTRADAY --families trend_pullback --extra-rules 1 --candles analysis/backtest/candles-replication
+```
+
 ## What ACCEPTED means
 
 Fixed in `src/bybit_flow/acceptance.py` before results were seen:

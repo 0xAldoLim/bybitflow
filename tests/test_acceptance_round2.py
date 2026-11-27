@@ -9,6 +9,8 @@ from bybit_flow.acceptance import (
     MAKER_FEE_BPS,
     cross_sectional_rows,
     evaluate,
+    fade_maker,
+    first_touch,
     funding_rows,
     maker_entry,
     net_r,
@@ -114,3 +116,35 @@ def test_funding_extreme_fades_the_crowd(tmp_path):
     by_time = {r["t"]: r["direction"] for r in rows}
     assert by_time[funding[100][0]] == "SHORT" and by_time[funding[105][0]] == "LONG"
     assert funding_rows("MISSINGUSDT", tmp_path) == []
+
+
+def test_fade_trades_against_the_signal_with_resting_orders():
+    # Original plan is LONG at 100 with stop 98: the fade sells 100, stop 102, target 98.
+    rows = [
+        bar(0, 99.5, 100.0, 99.0, 99.8),  # Touches 100 exactly: a sell limit is not filled.
+        bar(1, 99.8, 100.4, 99.6, 100.0),  # Trades through: short from 100.
+        bar(2, 100.0, 100.5, 98.0, 98.5),  # Touches the 98 target exactly: not filled yet.
+        bar(3, 98.5, 99.0, 97.8, 98.0),  # Trades through the target.
+        bar(4, 98, 98, 98, 98),
+        bar(5, 98, 98, 98, 98),
+    ]
+    faded = fade_maker(rows, 0, plan(), 1, 12, 20 * M5)
+    assert faded["plan"] == ("UP", 1) and faded["even"] == ("UP", 1)
+    assert faded["cost_bps"] == 2 * MAKER_FEE_BPS and faded["stop_bps"] == pytest.approx(200)
+
+
+def test_fade_stop_pays_taker_cost_and_fill_bar_can_stop_it():
+    rows = [bar(0, 99.5, 102.5, 99.0, 102.0)] + [bar(i, 102, 102, 102, 102) for i in range(1, 6)]
+    faded = fade_maker(rows, 0, plan(), 1, 12, 20 * M5)
+    assert faded["plan"] == ("DN", -1)
+    assert faded["cost_bps"] == MAKER_FEE_BPS + taker_cost_bps()
+    assert fade_maker(rows, 0, plan(), 1, 12, 20 * M5, taker_side=9.5)["cost_bps"] == MAKER_FEE_BPS + 9.5
+    quiet = [bar(i, 99, 99.5, 98.5, 99) for i in range(20)]
+    assert fade_maker(quiet, 0, plan(), 1, 12, 20 * M5) is None
+
+
+def test_strict_target_requires_a_trade_through():
+    touch = [[0, 100, 102, 99.5, 101, 1, 1], [M5, 101, 102.1, 100.5, 102, 1, 1]]
+    assert first_touch(touch[:1], 0, 100, 1, 1, 1, 2) == ("UP", 1)
+    assert first_touch(touch[:1], 0, 100, 1, 1, 1, 2, strict_target=True) == ("OPEN", 0.0)
+    assert first_touch(touch, 0, 100, 1, 1, 1, 2, strict_target=True) == ("UP", 1)

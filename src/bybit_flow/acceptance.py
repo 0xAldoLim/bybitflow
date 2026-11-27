@@ -41,6 +41,17 @@ Second round, declared 2026-11-27 before it was run:
 
 Every rule ever tried counts toward the multiple-testing correction.
 
+Third round, declared 2026-11-27 before it was run: one rule.
+
+- "fade_maker_1r": when the core intraday trend pullback fires, trade against
+  it with a resting limit at the setup-bar close that must be traded through
+  within one setup bar. Stop one planned risk unit away, target one unit away
+  as a resting limit that must also be traded through, same 4h hold. Entry and
+  target pay the maker fee; a stop or time exit pays taker fee and slippage.
+  The trigger was found wrong-sided on the large-cap and mid-cap sets, so those
+  are contaminated. The verdict is taken on the 48 replication symbols, whose
+  core intraday data had never been replayed.
+
 This is a structure-only test: order-flow confirmation and later gates need
 recorded ticks and are not replayed. It bounds what the rule itself contributes.
 """
@@ -77,6 +88,7 @@ CONTINUATION = {"trend_pullback", "breakout_retest"}
 MAKER_HORIZONS = {"CORE_INTRADAY", "SWING"}
 MAKER_OFFSETS = {"maker_close": 0.0, "maker_pullback": 0.25}  # in units of planned risk
 MAKER_FEE_BPS = 2.0
+FADE = "fade_maker_1r"
 # Replication set, declared 2026-11-27 before it was replayed: the 48 highest-volume
 # USDT perpetuals listed for at least three years, excluding DEFAULT_SYMBOLS. None
 # of them was used to form any rule or to notice the swing trend pullback lead.
@@ -221,7 +233,7 @@ def aggregate(rows, ms):
     return out
 
 
-def first_touch(rows, start, entry, sign, up, down, risk, limit=None, span=2880):
+def first_touch(rows, start, entry, sign, up, down, risk, limit=None, span=2880, strict_target=False):
     """First barrier reached, in R. Same-bar tie is the stop."""
     upper, lower = entry + sign * up * risk, entry - sign * down * risk
     for t, o, h, low, _c, _v, _q in rows[start : start + span]:
@@ -229,7 +241,11 @@ def first_touch(rows, start, entry, sign, up, down, risk, limit=None, span=2880)
             return "TIME", sign * (o - entry) / risk
         if (low <= lower) if sign > 0 else (h >= lower):
             return "DN", -down
-        if (h >= upper) if sign > 0 else (low <= upper):
+        if strict_target:  # A resting target order needs price to trade through it.
+            reached = (h > upper) if sign > 0 else (low < upper)
+        else:
+            reached = (h >= upper) if sign > 0 else (low <= upper)
+        if reached:
             return "UP", up
     return "OPEN", 0.0
 
@@ -258,9 +274,31 @@ def maker_entry(rows, start, signal, sign, offset, wait_bars, hold_ms, taker_sid
     return None
 
 
+def fade_maker(rows, start, signal, sign, wait_bars, hold_ms, taker_side=None):
+    """Trade against the signal with resting orders on entry and target."""
+    risk = abs(signal.entry - signal.stop)
+    limit, fade = signal.entry, -sign
+    stop = limit - fade * risk
+    if risk <= 0:
+        return None
+    for j in range(start, min(start + wait_bars, len(rows) - 2)):
+        t, _o, high, low = rows[j][:4]
+        if not ((low < limit) if fade > 0 else (high > limit)):
+            continue
+        stopped = (low <= stop) if fade > 0 else (high >= stop)
+        if stopped:
+            even = plan = ("DN", -1)
+        else:
+            even = first_touch(rows, j + 1, limit, fade, 1, 1, risk, strict_target=True)
+            plan = first_touch(rows, j + 1, limit, fade, 1, 1, risk, t + hold_ms, strict_target=True)
+        exit_cost = MAKER_FEE_BPS if plan[0] == "UP" else (taker_side or taker_cost_bps())
+        return dict(even=even, plan=plan, stop_bps=risk / limit * 1e4, cost_bps=MAKER_FEE_BPS + exit_cost)
+    return None
+
+
 def replay_symbol(args):
     """One symbol, every horizon. Top-level so worker processes can import it."""
-    symbol, directory, horizons, taker_side = args
+    symbol, directory, horizons, taker_side, families = args
     import logging
 
     logging.disable(logging.CRITICAL)
@@ -315,6 +353,7 @@ def replay_symbol(args):
                     horizon=horizon,
                     quality_policy="trade-validity-v22",
                     reversal_timing=True,
+                    **({"families": families} if families else {}),
                 )
             except Exception:  # noqa: BLE001 - counted and reported
                 errors += 1
@@ -359,6 +398,12 @@ def replay_symbol(args):
                     row["time_exit"] = dict(
                         even=even, plan=first_touch(rows, i, entry, sign, 1e9, 1, risk, deadline)
                     )
+                if horizon == "CORE_INTRADAY" and signal.family == "trend_pullback":
+                    faded = fade_maker(
+                        rows, i, signal, sign, TIMEFRAMES[setup] // M5, hold * 60_000, taker_side
+                    )
+                    if faded:
+                        row[FADE] = faded
                 if horizon in MAKER_HORIZONS:
                     wait = TIMEFRAMES[setup] // M5
                     for name, offset in MAKER_OFFSETS.items():
@@ -519,12 +564,20 @@ def all_baselines(directory):
     return out
 
 
-def run(symbols, directory, workers=None, horizons=tuple(HORIZONS), progress=print, taker_side=None):
+def run(
+    symbols,
+    directory,
+    workers=None,
+    horizons=tuple(HORIZONS),
+    progress=print,
+    taker_side=None,
+    families=None,
+):
     from multiprocessing import Pool
 
     symbols = download(symbols, max(HORIZONS[h][5] for h in horizons), directory)
     rows, errors, started = [], 0, time.time()
-    jobs = [(s, str(directory), tuple(horizons), taker_side) for s in symbols]
+    jobs = [(s, str(directory), tuple(horizons), taker_side, families) for s in symbols]
     with Pool(workers or min(len(jobs), max(1, (os.cpu_count() or 2) - 2))) as pool:
         for symbol, out, failed in pool.imap_unordered(replay_symbol, jobs):
             rows += out
