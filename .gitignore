@@ -12,3 +12,5 @@ dist/
 build/
 
 compose.override.yaml
+analysis/audit/*.jsonl
+analysis/audit/*.err
