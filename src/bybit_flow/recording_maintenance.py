@@ -3,6 +3,7 @@
 import hashlib
 import json
 import os
+import time
 import uuid
 import zipfile
 from collections import Counter
@@ -709,9 +710,25 @@ def execute(store, settings, plan, dry_run=False):
         return _execute(store, settings, plan, owner=owner)
 
 
+RANGE_REFRESH_SECONDS = 30
+
+
 def _execute(store, settings, plan, dry_run=False, owner=None):
     from .leases import RangeLease
-    from .retention import protection_ranges
+    from .retention import protection_ranges as compute_ranges
+
+    # Building the protection list reads every unresolved decision. Doing that
+    # once per segment made cleanup slower than recording, which is how the
+    # budget filled. Only segments older than the retention floor are eligible,
+    # and a new decision protects recent data, so a list at most 30 seconds old
+    # is safe; each segment is still re-classified and exclusively leased.
+    cached = {"until": 0.0, "ranges": []}
+
+    def protection_ranges(store, at_ms):
+        if time.monotonic() >= cached["until"]:
+            cached["ranges"] = compute_ranges(store, at_ms)
+            cached["until"] = time.monotonic() + RANGE_REFRESH_SECONDS
+        return cached["ranges"]
 
     if dry_run:
         return dict(

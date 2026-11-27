@@ -406,3 +406,39 @@ def test_nonprefix_pruning_does_not_advance_logical_boundary_past_unresolved_dec
     assert close_pre_retention_decisions(store) == 0
     assert [r["receipt_ms"] for r in worker_rows(store)] == [1000]
     store.close()
+
+
+def test_cleanup_builds_the_protection_list_once_not_once_per_segment(settings, monkeypatch):
+    from bybit_flow import retention
+
+    store = Store(settings.data_dir)
+    recorder = Recorder(store, settings)
+    for at in range(1000, 13000, 1000):
+        recorder.flush(
+            [
+                dict(
+                    source="control/subscribed",
+                    symbol="TESTUSDT",
+                    event_ms=at,
+                    receipt_ms=at,
+                    schema_version=1,
+                    complete=True,
+                    payload='{"symbols":["TESTUSDT"]}',
+                )
+            ]
+        )
+    manifests = store.rows("segments")
+    calls, real = [], retention.protection_ranges
+
+    def counted(*args, **kwargs):
+        calls.append(1)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(retention, "protection_ranges", counted)
+    cfg = SimpleNamespace(recording_retention_enabled=True, max_storage_gb=1)
+    result = prune_recordings(store, cfg, 8 * 3_600_000, force=True)
+    assert result["freed_bytes"] > 0 and len(manifests) == 12
+    assert not any(Path(m["raw"]).exists() for m in manifests)
+    # One build for the plan and one for the run, however many segments there are.
+    assert len(calls) <= 3
+    store.close()

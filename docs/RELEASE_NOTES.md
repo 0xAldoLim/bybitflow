@@ -1,5 +1,13 @@
 # Release notes
 
+## 2.4.4 — storage cleanup that keeps up with recording
+
+- Cleanup rebuilt its protection list for every segment, re-reading every
+  unresolved decision each time. Measured on production it removed about four
+  segments a minute, the same rate new ones are recorded, so the budget filled
+  regardless. The list is now rebuilt at most every 30 seconds. Each segment is
+  still re-classified and exclusively leased before removal.
+
 ## 2.4.3 — recorded-readings study, hypothesis tags, readable failures
 
 - A study of every stored decision found no recorded order-flow, book or
