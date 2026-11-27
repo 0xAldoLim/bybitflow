@@ -76,6 +76,10 @@ CONTINUATION = {"trend_pullback", "breakout_retest"}
 MAKER_HORIZONS = {"CORE_INTRADAY", "SWING"}
 MAKER_OFFSETS = {"maker_close": 0.0, "maker_pullback": 0.25}  # in units of planned risk
 MAKER_FEE_BPS = 2.0
+# Replication set, declared 2026-11-27 before it was replayed: the 48 highest-volume
+# USDT perpetuals listed for at least three years, excluding DEFAULT_SYMBOLS. None
+# of them was used to form any rule or to notice the swing trend pullback lead.
+REPLICATION_SYMBOLS = "ZECUSDT,NEARUSDT,SSVUSDT,1000PEPEUSDT,XMRUSDT,BIGTIMEUSDT,UNIUSDT,SUIUSDT,SEIUSDT,AAVEUSDT,WLDUSDT,INJUSDT,ONEUSDT,BLURUSDT,FETUSDT,ARBUSDT,FILUSDT,QNTUSDT,DOTUSDT,HBARUSDT,TIAUSDT,XLMUSDT,ATOMUSDT,APTUSDT,ICPUSDT,1000SHIBUSDT,OPUSDT,CRVUSDT,DASHUSDT,1000BONKUSDT,RIFUSDT,SANDUSDT,ETCUSDT,1000LUNCUSDT,TRBUSDT,GALAUSDT,LDOUSDT,DODOXUSDT,ALGOUSDT,PYTHUSDT,PENDLEUSDT,KAVAUSDT,CYBERUSDT,RUNEUSDT,BEAMXUSDT,STXUSDT,CAKEUSDT,ORDIUSDT"
 DEFAULT_SYMBOLS = (
     "BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,XRPUSDT,DOGEUSDT,LINKUSDT,ADAUSDT,AVAXUSDT,LTCUSDT,BCHUSDT,TRXUSDT"
 )
@@ -581,11 +585,12 @@ def split(rows, fraction=0.75):
     return test, holdout
 
 
-def evaluate(rows, cost_bps, errors=0):
+def evaluate(rows, cost_bps, errors=0, tried=None):
     test, holdout = split(rows)
     keys = sorted({(r["horizon"], r["family"]) for r in rows})
     names = {key: variants_of([r for r in rows if (r["horizon"], r["family"]) == key]) for key in keys}
-    tried = max(1, sum(len(v) for v in names.values()))
+    # A replication keeps the bar set by every rule tried so far.
+    tried = max(tried or 0, 1, sum(len(v) for v in names.values()))
     z_required = round(st.NormalDist().inv_cdf(1 - 0.05 / tried), 2)
     segments = {}
     for horizon, family in keys:

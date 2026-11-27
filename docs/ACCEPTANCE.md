@@ -51,6 +51,22 @@ to C. The grade model ranks setups out of sample (best tenth +0.00R, worst
 tenth −0.71R), but what it ranks is cost: wider stops lose less to fees. No
 group of setups has a positive expectation.
 
+## Replication of the one lead
+
+Declared before it was run: replay the swing rules, unchanged, on the 48
+highest-volume USDT perpetuals listed for at least three years, excluding the 12
+symbols above (`REPLICATION_SYMBOLS` in `acceptance.py`). None of these symbols
+was used to form a rule or to notice the lead. Same protocol, same criteria, and
+the significance bar stays at the level set by all 58 rules.
+
+The question is narrow: does swing trend pullback clear the bar on fresh
+symbols? Caveat fixed in advance: requiring three years of listing keeps only
+survivors, which flatters any long-biased result.
+
+```
+bybit-flow acceptance replicate --candles analysis/backtest/candles-replication
+```
+
 ## What ACCEPTED means
 
 Fixed in `src/bybit_flow/acceptance.py` before results were seen:

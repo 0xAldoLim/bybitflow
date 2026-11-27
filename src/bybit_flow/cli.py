@@ -23,7 +23,8 @@ def main():
     accept = sub.add_parser(
         "acceptance", help="Replay the entry rules on public candles and state which are proven profitable"
     )
-    accept.add_argument("operation", choices=["run", "status"])
+    accept.add_argument("operation", choices=["run", "status", "replicate"])
+    accept.add_argument("--output", type=Path, default=None, help="replicate: write the report here")
     accept.add_argument("--horizons", default=None, help="Comma-separated subset to replay")
     accept.add_argument("--symbols", default=None, help="Comma-separated; default is 12 liquid perpetuals")
     accept.add_argument("--candles", type=Path, default=Path("analysis/backtest/candles"))
@@ -124,6 +125,22 @@ def main():
         from . import acceptance
 
         cost = 2 * settings.taker_fee_bps + 2 * settings.slippage_bps
+        if args.operation == "replicate":
+            # Same rules, fresh symbols. Prints a report; never changes the shipped verdicts.
+            shipped = acceptance._load(acceptance.REPORT_FILE) or {}
+            if args.rows and args.rows.exists():
+                rows, errors = json.loads(args.rows.read_text()), 0
+            else:
+                symbols = (args.symbols or acceptance.REPLICATION_SYMBOLS).split(",")
+                horizons = tuple((args.horizons or "SWING").split(","))
+                rows, errors = acceptance.run(symbols, args.candles, args.workers, horizons)
+                if args.rows:
+                    args.rows.write_text(json.dumps(rows))
+            report = acceptance.evaluate(rows, cost, errors, tried=shipped.get("rules_tried"))
+            if args.output:
+                args.output.write_text(json.dumps(report, indent=1))
+            print(acceptance.render(report))
+            return
         if args.operation == "run":
             if args.rows and args.rows.exists():
                 rows, errors = json.loads(args.rows.read_text()), 0
