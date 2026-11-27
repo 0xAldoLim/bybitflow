@@ -8,7 +8,8 @@ states on every alert what its rule has demonstrated.
 ## Current answer (2026-11-27, after two rounds)
 
 **No rule is proven profitable.** 92,174 replayed setups, 12 liquid perpetuals,
-58 rules tried: 50 rejected, 8 with too few setups to judge. A replication of
+58 rules tried: 50 rejected, 8 with too few setups to judge. A 59th rule,
+declared later and tested on fresh symbols, was also rejected. A replication of
 the one lead on 48 further symbols (22,068 setups) and a test on 40 mid-cap
 symbols (51,919 setups) also accepted nothing.
 
@@ -136,19 +137,42 @@ that make real fills worse than modelled.
 bybit-flow acceptance replicate --universe midcap --candles analysis/backtest/candles-midcap
 ```
 
-## Fading the intraday trend pullback
+## Fading the intraday trend pullback: rejected
 
-Declared before it was run: one rule, `fade_maker_1r`. When the core intraday
-trend pullback fires, trade against it with a resting limit at the setup-bar
-close. Stop one planned risk unit away, target one unit away as a resting limit,
-4h hold. Both limits must be traded through, not merely touched. Entry and
-target pay the 2 bps maker fee; a stop or time exit pays taker fee and slippage.
+Declared before it was run (commit `b5ace93`): one rule, `fade_maker_1r`. When
+the core intraday trend pullback fires, trade against it with a resting limit at
+the setup-bar close. Stop one planned risk unit away, target one unit away as a
+resting limit, 4h hold. Both limits must be traded through, not merely touched.
+Entry and target pay the 2 bps maker fee; a stop or time exit pays taker fee and
+slippage. It is the 59th rule, and the significance bar rose to 3.14.
 
-The trigger was found wrong-sided on the large-cap and mid-cap sets, so results
-there are contaminated by the discovery and are reported only as context. The
-verdict is taken on the 48 replication symbols, whose core intraday data had
-never been replayed. It is the 59th rule, and the significance bar rises to
-match.
+The verdict was taken on the 48 replication symbols, whose core intraday data
+had never been replayed. The other two sets had revealed the trigger, so they
+are context only.
+
+| Set | Published rule, +1R first | Fade at market, +1R first | Fade with resting orders | Net per trade | Held out |
+|---|---:|---:|---:|---:|---:|
+| **48 fresh symbols (verdict)** | 47.4% (z −3.8) | 52.6% (z +3.8) | 51.1% (z +1.6) on 5,042 | **−0.07R**, lower bound −0.12R | −0.06R |
+| 40 mid-caps (context) | 46.0% (z −5.0) | 54.0% | 52.5% on 3,790 | −0.04R | −0.05R |
+| 12 large caps (context) | 45.9% (z −3.0) | 54.0% | 53.3% on 1,281 | −0.09R | −0.02R |
+
+**Rejected.** Two things are now established, and they point in different
+directions:
+
+- **The published core intraday trend pullback is wrong-sided.** 47.4% on
+  symbols it had never seen, after 46.0% and 45.9% on the sets that suggested
+  it. Three independent universes, 10,519 test setups, the same sign each time.
+  This replicated.
+- **The mistake cannot be harvested by fading it.** A resting sell is filled
+  when price is rising through it and a resting buy when price is falling, so
+  the orders that fill are the worse ones: the hit rate drops from 52.6% to
+  51.1%. On the fresh symbols 96% of orders filled, 54% of trades ran out the 4h
+  clock without reaching either level, and the average cost was 8 bps on a
+  194 bps stop. The edge is smaller than the cost of collecting it.
+
+What follows for the running scanner is not a new trade but a removal: this
+family carries evidence of being worse than a coin flip, which no other family
+does.
 
 ```
 bybit-flow acceptance replicate --horizons CORE_INTRADAY --families trend_pullback --extra-rules 1 --candles analysis/backtest/candles-replication
@@ -217,10 +241,8 @@ What remains worth doing, in order:
    did not replicate on 48 fresh symbols. There is no open lead among the
    candle-structure rules.
 2. ~~Trade less liquid markets.~~ Done above: 40 mid-caps, nothing accepted.
-   It produced the one open question worth a declared test: fading the core
-   intraday trend pullback with resting orders on both sides. At 54% and a 1R
-   target the gross edge is about 0.08R, and the cost of the trade decides it.
-   That variant was not declared, so it has not been tested.
+   The one question it raised, fading the core intraday trend pullback with
+   resting orders, was declared, tested on fresh symbols and rejected.
 3. **Use information that is not in candles.** Liquidation clusters, order-book
    state at decision time and spot-perpetual basis are what the supplied
    microstructure literature actually describes. They need recorded data, which
