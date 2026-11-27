@@ -25,6 +25,9 @@ def main():
     )
     accept.add_argument("operation", choices=["run", "status", "replicate"])
     accept.add_argument("--output", type=Path, default=None, help="replicate: write the report here")
+    accept.add_argument(
+        "--universe", choices=["replication", "midcap"], default="replication", help="replicate: symbol set"
+    )
     accept.add_argument("--horizons", default=None, help="Comma-separated subset to replay")
     accept.add_argument("--symbols", default=None, help="Comma-separated; default is 12 liquid perpetuals")
     accept.add_argument("--candles", type=Path, default=Path("analysis/backtest/candles"))
@@ -128,12 +131,20 @@ def main():
         if args.operation == "replicate":
             # Same rules, fresh symbols. Prints a report; never changes the shipped verdicts.
             shipped = acceptance._load(acceptance.REPORT_FILE) or {}
+            midcap = args.universe == "midcap"
+            taker_side = None
+            if midcap:  # Wider spreads: the declared slippage replaces the default on every side.
+                taker_side = settings.taker_fee_bps + acceptance.MIDCAP_SLIPPAGE_BPS
+                cost = 2 * taker_side
             if args.rows and args.rows.exists():
                 rows, errors = json.loads(args.rows.read_text()), 0
             else:
-                symbols = (args.symbols or acceptance.REPLICATION_SYMBOLS).split(",")
-                horizons = tuple((args.horizons or "SWING").split(","))
-                rows, errors = acceptance.run(symbols, args.candles, args.workers, horizons)
+                default = acceptance.MIDCAP_SYMBOLS if midcap else acceptance.REPLICATION_SYMBOLS
+                symbols = (args.symbols or default).split(",")
+                horizons = tuple((args.horizons or ("SWING,CORE_INTRADAY" if midcap else "SWING")).split(","))
+                rows, errors = acceptance.run(
+                    symbols, args.candles, args.workers, horizons, taker_side=taker_side
+                )
                 if args.rows:
                     args.rows.write_text(json.dumps(rows))
             report = acceptance.evaluate(rows, cost, errors, tried=shipped.get("rules_tried"))

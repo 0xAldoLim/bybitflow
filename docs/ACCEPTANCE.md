@@ -87,6 +87,26 @@ which flatters any long-biased result. It did not help.
 bybit-flow acceptance replicate --candles analysis/backtest/candles-replication
 ```
 
+## Mid-cap perpetuals
+
+Declared before it was run: the same swing and core intraday rules, unchanged,
+on 40 mid-cap USDT perpetuals (`MIDCAP_SYMBOLS` in `acceptance.py`): ranked 101
+to 250 by 24h quote volume, listed at least one year, never used above.
+
+Costs are declared higher. The set's median half-spread measured 2.06 bps
+against 0.52 bps for the large caps, so slippage is 4 bps per side instead of 2:
+19 bps round trip for market orders, and 9.5 bps on any stop or time exit of a
+resting-order variant. Same protocol, same criteria, same significance bar.
+
+Caveats fixed in advance: these symbols have one to three years of history, so
+samples are smaller; current volume rank selects coins that are liquid today,
+which is a mild look-ahead; and candle replay cannot see the thinner order books
+that make real fills worse than modelled.
+
+```
+bybit-flow acceptance replicate --universe midcap --candles analysis/backtest/candles-midcap
+```
+
 ## What ACCEPTED means
 
 Fixed in `src/bybit_flow/acceptance.py` before results were seen:

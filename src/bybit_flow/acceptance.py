@@ -80,6 +80,12 @@ MAKER_FEE_BPS = 2.0
 # USDT perpetuals listed for at least three years, excluding DEFAULT_SYMBOLS. None
 # of them was used to form any rule or to notice the swing trend pullback lead.
 REPLICATION_SYMBOLS = "ZECUSDT,NEARUSDT,SSVUSDT,1000PEPEUSDT,XMRUSDT,BIGTIMEUSDT,UNIUSDT,SUIUSDT,SEIUSDT,AAVEUSDT,WLDUSDT,INJUSDT,ONEUSDT,BLURUSDT,FETUSDT,ARBUSDT,FILUSDT,QNTUSDT,DOTUSDT,HBARUSDT,TIAUSDT,XLMUSDT,ATOMUSDT,APTUSDT,ICPUSDT,1000SHIBUSDT,OPUSDT,CRVUSDT,DASHUSDT,1000BONKUSDT,RIFUSDT,SANDUSDT,ETCUSDT,1000LUNCUSDT,TRBUSDT,GALAUSDT,LDOUSDT,DODOXUSDT,ALGOUSDT,PYTHUSDT,PENDLEUSDT,KAVAUSDT,CYBERUSDT,RUNEUSDT,BEAMXUSDT,STXUSDT,CAKEUSDT,ORDIUSDT"
+# Mid-cap set, declared 2026-11-27 before it was replayed: USDT perpetuals ranked
+# 101 to 250 by 24h quote volume, listed at least one year, not used above; the
+# first 40 by rank. Their median half-spread measured 2.06 bps against 0.52 bps
+# for DEFAULT_SYMBOLS, so slippage per side is declared as 4 bps instead of 2.
+MIDCAP_SYMBOLS = "SPKUSDT,VIRTUALUSDT,AEROUSDT,ACEUSDT,PROMUSDT,FARTCOINUSDT,VELVETUSDT,PIPPINUSDT,RENDERUSDT,AVAAIUSDT,SENTUSDT,SAGAUSDT,MOODENGUSDT,AGTUSDT,REZUSDT,BABYUSDT,SYRUPUSDT,SKYAIUSDT,AINUSDT,LAYERUSDT,RAYSOLUSDT,ATUSDT,JTOUSDT,ENSOUSDT,CVCUSDT,BEATUSDT,HYPERUSDT,QUSDT,BARDUSDT,JSTUSDT,RIVERUSDT,KGENUSDT,IRYSUSDT,POLUSDT,ONUSDT,EIGENUSDT,LABUSDT,GRASSUSDT,METUSDT,ERAUSDT"
+MIDCAP_SLIPPAGE_BPS = 4.0
 DEFAULT_SYMBOLS = (
     "BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,XRPUSDT,DOGEUSDT,LINKUSDT,ADAUSDT,AVAXUSDT,LTCUSDT,BCHUSDT,TRXUSDT"
 )
@@ -220,7 +226,7 @@ def first_touch(rows, start, entry, sign, up, down, risk, limit=None, span=2880)
     return "OPEN", 0.0
 
 
-def maker_entry(rows, start, signal, sign, offset, wait_bars, hold_ms):
+def maker_entry(rows, start, signal, sign, offset, wait_bars, hold_ms, taker_side=None):
     """A resting limit order. No fill, no trade; the fill bar can only stop it out."""
     planned = abs(signal.entry - signal.stop)
     limit = signal.entry - sign * offset * planned
@@ -239,14 +245,14 @@ def maker_entry(rows, start, signal, sign, offset, wait_bars, hold_ms):
             if stopped
             else first_touch(rows, j + 1, limit, sign, target / risk, 1, risk, t + hold_ms)
         )
-        exit_cost = MAKER_FEE_BPS if plan[0] == "UP" else taker_cost_bps()
+        exit_cost = MAKER_FEE_BPS if plan[0] == "UP" else (taker_side or taker_cost_bps())
         return dict(even=even, plan=plan, stop_bps=risk / limit * 1e4, cost_bps=MAKER_FEE_BPS + exit_cost)
     return None
 
 
 def replay_symbol(args):
     """One symbol, every horizon. Top-level so worker processes can import it."""
-    symbol, directory, horizons = args
+    symbol, directory, horizons, taker_side = args
     import logging
 
     logging.disable(logging.CRITICAL)
@@ -348,7 +354,7 @@ def replay_symbol(args):
                 if horizon in MAKER_HORIZONS:
                     wait = TIMEFRAMES[setup] // M5
                     for name, offset in MAKER_OFFSETS.items():
-                        filled = maker_entry(rows, i, signal, sign, offset, wait, hold * 60_000)
+                        filled = maker_entry(rows, i, signal, sign, offset, wait, hold * 60_000, taker_side)
                         if filled:
                             row[name] = filled
                 out.append(row)
@@ -505,12 +511,12 @@ def all_baselines(directory):
     return out
 
 
-def run(symbols, directory, workers=None, horizons=tuple(HORIZONS), progress=print):
+def run(symbols, directory, workers=None, horizons=tuple(HORIZONS), progress=print, taker_side=None):
     from multiprocessing import Pool
 
     symbols = download(symbols, max(HORIZONS[h][5] for h in horizons), directory)
     rows, errors, started = [], 0, time.time()
-    jobs = [(s, str(directory), tuple(horizons)) for s in symbols]
+    jobs = [(s, str(directory), tuple(horizons), taker_side) for s in symbols]
     with Pool(workers or min(len(jobs), max(1, (os.cpu_count() or 2) - 2))) as pool:
         for symbol, out, failed in pool.imap_unordered(replay_symbol, jobs):
             rows += out
