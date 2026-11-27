@@ -60,7 +60,7 @@ def verdict(interval, breakeven, resolved):
 
 def scorecard(store, since_ms=0):
     """Group delivered initial alerts by grade, family and horizon."""
-    groups = {name: defaultdict(Counter) for name in ("tier", "family", "horizon")}
+    groups = {name: defaultdict(Counter) for name in ("tier", "outcome_grade", "family", "horizon")}
     rr = {name: defaultdict(list) for name in groups}
     total, total_rr = Counter(), []
     # Start from the small outbox, then read each delivered signal by primary key.
@@ -93,6 +93,9 @@ def scorecard(store, since_ms=0):
             family=s.get("family") or "unknown",
             horizon=s.get("horizon_profile") or "LEGACY",
         )
+        measured = ((s.get("evidence") or {}).get("outcome_grade") or {}).get("grade")
+        if measured:  # Recorded on alerts delivered since the outcome grade existed.
+            keys["outcome_grade"] = measured
         total[result] += 1
         if planned:
             total_rr.append(planned)
@@ -129,7 +132,9 @@ def render(report):
         )
 
     lines += [header, line("ALL DELIVERED", report["all"])]
-    for section in ("by_tier", "by_family", "by_horizon"):
+    for section in ("by_tier", "by_outcome_grade", "by_family", "by_horizon"):
+        if not report[section]:
+            continue
         lines += ["", section.replace("_", " ").upper()]
         lines += [line(key, row) for key, row in report[section].items()]
     return "\n".join(lines)

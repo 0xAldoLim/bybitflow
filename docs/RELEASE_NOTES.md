@@ -1,5 +1,21 @@
 # Release notes
 
+## 2.4.0 — acceptance test and outcome-based grades
+
+- `bybit-flow acceptance run` replays the production entry rules on public
+  candles and writes a verdict per rule: ACCEPTED only with a significant
+  directional edge and a positive, cost-adjusted plan in the test period, both
+  confirmed on a held-out final quarter. `bybit-flow acceptance status` prints
+  the current verdicts. See [acceptance](ACCEPTANCE.md).
+- Every new alert states its rule's proven record and an outcome grade measured
+  from replayed setups like it. Both are stored with the alert, and
+  `bybit-flow scorecard` reports delivered results by outcome grade.
+- `FLOW_ACCEPTANCE_GATE` is `report` by default: alerts are annotated, not
+  blocked. `enforce` delivers only ACCEPTED rules. `FLOW_GRADE_SOURCE=outcome`
+  makes `FLOW_MIN_ALERT_TIER` use the outcome grade instead of the Setup Score.
+- No rule is ACCEPTED at this release. Enforcing the gate today would deliver
+  nothing; that is the measured state, not a malfunction.
+
 ## 2.3.1 — database slimming and the scoring review
 
 - `bybit-flow storage slim` removes permanent rows that nothing reads:
@@ -11,7 +27,7 @@
 - Generation-stage snapshots are no longer written
   (`FLOW_ML_GENERATION_SNAPSHOTS=false`). They were about 80 KB per candidate
   and had no reader.
-- `analysis/backtest` runs the production entry rules over a year of public
+- A replay harness runs the production entry rules over a year of public
   candles. The [scoring review](audits/2026-11-27-scoring-review.md) reports the
   result and what to change.
 

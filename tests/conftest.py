@@ -9,8 +9,15 @@ from bybit_flow.models import Candle, Instrument, Signal
 @pytest.fixture
 def settings(tmp_path):
     # Delivery plumbing tests use ungraded fixtures; the grade gate and its
-    # default ("C") are covered in test_scorecard.py.
-    return Settings(_env_file=None, data_dir=tmp_path, rest_requests_per_second=10, min_alert_tier="F")
+    # default ("C") are covered in test_scorecard.py, the acceptance gate and
+    # outcome grade in test_acceptance.py.
+    return Settings(
+        _env_file=None,
+        data_dir=tmp_path,
+        rest_requests_per_second=10,
+        min_alert_tier="F",
+        acceptance_gate="off",
+    )
 
 
 @pytest.fixture

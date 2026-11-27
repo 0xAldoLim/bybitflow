@@ -10,6 +10,7 @@ from .migrations import status as migration_status
 from .v2 import code_commit
 
 CONFIG_FIELDS = (
+    "acceptance_gate",
     "book_depth",
     "book_stale_ms",
     "cooldown_minutes",
@@ -20,6 +21,7 @@ CONFIG_FIELDS = (
     "execution_window_seconds",
     "exploration_fraction",
     "funding_reserve_bps",
+    "grade_source",
     "horizon_model_min_samples",
     "horizon_profiles",
     "hypothetical_notional",

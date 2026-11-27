@@ -420,8 +420,37 @@ class Notifier:
         from .scorecard import TIERS
 
         minimum = getattr(self.settings, "min_alert_tier", "F")
-        tier = signal.raw_tier if signal.raw_tier in TIERS else "F"
+        tier = signal.raw_tier
+        if getattr(self.settings, "grade_source", "setup_score") == "outcome":
+            tier = (signal.evidence.get("outcome_grade") or {}).get("grade")
+        tier = tier if tier in TIERS else "F"
         return TIERS.index(tier) <= TIERS.index(minimum)
+
+    def attach_proof(self, signal):
+        """Record what this setup's rule has demonstrated; frozen with the alert."""
+        from .acceptance import outcome_grade, rule_evidence
+
+        if "rule_evidence" not in signal.evidence:
+            signal.evidence["rule_evidence"] = rule_evidence(signal)
+            signal.evidence["outcome_grade"] = outcome_grade(signal)
+        return signal.evidence["rule_evidence"]
+
+    @staticmethod
+    def proof_field(signal):
+        rule, grade = signal.evidence.get("rule_evidence") or {}, signal.evidence.get("outcome_grade") or {}
+        if rule.get("verdict") in {None, "NOT_EVALUATED"}:
+            record = "This rule has not been through the acceptance test."
+        else:
+            state = "PROVEN PROFITABLE" if rule["verdict"] == "ACCEPTED" else "NOT PROVEN"
+            record = (
+                f"{state}: {100 * rule['hit_rate']:.1f}% reached +1R before -1R on {rule['n']:,} replayed "
+                f"setups; plan {rule['plan_net_r']:+.2f}R after costs"
+            )
+        expected = grade.get("expected_r")
+        measured = f"Outcome grade {grade.get('grade', 'F')}" + (
+            f" (expected {expected:+.2f}R per trade)" if expected is not None else ""
+        )
+        return dict(name="Proven record of this rule", value=record + "\n" + measured, inline=False)
 
     async def send_research(self, signal, update=False):
 
@@ -445,6 +474,13 @@ class Notifier:
 
         if not update and signal.horizon_profile == "EXTENDED_SWING":
             return "shadow-only horizon"
+
+        gate = getattr(self.settings, "acceptance_gate", "off")
+        if not update and gate != "off":
+            if self.attach_proof(signal)["verdict"] != "ACCEPTED" and gate == "enforce":
+                return "blocked:RULE_NOT_ACCEPTED"
+        elif not update and getattr(self.settings, "grade_source", "setup_score") == "outcome":
+            self.attach_proof(signal)
 
         if not update and not self.meets_min_tier(signal):
             # The grade decides delivery. Follow-ups for already delivered
@@ -490,6 +526,8 @@ class Notifier:
         payload = embed(signal, self.settings.dashboard_url)
 
         if not update:
+            if signal.evidence.get("rule_evidence"):
+                payload["embeds"][0]["fields"].append(self.proof_field(signal))
             return await self.deliver_initial(key, signal, payload, secret)
 
         return await self.deliver(key, signal.id, payload, secret)

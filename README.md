@@ -221,6 +221,7 @@ in CMD, PowerShell and Linux/macOS shells.
 | Check feeds, recording and diagnostics | `docker compose exec desk bybit-flow doctor` |
 | Inspect signal qualification and delivery | `docker compose exec desk bybit-flow signals status` |
 | See how delivered alerts actually ended, by grade | `docker compose exec desk bybit-flow scorecard` |
+| See which entry rules are proven profitable | `docker compose exec desk bybit-flow acceptance status` |
 | Inspect prospective policy observations | `docker compose exec desk bybit-flow forward-report` |
 | Pre-register a research comparison | `docker compose exec desk bybit-flow policy-preregister prereg.json` |
 | Inspect ML readiness and worker status | `docker compose exec trainer bybit-flow ml status` |

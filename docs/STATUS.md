@@ -1,5 +1,9 @@
 # Feature status
 
+Release 2.4.0 adds the acceptance test and outcome-based grades. The system can
+now state whether each entry rule is proven profitable. At this release none is;
+see [acceptance](ACCEPTANCE.md).
+
 Release 2.3.0 makes raw recording best effort, lets an interrupted cleanup be
 replaced by a fresh audited run, gates Discord delivery on the Setup Score grade
 and adds `bybit-flow scorecard`. The [independent audit](audits/2026-11-27-independent-audit.md)

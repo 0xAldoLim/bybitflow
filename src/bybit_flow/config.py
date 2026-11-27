@@ -85,6 +85,12 @@ class Settings(BaseSettings):
     # Lowest Setup Score grade delivered to Discord. Lower grades stay on the
     # dashboard and in research records. "F" restores the old send-everything behaviour.
     min_alert_tier: Literal["SSS", "SS", "S", "A", "B", "C", "D", "E", "F"] = "C"
+    # Which grade FLOW_MIN_ALERT_TIER compares: the designed Setup Score, or the
+    # grade measured from outcomes of setups like this one (bybit-flow acceptance).
+    grade_source: Literal["setup_score", "outcome"] = "setup_score"
+    # off: ignore the acceptance report. report: show each rule's proven record on
+    # the alert. enforce: deliver only rules the acceptance test ACCEPTED.
+    acceptance_gate: Literal["off", "report", "enforce"] = "report"
     sss_research: bool = False
     research_webhook: SecretStr = SecretStr("")
     monitoring_webhook: SecretStr = SecretStr("")

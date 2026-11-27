@@ -4,7 +4,7 @@ Question: are the score and its metrics good enough to pick trades, and if not,
 what should change. This reviews the score against (a) the literature supplied
 to the project (`docs/v2/INSILICO_RESEARCH_LEDGER.md`, `docs/RESEARCH_REFERENCES.md`
 and the source library they index) and (b) three measurements made for this
-review. Scripts are in `analysis/audit/` and `analysis/backtest/`.
+review. Scripts are in `analysis/audit/`; the replay is `bybit-flow acceptance`.
 
 ## Short answer
 
@@ -44,7 +44,7 @@ worse.
 The production function `strategy.candidates` (the same one the scanner calls,
 policy `trade-validity-v22`) was run at every closed setup bar for one year on
 twelve liquid perpetuals, with no flow confirmation, score or gate
-(`analysis/backtest/run.py`). Entry is the next 5-minute open; ties count as the
+(`bybit-flow acceptance run`). Entry is the next 5-minute open; ties count as the
 stop; costs are the project's own 15 bps round trip.
 
 | Horizon | Candidates | +1R before −1R | +2R before −1R | Net per trade |
@@ -164,7 +164,7 @@ Mostly they are reasonable measurements pointed at the wrong question.
 2. **Make the barrier test the acceptance gate for every rule.** A family or
    policy is delivered only if "+1R before −1R" clears 50% with z > 2 and the
    net result is positive on a year of candles *and* on the most recent quarter
-   held out. `analysis/backtest/run.py` does this today. It should run in CI as
+   held out. `bybit-flow acceptance run` does this today. It should run in CI as
    a report, and before any new scoring version.
 
 3. **Search for an entry with drift before touching the score.** Concretely,
@@ -211,7 +211,6 @@ Mostly they are reasonable measurements pointed at the wrong question.
 
 ```
 python analysis/audit/feature_stats.py      # measurement 1
-python analysis/backtest/download.py        # one year of 5m candles, 12 symbols
-python analysis/backtest/run.py             # measurement 2 (about 15 minutes)
-python analysis/backtest/report.py
+bybit-flow acceptance run                   # measurement 2: downloads candles, replays, writes the verdicts
+bybit-flow acceptance status
 ```

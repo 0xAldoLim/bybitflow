@@ -9,6 +9,7 @@ data/
 analysis/audit/*.json
 analysis/backtest/candles/
 analysis/backtest/results.json
+analysis/backtest/rows.json
 analysis/backtest/run.log
 dist/
 build/

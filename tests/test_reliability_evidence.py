@@ -220,11 +220,12 @@ def test_config_digest_is_redacted_stable_and_version_has_schema(settings):
     # Operational values that differ from the test fixture; restore them.
     other.rest_requests_per_second = settings.rest_requests_per_second
     other.min_alert_tier = settings.min_alert_tier
+    other.acceptance_gate = settings.acceptance_gate
     assert config_snapshot(other)["config_digest"] == first["config_digest"]
     assert not any(v in json.dumps(first) for v in ("TOPSECRET", "secret.invalid", "data_dir", "equity"))
     store = Store(settings.data_dir)
     result = status(store, settings)
-    assert result["version"] == "2.3.1" and result["database"]["level"] == "013"
+    assert result["version"] == "2.4.0" and result["database"]["level"] == "013"
     store.close()
 
 

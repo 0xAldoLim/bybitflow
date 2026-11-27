@@ -20,6 +20,15 @@ def main():
     sub.add_parser(
         "v8-effectiveness", help="Research-only outcomes of blocked vs comparable passed V8 decisions"
     )
+    accept = sub.add_parser(
+        "acceptance", help="Replay the entry rules on public candles and state which are proven profitable"
+    )
+    accept.add_argument("operation", choices=["run", "status"])
+    accept.add_argument("--horizons", default=None, help="Comma-separated subset to replay")
+    accept.add_argument("--symbols", default=None, help="Comma-separated; default is 12 liquid perpetuals")
+    accept.add_argument("--candles", type=Path, default=Path("analysis/backtest/candles"))
+    accept.add_argument("--workers", type=int, default=None)
+    accept.add_argument("--rows", type=Path, default=None, help="Reuse or save the replayed candidate rows")
     card = sub.add_parser(
         "scorecard", help="Outcomes of alerts actually delivered, by grade; observed prices, not fills"
     )
@@ -110,6 +119,28 @@ def main():
         from .raw_retirement import dry_run
 
         print(json.dumps(dry_run(settings.data_dir, settings), indent=2))
+        return
+    if args.command == "acceptance":
+        from . import acceptance
+
+        cost = 2 * settings.taker_fee_bps + 2 * settings.slippage_bps
+        if args.operation == "run":
+            if args.rows and args.rows.exists():
+                rows, errors = json.loads(args.rows.read_text()), 0
+            else:
+                symbols = (args.symbols or acceptance.DEFAULT_SYMBOLS).split(",")
+                horizons = tuple((args.horizons or ",".join(acceptance.HORIZONS)).split(","))
+                rows, errors = acceptance.run(symbols, args.candles, args.workers, horizons)
+                if args.rows:
+                    args.rows.write_text(json.dumps(rows))
+            for name in sorted(p.stem for p in args.candles.glob("*.json") if not p.stem.startswith("_")):
+                rows += acceptance.baseline_rows(name, args.candles)
+            acceptance.REPORT_FILE.write_text(json.dumps(acceptance.evaluate(rows, cost, errors), indent=1))
+            acceptance.MODEL_FILE.write_text(json.dumps(acceptance.fit_grades(rows, cost), indent=1))
+        report = acceptance._load(acceptance.REPORT_FILE)
+        if not report:
+            parser.error("No acceptance report yet; run 'bybit-flow acceptance run'")
+        print(acceptance.render(report, acceptance._load(acceptance.MODEL_FILE)))
         return
     if args.command == "storage" and args.operation == "rebuild":
         from .slim import rebuild
