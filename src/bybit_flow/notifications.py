@@ -475,6 +475,12 @@ class Notifier:
         if not update and signal.horizon_profile == "EXTENDED_SWING":
             return "shadow-only horizon"
 
+        if not update and f"{signal.horizon_profile}|{signal.family}" in getattr(
+            self.settings, "alert_blocked_rules", ()
+        ):
+            # Evidence of a wrong-sided rule: tracked, never sent.
+            return "blocked:RULE_BLOCKED"
+
         gate = getattr(self.settings, "acceptance_gate", "off")
         if not update and gate != "off":
             if self.attach_proof(signal)["verdict"] != "ACCEPTED" and gate == "enforce":

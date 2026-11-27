@@ -172,7 +172,7 @@ directions:
 
 What follows for the running scanner is not a new trade but a removal: this
 family carries evidence of being worse than a coin flip, which no other family
-does.
+does. From release 2.4.2 it is no longer delivered to Discord.
 
 ```
 bybit-flow acceptance replicate --horizons CORE_INTRADAY --families trend_pullback --extra-rules 1 --candles analysis/backtest/candles-replication
@@ -206,6 +206,7 @@ hiding an edge.
 | Setting | Default | Effect |
 |---|---|---|
 | `FLOW_ACCEPTANCE_GATE` | `report` | `report`: each alert carries its rule's record. `enforce`: only ACCEPTED rules are delivered. `off`: ignored. |
+| `FLOW_ALERT_BLOCKED_RULES` | `["CORE_INTRADAY\|trend_pullback"]` | Rules never delivered, whatever their score. The default is the one rule shown to be wrong-sided. `[]` sends every rule. |
 | `FLOW_GRADE_SOURCE` | `setup_score` | `outcome`: `FLOW_MIN_ALERT_TIER` compares the outcome grade instead of the Setup Score. |
 
 With today's verdicts, `enforce` delivers nothing. Both settings are correct

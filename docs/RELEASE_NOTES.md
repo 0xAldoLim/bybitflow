@@ -1,5 +1,19 @@
 # Release notes
 
+## 2.4.2 — stop delivering the wrong-sided rule
+
+- Core intraday trend pullbacks are no longer sent to Discord
+  (`FLOW_ALERT_BLOCKED_RULES`, default `["CORE_INTRADAY|trend_pullback"]`). The
+  published rule reached +1R before −1R in 47.4%, 46.0% and 45.9% of setups on
+  three independent symbol sets. Setups are still generated, tracked and shown
+  on the dashboard; follow-ups for alerts already delivered are unaffected.
+- Three further acceptance results are recorded: the swing trend pullback did
+  not replicate on 48 fresh symbols, nothing was accepted on 40 mid-caps, and
+  fading the intraday trend pullback with resting orders was rejected. 59 rules
+  tried, none accepted. See [acceptance](ACCEPTANCE.md).
+- The candle downloader backs off on exchange rate limits, since the live
+  scanner shares the same address.
+
 ## 2.4.1 — second acceptance round
 
 - Twenty-eight further rules, declared in code before they were run: four exits

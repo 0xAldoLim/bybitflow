@@ -91,6 +91,10 @@ class Settings(BaseSettings):
     # off: ignore the acceptance report. report: show each rule's proven record on
     # the alert. enforce: deliver only rules the acceptance test ACCEPTED.
     acceptance_gate: Literal["off", "report", "enforce"] = "report"
+    # Rules never delivered to Discord, as HORIZON|family. The default entry was
+    # wrong-sided on three independent symbol sets (docs/ACCEPTANCE.md). Blocked
+    # setups are still generated, tracked and shown on the dashboard.
+    alert_blocked_rules: list[str] = Field(default_factory=lambda: ["CORE_INTRADAY|trend_pullback"])
     sss_research: bool = False
     research_webhook: SecretStr = SecretStr("")
     monitoring_webhook: SecretStr = SecretStr("")

@@ -17,6 +17,7 @@ def settings(tmp_path):
         rest_requests_per_second=10,
         min_alert_tier="F",
         acceptance_gate="off",
+        alert_blocked_rules=[],
     )
 
 

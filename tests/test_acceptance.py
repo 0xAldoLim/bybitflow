@@ -242,3 +242,44 @@ def test_defaults_report_without_blocking():
 
     cfg = Settings(_env_file=None)
     assert cfg.acceptance_gate == "report" and cfg.grade_source == "setup_score"
+
+
+@pytest.mark.parametrize(
+    "horizon,family,blocked,expected",
+    [
+        ("CORE_INTRADAY", "trend_pullback", None, "blocked:RULE_BLOCKED"),
+        ("SWING", "trend_pullback", None, "sent"),
+        ("SHORT_INTRADAY", "trend_pullback", None, "sent"),
+        ("CORE_INTRADAY", "liquidity_sweep", None, "sent"),
+        ("CORE_INTRADAY", "trend_pullback", [], "sent"),
+        ("SWING", "liquidity_sweep", ["SWING|liquidity_sweep"], "blocked:RULE_BLOCKED"),
+    ],
+)
+async def test_blocked_rules_are_tracked_but_never_sent(
+    settings, signal, notification_clock, horizon, family, blocked, expected
+):
+    from bybit_flow.config import Settings
+
+    default = Settings(_env_file=None).alert_blocked_rules
+    assert default == ["CORE_INTRADAY|trend_pullback"]
+    cfg = settings.model_copy(
+        update={
+            "research_alerts": True,
+            "alert_blocked_rules": default if blocked is None else blocked,
+            "research_webhook": SecretStr("https://discord.com/api/webhooks/mock/test"),
+        }
+    )
+    signal.horizon_profile, signal.family, signal.state = horizon, family, "CONFIRMED"
+    store = Store(settings.data_dir)
+    store.signal(signal)
+    calls = []
+
+    def handle(request):
+        calls.append(request)
+        return httpx.Response(200, json={"id": "mock-id"})
+
+    notifier = Notifier(cfg, store, httpx.MockTransport(handle))
+    assert await notifier.send_research(signal) == expected
+    assert bool(calls) == (expected == "sent")
+    # The setup itself stays in the store either way.
+    assert store.db.execute("SELECT count(*) FROM signals WHERE id=?", (signal.id,)).fetchone()[0] == 1

@@ -11,6 +11,7 @@ from .v2 import code_commit
 
 CONFIG_FIELDS = (
     "acceptance_gate",
+    "alert_blocked_rules",
     "book_depth",
     "book_stale_ms",
     "cooldown_minutes",
