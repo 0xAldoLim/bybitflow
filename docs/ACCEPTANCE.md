@@ -8,7 +8,8 @@ states on every alert what its rule has demonstrated.
 ## Current answer (2026-11-27, after two rounds)
 
 **No rule is proven profitable.** 92,174 replayed setups, 12 liquid perpetuals,
-58 rules tried: 50 rejected, 8 with too few setups to judge.
+58 rules tried: 50 rejected, 8 with too few setups to judge. A replication of
+the one lead on 48 further symbols (22,068 setups) also found nothing.
 
 ### Round 1: the scanner's rules and plain momentum
 
@@ -41,27 +42,46 @@ What round 2 established:
 - **The hold-out did its job.** Following extreme funding passed the corrected
   significance threshold in the test period and reversed in the held-out
   quarter. Without the hold-out it would have been reported as a discovery.
-- **Swing trend pullback remains the only lead.** It is positive in both periods
-  under every entry tested (+0.02R to +0.05R test, +0.13R to +0.15R held out),
-  and never distinguishable from zero. About 1,150 setups in three years on 12
-  symbols is too few. More symbols is the honest way to resolve it.
+- **Swing trend pullback was the only lead, and it is now closed.** It was
+  positive in both periods on the original 12 symbols and never distinguishable
+  from zero. The replication below settled it.
 
 Outcome grades at this release: short intraday F, core intraday E to F, swing D
 to C. The grade model ranks setups out of sample (best tenth +0.00R, worst
 tenth −0.71R), but what it ranks is cost: wider stops lose less to fees. No
 group of setups has a positive expectation.
 
-## Replication of the one lead
+## Replication of the one lead: closed
 
-Declared before it was run: replay the swing rules, unchanged, on the 48
-highest-volume USDT perpetuals listed for at least three years, excluding the 12
-symbols above (`REPLICATION_SYMBOLS` in `acceptance.py`). None of these symbols
-was used to form a rule or to notice the lead. Same protocol, same criteria, and
-the significance bar stays at the level set by all 58 rules.
+Declared before it was run (commit `fc48518`): replay the swing rules,
+unchanged, on the 48 highest-volume USDT perpetuals listed for at least three
+years, excluding the 12 symbols above (`REPLICATION_SYMBOLS` in
+`acceptance.py`). None of these symbols was used to form a rule or to notice the
+lead. Same protocol, same criteria, and the significance bar stays at the level
+set by all 58 rules.
 
-The question is narrow: does swing trend pullback clear the bar on fresh
-symbols? Caveat fixed in advance: requiring three years of listing keeps only
-survivors, which flatters any long-biased result.
+Result: 22,068 setups on 48 symbols, 2024-01-28 to 2026-11-26. **Nothing
+accepted, and the lead did not replicate.**
+
+| Swing trend pullback | Test setups | +1R before −1R | Net per trade | Held out |
+|---|---:|---:|---:|---:|
+| As published | 2,095 | 47.1% (z −2.6) | −0.03R, lower bound −0.16R | +0.18R |
+| Limit entry at the close | 2,075 | 46.9% (z −2.8) | −0.02R | +0.19R |
+| 2R target | 2,095 | 47.1% | −0.03R | +0.18R |
+| Time exit only | 2,095 | 47.1% | −0.05R | +0.17R |
+
+On three times the original sample the test-period result is slightly negative,
+and the directional hit rate is below 50%. The held-out quarter is positive
+again, as it was on the original 12 symbols, which says the most recent quarter
+suited trend pullbacks everywhere, not that the rule has an edge: a rule that is
+negative for two years and positive for one quarter is a regime, and the mirror
+of the same rule shows the opposite pattern (+0.05R test, −0.29R held out).
+
+The other swing families on the fresh symbols: liquidity sweep 50.0% on 8,034
+setups, range rejection 49.7% on 5,915, breakout retest 47.0% on 500.
+
+Caveat fixed in advance: requiring three years of listing keeps only survivors,
+which flatters any long-biased result. It did not help.
 
 ```
 bybit-flow acceptance replicate --candles analysis/backtest/candles-replication
@@ -126,9 +146,9 @@ these being the most efficiently priced crypto markets.
 
 What remains worth doing, in order:
 
-1. **Resolve the one lead with more data, not more variants.** Rerun swing trend
-   pullback, as already declared, on 40 to 60 symbols. If it is real it will
-   clear the bar; if not, it is closed.
+1. ~~Resolve the one lead with more data.~~ Done above: swing trend pullback
+   did not replicate on 48 fresh symbols. There is no open lead among the
+   candle-structure rules.
 2. **Trade less liquid markets.** The 12 symbols here are the hardest place to
    find an edge. The same rules on mid-cap perpetuals are a different test, with
    wider spreads to model honestly.
