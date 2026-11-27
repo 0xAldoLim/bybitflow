@@ -5,25 +5,49 @@
 the code (`acceptance_report.json`, `outcome_model.json`), so the running system
 states on every alert what its rule has demonstrated.
 
-## Current answer (2026-11-27)
+## Current answer (2026-11-27, after two rounds)
 
-**No rule is proven profitable.** 69,967 replayed setups, 12 liquid perpetuals,
-30 rules tried, costs 15 bps round trip.
+**No rule is proven profitable.** 92,174 replayed setups, 12 liquid perpetuals,
+58 rules tried: 50 rejected, 8 with too few setups to judge.
 
-| Rules | Period | Setups | Best result | Verdict |
+### Round 1: the scanner's rules and plain momentum
+
+| Rules | Period | Setups | Best result per trade | Verdict |
 |---|---|---:|---|---|
-| Short intraday, 4 families and their mirrors | 120 days | 9,308 | −0.36R per trade | all REJECTED |
-| Core intraday, 4 families and their mirrors | 1 year | 13,515 | −0.13R per trade | all REJECTED |
-| Swing, 4 families and their mirrors | 3 years | 8,068 | +0.02R, lower bound −0.15R | all REJECTED |
-| Momentum baselines (24h, 72h, 168h) and reversals | 3 years | 39,076 | −0.01R per trade | all REJECTED |
+| Short intraday, 4 families and their mirrors | 120 days | 9,308 | −0.36R | all rejected |
+| Core intraday, 4 families and their mirrors | 1 year | 14,044 | −0.12R | all rejected |
+| Swing, 4 families and their mirrors | 3 years | 7,861 | +0.02R, lower bound −0.14R | none accepted |
+| Momentum over 24h, 72h, 168h and reversals | 3 years | 39,076 | −0.00R | all rejected |
 
-Closest to passing: swing trend pullback, +0.01R in the test period and +0.14R
-in the held-out quarter on 694 and 452 setups. That is indistinguishable from
-zero. On one year of data the swing horizon looked slightly positive; with three
-years it does not. That is why the sample was extended before believing it.
+### Round 2: the three ideas, declared before they were run
+
+| Idea | Setups | Result | Verdict |
+|---|---:|---|---|
+| Swing continuation with 1R, 1.5R, 2R targets or time exit only | 5,528 | Best: 2R target, +0.00R, lower bound −0.14R | none accepted |
+| Resting-order entry, core intraday | 22,329 | Loss shrinks from about −0.31R to −0.21R on sweeps; best family −0.17R | all rejected |
+| Resting-order entry, swing | 12,090 | Trend pullback +0.04R test, +0.15R held out, lower bound −0.12R | none accepted |
+| Funding extreme, fade the crowd | 15,369 | 48.2% at 1:1 (z −3.8): fading is wrong | rejected |
+| Funding extreme, follow the crowd | 15,369 | 51.7% in test (z +3.8), then **47.3% held out** | rejected |
+| Cross-sectional 7-day momentum and reversal | 6,516 | 50.4%, −0.03R | rejected |
+
+What round 2 established:
+
+- **Cost is not the whole problem intraday.** Paying maker fees instead of taker
+  fees recovers about 0.1R per trade. The rules still lose 0.17R to 0.28R, and
+  the hit rate falls, because a resting order is filled more often when price is
+  moving against it.
+- **Changing the target does not create an edge.** Four exits on the same swing
+  entries land between −0.07R and +0.00R.
+- **The hold-out did its job.** Following extreme funding passed the corrected
+  significance threshold in the test period and reversed in the held-out
+  quarter. Without the hold-out it would have been reported as a discovery.
+- **Swing trend pullback remains the only lead.** It is positive in both periods
+  under every entry tested (+0.02R to +0.05R test, +0.13R to +0.15R held out),
+  and never distinguishable from zero. About 1,150 setups in three years on 12
+  symbols is too few. More symbols is the honest way to resolve it.
 
 Outcome grades at this release: short intraday F, core intraday E to F, swing D
-to C. The grade model does rank setups out of sample (best tenth −0.02R, worst
+to C. The grade model ranks setups out of sample (best tenth +0.00R, worst
 tenth −0.71R), but what it ranks is cost: wider stops lose less to fees. No
 group of setups has a positive expectation.
 
@@ -31,12 +55,15 @@ group of setups has a positive expectation.
 
 Fixed in `src/bybit_flow/acceptance.py` before results were seen:
 
-- Entry at the next 5-minute open after the setup bar closes. R is the distance
-  to the published stop. A bar that touches both barriers counts as the stop.
-- Costs are the default taker fee and slippage on both sides.
+- Entry at the next 5-minute open after the setup bar closes, or a resting limit
+  that must be traded through. R is the distance to the published stop. A bar
+  that touches both barriers counts as the stop.
+- Costs are the default taker fee and slippage on both sides. Resting-order
+  variants pay a 2 bps maker fee on entry and on target exits, and full taker
+  cost on stops and time exits.
 - First 75% of the period is the test sample. The last 25% is held out.
-- Test sample: "+1R before −1R" must beat 50% with a z-score corrected for the
-  number of rules tried (2.94 for 30 rules), **and** the traded plan must net a
+- Test sample: "+1R before −1R" must beat 50% with a z-score corrected for
+  every rule ever tried (3.13 for 58 rules), **and** the traded plan must net a
   positive R whose day-clustered lower 95% bound is above zero.
 - Held-out sample: still above 50%, and still a positive net R.
 - At least 200 test and 50 held-out setups, or the verdict is
@@ -54,9 +81,8 @@ hiding an edge.
 | `FLOW_ACCEPTANCE_GATE` | `report` | `report`: each alert carries its rule's record. `enforce`: only ACCEPTED rules are delivered. `off`: ignored. |
 | `FLOW_GRADE_SOURCE` | `setup_score` | `outcome`: `FLOW_MIN_ALERT_TIER` compares the outcome grade instead of the Setup Score. |
 
-With today's verdicts, `enforce` delivers nothing, and `outcome` with a minimum
-of C delivers only swing trend pullbacks and breakout retests. Both are correct
-readings of the evidence.
+With today's verdicts, `enforce` delivers nothing. Both settings are correct
+readings of the evidence; neither is a malfunction.
 
 Each delivered alert stores its rule record and outcome grade.
 `bybit-flow scorecard` then reports real delivered results by outcome grade, so
@@ -74,27 +100,34 @@ the grades themselves are checked against what happens.
 The top five grades require a *proven* lower bound. A good-looking average on a
 small sample is a C.
 
-## Getting to a profitable rule
+## Where this leaves the search
 
-The test is now cheap, so the work is proposing rules and letting it reject
-them. What the evidence suggests trying, each declared before it is run:
+Fifty-eight rules built from candle structure, momentum, funding and relative
+strength have been tested on up to three years of data. The honest conclusion is
+that public candle and funding data on the largest perpetuals does not contain
+an edge these rule shapes can reach after retail costs. That is consistent with
+these being the most efficiently priced crypto markets.
 
-1. Trend pullbacks at swing horizon with the daily trend, with targets taken
-   from the measured excursion rather than a fixed 3R. It is the only family not
-   clearly negative.
-2. Lower cost per trade. Intraday rules lose mostly to the 15 bps: a maker entry
-   or a venue with lower fees changes the arithmetic more than any filter.
-3. Rules that do not use these four structures at all, such as funding or
-   open-interest extremes, or cross-sectional strength across symbols.
+What remains worth doing, in order:
+
+1. **Resolve the one lead with more data, not more variants.** Rerun swing trend
+   pullback, as already declared, on 40 to 60 symbols. If it is real it will
+   clear the bar; if not, it is closed.
+2. **Trade less liquid markets.** The 12 symbols here are the hardest place to
+   find an edge. The same rules on mid-cap perpetuals are a different test, with
+   wider spreads to model honestly.
+3. **Use information that is not in candles.** Liquidation clusters, order-book
+   state at decision time and spot-perpetual basis are what the supplied
+   microstructure literature actually describes. They need recorded data, which
+   the recorder can now collect without ever blocking alerts.
 
 Do not loosen the criteria, drop the hold-out, or keep adding variants until one
-passes. With 30 rules tried, one false pass in twenty is the expected rate of an
-uncorrected test, which is why the threshold is corrected.
+passes. Each new rule raises the bar for all of them, by design.
 
 ## Run it
 
 ```
-bybit-flow acceptance run        # downloads candles, replays every rule, writes the verdicts (about 90 minutes)
+bybit-flow acceptance run        # downloads candles and funding, replays every rule, writes the verdicts (about 90 minutes)
 bybit-flow acceptance status     # prints the current verdicts
 ```
 

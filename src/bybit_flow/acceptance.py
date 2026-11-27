@@ -422,8 +422,16 @@ def download_funding(symbols, directory):
                 "https://fapi.binance.com/fapi/v1/fundingRate?" + query,
                 headers={"User-Agent": "research-backtest"},
             )
-            with urllib.request.urlopen(request, timeout=25) as response:
-                batch = json.load(response)
+            batch = None
+            for attempt in range(5):  # Public endpoint; brief stalls are common.
+                try:
+                    with urllib.request.urlopen(request, timeout=25) as response:
+                        batch = json.load(response)
+                    break
+                except Exception:  # noqa: BLE001 - retried, then raised
+                    if attempt == 4:
+                        raise
+                    time.sleep(2 * (attempt + 1))
             records += [[int(r["fundingTime"]), float(r["fundingRate"])] for r in batch]
             if len(batch) < 1000:
                 break

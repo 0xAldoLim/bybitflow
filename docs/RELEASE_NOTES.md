@@ -1,5 +1,16 @@
 # Release notes
 
+## 2.4.1 — second acceptance round
+
+- Twenty-eight further rules, declared in code before they were run: four exits
+  on swing continuation setups, resting-order entries for core intraday and
+  swing, funding extremes, and cross-sectional 7-day momentum.
+- 58 rules tried in total on 92,174 replayed setups. None is ACCEPTED. One
+  passed the corrected significance threshold in the test period and reversed
+  in the held-out quarter. See [acceptance](ACCEPTANCE.md).
+- Acceptance variants may carry their own stop distance and cost, so entry and
+  fee models are compared under one protocol.
+
 ## 2.4.0 — acceptance test and outcome-based grades
 
 - `bybit-flow acceptance run` replays the production entry rules on public
