@@ -71,6 +71,22 @@ def step(settings, store, *, at_ms=None, max_segments=16):
         return result | cleanup_blocked_health(reconciliation)
     if used < budget * 0.85:
         return result | dict(state="NORMAL")
+    if store.get("ml_outcomes_protect_raw", True) is False:
+        # ML is off, so no outcome will be labelled from these recordings. Replaying
+        # them first (16 segments a step, from the last checkpoint) only held the
+        # cleanup lock for hours while the budget stayed full. Prune straight to
+        # the same 65% level routine retention aims for.
+        prune = prune_recordings(store, settings, force=True, max_reclaim_bytes=max(0, used - budget * 0.65))
+        if prune.get("status") == "cleanup verification blocked":
+            return result | cleanup_blocked_health(prune["reconciliation"])
+        running = prune.get("status") == "cleanup already running"
+        return result | dict(
+            state="CLEANUP_RUNNING" if running else "PRUNED_WITHOUT_LABELLING",
+            freed_bytes=prune.get("freed_bytes", 0),
+            used_bytes=directory_bytes(store.root),
+            last_success_ms=now_ms(),
+            run_id=prune.get("run_id"),
+        )
     # A healthy regular materializer owns the same work. Do not replay every poll.
     if now - previous.get("last_success_ms", 0) < 60_000:
         return previous | dict(at_ms=now)

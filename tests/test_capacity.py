@@ -110,3 +110,24 @@ def test_recording_failure_is_not_mislabeled_as_exchange_failure():
     category = error_category(RuntimeError("Recording circuit open"))
     assert category == "RECORDING_UNAVAILABLE"
     assert "storage health" in recovery_detail({"error_category": category}, 1000)
+
+
+def test_pressure_with_ml_off_prunes_without_replaying_recordings(settings, signal, monkeypatch):
+    store = prepare(settings, signal)
+    store.put("ml_outcomes_protect_raw", False)
+    raws = [m["raw"] for m in store.rows("segments")]
+
+    def no_replay(*args, **kwargs):
+        raise AssertionError("recordings must not be replayed for labels when ML is off")
+
+    monkeypatch.setattr("bybit_flow.ml.labels.label_recordings", no_replay)
+    monkeypatch.setattr(
+        "bybit_flow.capacity.directory_bytes", lambda root: 0.99 * settings.max_storage_gb * 1e9
+    )
+    result = step(settings, store, at_ms=8 * 3_600_000)
+    assert result["state"] == "PRUNED_WITHOUT_LABELLING" and result["freed_bytes"] > 0
+    from pathlib import Path
+
+    assert not any(Path(raw).exists() for raw in raws)
+    assert store.db.execute("SELECT count(*) FROM ml_labels").fetchone()[0] == 0
+    store.close()

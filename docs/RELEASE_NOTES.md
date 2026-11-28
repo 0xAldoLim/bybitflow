@@ -1,5 +1,11 @@
 # Release notes
 
+## 2.5.2 — maintenance prunes directly when ML is off
+
+- Under storage pressure the maintenance worker replayed old recordings to
+  produce ML labels before pruning, 16 segments a step, holding the cleanup lock
+  for hours. With ML off it now prunes straight to 65% of the budget.
+
 ## 2.5.1 — survive a drifting host clock; stop dead outcomes pinning storage
 
 - Application time is steered toward exchange time when the host clock drifts
