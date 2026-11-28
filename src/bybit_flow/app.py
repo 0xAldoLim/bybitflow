@@ -60,6 +60,7 @@ def create_app(settings=None):
     async def lifespan(app):
         store = Store(settings.data_dir)
         store.snapshot_generation = settings.ml_generation_snapshots
+        store.put("ml_outcomes_protect_raw", bool(settings.ml_enabled))
         from .lifecycle import retire_tradingview
 
         store.put("tradingview_retirement", dict(at_ms=now_ms(), retired=retire_tradingview(store)))

@@ -416,6 +416,29 @@ class Scanner:
 
         return await (getattr(self, "market_data", None) or MarketDataCoordinator(self)).clock_loop()
 
+    async def clock_discipline_loop(self):
+        """Steer application time from each fresh exchange-time measurement."""
+        from . import clock
+
+        seen = None
+        while True:
+            health = self.store.get("clock_health", {})
+            if health.get("at_ms") != seen and health.get("source") == self.exchange:
+                seen = health.get("at_ms")
+                if clock.discipline(health.get("skew_ms"), health.get("round_trip_ms")):
+                    self.store.put(
+                        "clock_discipline",
+                        dict(
+                            at_ms=now_ms(),
+                            target_offset_ms=clock.target_ms(),
+                            measured_skew_ms=health.get("skew_ms"),
+                            round_trip_ms=health.get("round_trip_ms"),
+                            source=health.get("source"),
+                            note="Host clock differs from exchange time; application time is corrected",
+                        ),
+                    )
+            await asyncio.sleep(20)
+
     async def scan_once(self):
         from .db_runtime import measure_await
         from .scanner_discovery import MarketDiscoveryCoordinator
@@ -499,6 +522,7 @@ class Scanner:
         from .daily_status import loop as daily_status_loop
 
         start_task("daily_status", lambda: daily_status_loop(self))
+        start_task("clock_discipline", self.clock_discipline_loop)
         start_task("post_terminal", self.research_loop)
         start_task("v8_context_ev", self.context_ev_loop)
         start_task("v8_research", self.v8_loop)

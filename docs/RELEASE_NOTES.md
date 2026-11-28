@@ -1,5 +1,17 @@
 # Release notes
 
+## 2.5.1 — survive a drifting host clock; stop dead outcomes pinning storage
+
+- Application time is steered toward exchange time when the host clock drifts
+  (`clock.py`). The production host's time service was stopped and its clock was
+  1.7 s ahead; the scanner rejects scans beyond 2 s, so alerts would have
+  stopped within days. The correction is slewed at 20 ms per second, never jumps
+  and never runs backwards. A clock more than 30 s out is not masked.
+- With ML switched off, unresolved ML outcomes no longer protect raw recordings.
+  Nothing would ever label them, and swing decisions were pinning days of
+  recordings (17.8 GB) until the budget filled. Active setups stay protected.
+- The daily status message says when the host clock is being corrected.
+
 ## 2.5.0 — alerts that notify, and a daily sign of life
 
 Diagnosed from a report of "no signals": Discord held every message the system

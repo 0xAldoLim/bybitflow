@@ -277,10 +277,18 @@ def protection_ranges(store, now):
                 "active setup",
             )
         )
-    for row in store.db.execute(
-        "SELECT s.decision_ms,s.payload,s.id FROM ml_snapshots s WHERE s.stage='decision' AND NOT EXISTS "
-        "(SELECT 1 FROM ml_labels l WHERE l.snapshot_id=s.id AND l.policy='prints-v1')"
-    ):
+    # Raw ticks are kept for an unresolved outcome so the ML labeller can read them.
+    # With ML switched off nothing will ever label these, and swing decisions
+    # otherwise pin days of recordings until the budget is full.
+    unresolved = (
+        store.db.execute(
+            "SELECT s.decision_ms,s.payload,s.id FROM ml_snapshots s WHERE s.stage='decision' AND NOT EXISTS "
+            "(SELECT 1 FROM ml_labels l WHERE l.snapshot_id=s.id AND l.policy='prints-v1')"
+        )
+        if store.get("ml_outcomes_protect_raw", True)
+        else ()
+    )
+    for row in unresolved:
         snapshot = json.loads(row[1])
         horizon = snapshot.get("signal", {}).get("expected_hold_max", 240) * 60_000
         from .ml.checkpoint import consumed_cursor

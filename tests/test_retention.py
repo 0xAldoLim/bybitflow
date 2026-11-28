@@ -442,3 +442,21 @@ def test_cleanup_builds_the_protection_list_once_not_once_per_segment(settings, 
     # One build for the plan and one for the run, however many segments there are.
     assert len(calls) <= 3
     store.close()
+
+
+def test_unresolved_ml_outcomes_stop_pinning_raw_when_ml_is_off(settings, signal):
+    from bybit_flow.ml.store import FeatureStore
+    from bybit_flow.retention import protection_ranges
+
+    store = Store(settings.data_dir)
+    signal.state = "EXPIRED"
+    store.signal(signal)
+    FeatureStore(store).capture(signal, 2_000_000, "decision")
+    kinds = lambda: {r[2] for r in protection_ranges(store, 3_000_000)}  # noqa: E731
+    assert "unresolved primary outcome" in kinds()
+    store.put("ml_outcomes_protect_raw", False)
+    assert "unresolved primary outcome" not in kinds()
+    # Active setups stay protected whatever the ML setting.
+    store.signal(signal.model_copy(update={"id": "live", "state": "CONFIRMED"}))
+    assert "active setup" in kinds()
+    store.close()

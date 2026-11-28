@@ -17,7 +17,10 @@ RECEIPT_QUANTIZATION_MS = 1
 
 
 def now_ms():
-    return time.time_ns() // 1_000_000
+    """Host clock plus the exchange-steered correction (zero unless the host drifts)."""
+    from . import clock
+
+    return time.time_ns() // 1_000_000 + clock.offset_ms()
 
 
 def directory_bytes(root):

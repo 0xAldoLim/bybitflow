@@ -77,6 +77,7 @@ def summary(store, settings, now):
         storage_percent=storage.get("usage_percent"),
         running_hours=round((now - started) / 3_600_000, 1) if started else None,
         minimum_grade=settings.min_alert_tier,
+        clock_correction_ms=(store.get("clock_discipline", {}) or {}).get("target_offset_ms", 0),
     )
 
 
@@ -96,6 +97,11 @@ def embed(s):
         )
         + (f" · running {s['running_hours']}h" if s["running_hours"] is not None else ""),
     ]
+    if abs(s.get("clock_correction_ms") or 0) >= 500:
+        lines.append(
+            f"Host clock is off by {abs(s['clock_correction_ms']) / 1000:.1f}s; the app is correcting for it. "
+            "Start the Windows Time service to fix it at the source."
+        )
     if s["uncertain"]:
         lines.append(f"⚠ {s['uncertain']} alert deliveries were not confirmed by Discord.")
     return dict(
