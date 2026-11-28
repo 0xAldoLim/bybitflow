@@ -222,11 +222,12 @@ def test_config_digest_is_redacted_stable_and_version_has_schema(settings):
     other.min_alert_tier = settings.min_alert_tier
     other.acceptance_gate = settings.acceptance_gate
     other.alert_blocked_rules = settings.alert_blocked_rules
+    other.daily_status = settings.daily_status
     assert config_snapshot(other)["config_digest"] == first["config_digest"]
     assert not any(v in json.dumps(first) for v in ("TOPSECRET", "secret.invalid", "data_dir", "equity"))
     store = Store(settings.data_dir)
     result = status(store, settings)
-    assert result["version"] == "2.4.4" and result["database"]["level"] == "013"
+    assert result["version"] == "2.5.0" and result["database"]["level"] == "013"
     store.close()
 
 

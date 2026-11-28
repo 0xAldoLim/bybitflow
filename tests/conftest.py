@@ -18,6 +18,7 @@ def settings(tmp_path):
         min_alert_tier="F",
         acceptance_gate="off",
         alert_blocked_rules=[],
+        daily_status=False,
     )
 
 

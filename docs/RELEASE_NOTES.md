@@ -1,5 +1,21 @@
 # Release notes
 
+## 2.5.0 — alerts that notify, and a daily sign of life
+
+Diagnosed from a report of "no signals": Discord held every message the system
+had sent, including six new setups in 28 hours. Nothing was disconnected. The
+alerts carried no mention, so Discord did not notify, and nothing distinguished
+a quiet day from an outage.
+
+- `FLOW_ALERT_MENTION` pings on each new setup (`everyone`, `here`, `user:<id>`
+  or `role:<id>`). Follow-up messages never ping. Default is no ping.
+- A daily status message goes to the monitoring channel: alerts sent, candidates
+  evaluated and confirmed, what was held back and why, scanner, recorder and
+  storage state. If it stops arriving, the system is down.
+  `FLOW_DAILY_STATUS=false` turns it off.
+- Confirmed setups that are held back by the grade or a blocked rule are now
+  counted, so the status message can say why a day was quiet.
+
 ## 2.4.4 — storage cleanup that keeps up with recording
 
 - Cleanup rebuilt its protection list for every segment, re-reading every

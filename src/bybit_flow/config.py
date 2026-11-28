@@ -94,6 +94,13 @@ class Settings(BaseSettings):
     # Rules never delivered to Discord, as HORIZON|family. The default entry was
     # wrong-sided on three independent symbol sets (docs/ACCEPTANCE.md). Blocked
     # setups are still generated, tracked and shown on the dashboard.
+    # Ping on each new setup so Discord notifies you: empty (no ping), everyone, here,
+    # user:<id> or role:<id>. Follow-up messages never ping.
+    alert_mention: str = ""
+    # One status message a day to the monitoring channel: what was evaluated, sent
+    # and held back. If it stops arriving, the system is down.
+    daily_status: bool = True
+    daily_status_hour_utc: int = Field(0, ge=0, le=23)
     alert_blocked_rules: list[str] = Field(default_factory=lambda: ["CORE_INTRADAY|trend_pullback"])
     sss_research: bool = False
     research_webhook: SecretStr = SecretStr("")

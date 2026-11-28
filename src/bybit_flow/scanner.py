@@ -496,6 +496,9 @@ class Scanner:
         start_task("confirmation", self.evaluation_loop)
         start_task("thesis_health", self.health_loop)
         start_task("terminal_delivery", self.notifier.terminal_loop)
+        from .daily_status import loop as daily_status_loop
+
+        start_task("daily_status", lambda: daily_status_loop(self))
         start_task("post_terminal", self.research_loop)
         start_task("v8_context_ev", self.context_ev_loop)
         start_task("v8_research", self.v8_loop)

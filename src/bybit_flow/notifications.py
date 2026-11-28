@@ -416,6 +416,11 @@ class Notifier:
         )
         return visible
 
+    def note_block(self, signal, code):
+        from .daily_status import note_block
+
+        note_block(self.store, signal, code)
+
     def meets_min_tier(self, signal):
         from .scorecard import TIERS
 
@@ -480,11 +485,13 @@ class Notifier:
             self.settings, "alert_blocked_rules", ()
         ):
             # Evidence of a wrong-sided rule: tracked, never sent.
+            self.note_block(signal, "RULE_BLOCKED")
             return "blocked:RULE_BLOCKED"
 
         gate = getattr(self.settings, "acceptance_gate", "off")
         if not update and gate != "off":
             if self.attach_proof(signal)["verdict"] != "ACCEPTED" and gate == "enforce":
+                self.note_block(signal, "RULE_NOT_ACCEPTED")
                 return "blocked:RULE_NOT_ACCEPTED"
         elif not update and getattr(self.settings, "grade_source", "setup_score") == "outcome":
             self.attach_proof(signal)
@@ -492,6 +499,7 @@ class Notifier:
         if not update and not self.meets_min_tier(signal):
             # The grade decides delivery. Follow-ups for already delivered
             # setups are unaffected.
+            self.note_block(signal, "BELOW_MIN_ALERT_TIER")
             return "blocked:BELOW_MIN_ALERT_TIER"
 
         if signal.validation_status == "validated" and not self.settings.research_alerts:
@@ -535,6 +543,11 @@ class Notifier:
         if not update:
             if signal.evidence.get("rule_evidence"):
                 payload["embeds"][0]["fields"].append(self.proof_field(signal))
+            from .daily_status import mention
+
+            content, allowed = mention(getattr(self.settings, "alert_mention", ""))
+            if content:  # New setups only, so the ping means there is something to look at.
+                payload["content"], payload["allowed_mentions"] = content, allowed
             return await self.deliver_initial(key, signal, payload, secret)
 
         return await self.deliver(key, signal.id, payload, secret)
