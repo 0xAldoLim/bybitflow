@@ -42,12 +42,23 @@ def reset():
     _since = time.monotonic()
 
 
-def discipline(skew_ms, round_trip_ms):
+def settled_seconds():
+    """Seconds since the last correction finished being applied (negative while slewing)."""
+    return (time.monotonic() - _since) - abs(_target - _base) / (1000 * SLEW_RATE)
+
+
+def discipline(skew_ms, round_trip_ms, measured_age_s=0.0):
     """Steer toward exchange time. `skew_ms` is corrected local time minus exchange time.
+
+    A measurement taken while an earlier correction was still being applied
+    describes a clock that no longer exists; acting on it overshoots. Such
+    measurements are skipped and the next one, taken on the settled clock, is used.
 
     Returns True when the target changed.
     """
     global _base, _target, _since
+    if settled_seconds() < measured_age_s:
+        return False
     if not isinstance(skew_ms, (int, float)) or not isinstance(round_trip_ms, (int, float)):
         return False
     if round_trip_ms < 0 or round_trip_ms > MAX_ROUND_TRIP_MS:

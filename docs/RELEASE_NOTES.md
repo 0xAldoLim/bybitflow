@@ -1,5 +1,11 @@
 # Release notes
 
+## 2.5.3 — clock correction no longer overshoots
+
+- The correction introduced in 2.5.1 acted on measurements taken while an
+  earlier correction was still being applied, and overshot by up to 1.2 s after
+  a restart before settling. Those measurements are now skipped.
+
 ## 2.5.2 — maintenance prunes directly when ML is off
 
 - Under storage pressure the maintenance worker replayed old recordings to

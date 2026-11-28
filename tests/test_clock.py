@@ -55,15 +55,26 @@ def test_application_time_never_runs_backwards_while_slewing(monkeypatch):
     assert all(b > a for a, b in zip(readings, readings[1:]))
 
 
-def test_follow_up_measurement_refines_from_the_current_offset(monkeypatch):
+def test_follow_up_measurement_refines_once_the_clock_has_settled(monkeypatch):
     clock.discipline(1700, 100)
     advance(monkeypatch, 200)
     assert clock.offset_ms() == -1700
-    # A later check finds corrected time still 300 ms ahead.
-    assert clock.discipline(300, 100) is True
+    # A later check, taken on the settled clock, finds it still 300 ms ahead.
+    assert clock.discipline(300, 100, measured_age_s=5) is True
     assert clock.target_ms() == -2000
-    assert clock.discipline(-400, 100) is True  # Now behind: correct the other way.
-    assert clock.target_ms() > -2000
+
+
+def test_measurements_taken_during_a_correction_are_skipped(monkeypatch):
+    # Reproduces the overshoot seen in production: the clock was 1.7 s ahead, and a
+    # sample taken halfway through the 85 s correction still read +850 ms.
+    clock.discipline(1700, 100)
+    advance(monkeypatch, 60)
+    assert clock.discipline(500, 100, measured_age_s=10) is False  # Still slewing.
+    advance(monkeypatch, 40)  # Settled 15 s ago; this sample is 30 s old, so it predates that.
+    assert clock.discipline(500, 100, measured_age_s=30) is False
+    assert clock.target_ms() == -1700
+    assert clock.discipline(200, 100, measured_age_s=5) is True  # Taken on the settled clock.
+    assert clock.target_ms() == -1900
 
 
 def test_a_broken_host_clock_is_not_masked():

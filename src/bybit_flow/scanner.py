@@ -425,7 +425,8 @@ class Scanner:
             health = self.store.get("clock_health", {})
             if health.get("at_ms") != seen and health.get("source") == self.exchange:
                 seen = health.get("at_ms")
-                if clock.discipline(health.get("skew_ms"), health.get("round_trip_ms")):
+                age = max(0.0, (now_ms() - (seen or now_ms())) / 1000) + 2.0
+                if clock.discipline(health.get("skew_ms"), health.get("round_trip_ms"), age):
                     self.store.put(
                         "clock_discipline",
                         dict(
